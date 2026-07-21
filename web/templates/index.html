@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>美股选股评分 · CAN SLIM + VCP</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+           margin: 0; background: #0f1419; color: #e6e6e6; }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 18px 60px; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: #8b98a5; font-size: 13px; margin-bottom: 20px; }
+    form { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+    input[type=text] { flex: 1; min-width: 280px; padding: 11px 14px; font-size: 15px;
+           border: 1px solid #2f3b47; border-radius: 8px; background: #1a2029; color: #e6e6e6; }
+    button { padding: 11px 22px; font-size: 15px; border: none; border-radius: 8px;
+           background: #1d9bf0; color: #fff; cursor: pointer; font-weight: 600; }
+    button:hover { background: #1a8cd8; }
+    .market { padding: 10px 14px; border-radius: 8px; margin-bottom: 18px; font-size: 14px; font-weight: 600; }
+    .market.up { background: #0f2e1a; color: #4ade80; border: 1px solid #1a5c33; }
+    .market.down { background: #2e1515; color: #f87171; border: 1px solid #5c2020; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #232d38; }
+    th { color: #8b98a5; font-weight: 600; font-size: 12px; text-transform: uppercase; }
+    tr:hover { background: #161d26; }
+    .grade-A { color: #4ade80; font-weight: 700; }
+    .grade-B { color: #60a5fa; font-weight: 600; }
+    .grade-C { color: #fbbf24; }
+    .grade-x { color: #6b7280; }
+    .buy { background: #1d9bf0; color:#fff; padding: 2px 8px; border-radius: 5px; font-size: 12px; font-weight: 700; }
+    .pass-y { color: #4ade80; } .pass-n { color: #f87171; }
+    .score-bar { display:inline-block; height: 8px; border-radius: 4px; background:#1d9bf0; vertical-align: middle; }
+    details { margin-top: 4px; }
+    summary { cursor: pointer; color:#8b98a5; font-size: 12px; }
+    .detail { font-size: 12px; color:#b8c2cc; padding: 8px 0 4px 14px; line-height: 1.7; }
+    .gap { color:#fbbf24; font-size: 12px; }
+    .err { color:#f87171; }
+    .disclaimer { margin-top: 26px; color:#6b7280; font-size: 12px; border-top:1px solid #232d38; padding-top:14px; }
+    .hint { color:#8b98a5; font-size:13px; margin-bottom:14px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>美股选股评分系统</h1>
+  <div class="sub">CAN SLIM + Minervini VCP · 过滤层 → 100分打分 → 触发层 · 数据源 yfinance</div>
+
+  <form method="post">
+    <input type="text" name="tickers" placeholder="输入代码，空格或逗号分隔，如 NVDA AAPL MSFT（留空用示例组）"
+           value="{{ query }}">
+    <button type="submit">评分</button>
+  </form>
+
+  {% if rows is none %}
+    <div class="hint">输入一组美股代码开始。首次拉取每只票约需 1~2 秒（含大盘基准 SPY）。</div>
+  {% endif %}
+
+  {% if mkt_ok is not none %}
+    <div class="market {{ 'up' if mkt_ok else 'down' }}">
+      大盘状态（SPY）：{{ '确认上升趋势 ✓ 允许开仓' if mkt_ok else '未确认上升 ✗ 大盘分被扣，建议降低仓位' }}
+    </div>
+  {% endif %}
+
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>代码</th><th>总分</th><th>评级</th><th>过滤</th><th>可买入</th>
+        <th>RS</th><th>EPS同比</th><th>营收同比</th><th>距高%</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        {% if r.error %}
+          <tr><td>{{ loop.index }}</td><td>{{ r.ticker }}</td>
+              <td colspan="8" class="err">数据获取失败：{{ r.error }}</td></tr>
+        {% else %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td><b>{{ r.ticker }}</b></td>
+          <td>
+            <span class="score-bar" style="width: {{ (r.total * 1.0)|round(0,'floor') }}px"></span>
+            {{ r.total }}
+          </td>
+          <td class="{% if 'A' in r.grade %}grade-A{% elif 'B' in r.grade %}grade-B{% elif 'C' in r.grade %}grade-C{% else %}grade-x{% endif %}">{{ r.grade }}</td>
+          <td class="{{ 'pass-y' if r.passed else 'pass-n' }}">{{ '✓' if r.passed else '✗' }}</td>
+          <td>{% if r.buyable %}<span class="buy">★ 买点</span>{% else %}—{% endif %}</td>
+          <td>{{ r.rs if r.rs is not none else '—' }}</td>
+          <td>{{ (r.eps_yoy ~ '%') if r.eps_yoy is not none else '—' }}</td>
+          <td>{{ (r.rev_yoy ~ '%') if r.rev_yoy is not none else '—' }}</td>
+          <td>{{ r.pct_from_high if r.pct_from_high is not none else '—' }}</td>
+        </tr>
+        <tr><td></td><td colspan="9">
+          <details>
+            <summary>评分明细 / VCP / 触发</summary>
+            <div class="detail">
+              分项：{% for k, v in r.breakdown.items() %}{{ k }} <b>{{ v }}</b>&nbsp;&nbsp;{% endfor %}<br>
+              VCP：收缩 {{ r.vcp.n_contractions }} 段 {{ r.vcp.contractions }}，递减={{ r.vcp.is_decreasing }}，量枯={{ r.vcp.vol_dryup }}，波动收缩={{ r.vcp.vola_contract }}<br>
+              Pivot：{{ r.pivot.pivot }}，突破={{ r.pivot.breakout }}，量比={{ r.pivot.vol_ratio }}，距pivot={{ r.pivot.pct_over_pivot }}%<br>
+              触发：VCP突破={{ r.trigger.vcp_breakout }}，PocketPivot={{ r.trigger.pocket_pivot }} → <b>可买入={{ r.trigger.buyable_now }}</b>
+              {% if r.gaps %}<br><span class="gap">⚠ 数据缺口：{{ r.gaps|join('；') }}</span>{% endif %}
+            </div>
+          </details>
+        </td></tr>
+        {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="disclaimer">
+    ⚠️ 仅供研究与教育用途，不构成投资建议。评分基于免费数据（yfinance），基本面与机构数据可能缺失或滞后；
+    RS/行业强度为近似算法，非 IBD 官方口径。交易有风险，决策请独立判断。
+  </div>
+</div>
+</body>
+</html>
