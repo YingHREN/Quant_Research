@@ -30,6 +30,11 @@ INTERACTIONS = (
 SPECIFICATIONS = ("vcp_only", "momentum_only", "vcp_momentum")
 
 
+def linear_predict(matrix: np.ndarray, coefficients: np.ndarray, intercept: float) -> np.ndarray:
+    """Predict rowwise without the environment-sensitive BLAS matmul path."""
+    return np.sum(matrix * np.asarray(coefficients, dtype=float), axis=1) + float(intercept)
+
+
 def chronological_folds(
     frame: pd.DataFrame,
     horizon: int,
@@ -69,6 +74,12 @@ def _raw_design(frame: pd.DataFrame, specification: str) -> pd.DataFrame:
     return design
 
 
+def feature_names(specification: str) -> tuple[str, ...]:
+    """Return frozen design-column names in model order."""
+    empty = pd.DataFrame(columns=list(VCP_FEATURES + MOMENTUM_FEATURES))
+    return tuple(_raw_design(empty, specification).columns)
+
+
 def design_matrix(frame: pd.DataFrame, specification: str, train_stats=None):
     """Impute and standardize using training-fold statistics only."""
     raw = _raw_design(frame, specification)
@@ -103,7 +114,7 @@ def walkforward_predictions(
             x_test, _ = design_matrix(test, specification, train_stats=stats)
             model = Ridge(alpha=1.0, solver="lsqr")
             model.fit(x_train, y_train)
-            predicted = model.predict(x_test)
+            predicted = linear_predict(x_test, model.coef_, model.intercept_)
             rows = test[["observation_date"]].copy()
             if "event_id" in test:
                 rows["event_id"] = test["event_id"].values
@@ -150,3 +161,33 @@ def evaluate_specifications(
             }
         )
     return pd.DataFrame(rows).sort_values(["specification", "fold"]).reset_index(drop=True)
+
+
+def coefficient_stability(
+    frame: pd.DataFrame,
+    target: str = "rel_ret_40",
+    horizon: int = 40,
+    n_folds: int = 5,
+) -> pd.DataFrame:
+    """Fit each training fold and return standardized coefficients by fold."""
+    common = frame.dropna(subset=[target]).copy().reset_index(drop=True)
+    common["observation_date"] = pd.to_datetime(common["observation_date"])
+    rows = []
+    for fold, (train_index, _) in enumerate(
+        chronological_folds(common, horizon=horizon, n_folds=n_folds), start=1
+    ):
+        train = common.iloc[train_index]
+        target_values = train[target].to_numpy(dtype=float)
+        for specification in SPECIFICATIONS:
+            matrix, _ = design_matrix(train, specification)
+            model = Ridge(alpha=1.0, solver="lsqr").fit(matrix, target_values)
+            for name, coefficient in zip(feature_names(specification), model.coef_):
+                rows.append(
+                    {
+                        "specification": specification,
+                        "fold": fold,
+                        "feature": name,
+                        "coefficient": float(coefficient),
+                    }
+                )
+    return pd.DataFrame(rows)
