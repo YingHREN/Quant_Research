@@ -79,6 +79,23 @@ class EventScannerTest(unittest.TestCase):
         self.assertIsNotNone(event.invalidated_date)
         self.assertIsNone(event.breakout_date)
 
+    def test_invalidated_base_identity_is_not_reopened(self):
+        falling = make_ohlcv([9.0, 9.4, 9.7, 9.1, 9.6, 9.8, 9.9])
+
+        def fake_detect(frame):
+            if len(frame) in {2, 5}:
+                return _pattern(frame.index[-1], "forming", pivot=10.0)
+            if len(frame) in {3, 6}:
+                return _pattern(frame.index[-1], "near_pivot", pivot=10.0)
+            return _pattern(frame.index[-1], "none", accepted=False, reason="below_ma50")
+
+        with patch("research.events.detect_vcp", side_effect=fake_detect):
+            events = scan_ticker_events("TEST", falling, min_history=1)
+
+        identities = [event.event_id for event in events]
+        self.assertEqual(len(identities), len(set(identities)))
+        self.assertEqual(len(events), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

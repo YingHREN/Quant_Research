@@ -93,6 +93,7 @@ def scan_ticker_events(
     history = history.sort_index()
     events: list[VCPEvent] = []
     active: VCPEvent | None = None
+    seen_event_ids: set[str] = set()
 
     for position in range(max(1, min_history), len(history)):
         current = history.iloc[:position + 1]
@@ -145,14 +146,18 @@ def scan_ticker_events(
 
         if not pattern.accepted or pattern.pivot is None or pattern.base_start is None:
             continue
+        identity = _event_id(ticker, pattern)
+        if identity in seen_event_ids:
+            continue
         active = VCPEvent(
-            event_id=_event_id(ticker, pattern),
+            event_id=identity,
             ticker=ticker,
             base_start=pattern.base_start,
             first_seen=date,
             initial_pattern=pattern,
             breakout_pivot=float(pattern.pivot),
         )
+        seen_event_ids.add(identity)
         stage = pattern.stage
         _record_transition(active, date, stage, pattern.pivot, close)
         if stage == "near_pivot":
