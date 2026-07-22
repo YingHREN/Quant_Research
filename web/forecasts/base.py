@@ -30,6 +30,7 @@ class UnavailableReason(str, Enum):
     INSUFFICIENT_TRAINING_SAMPLES = "insufficient_training_samples"
     DEGENERATE_TARGET = "degenerate_target"
     MODEL_ERROR = "model_error"
+    UPDATE_IN_PROGRESS = "update_in_progress"
 
 
 class EvaluationUnavailableReason(str, Enum):

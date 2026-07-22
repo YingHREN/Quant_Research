@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
+from hashlib import blake2b
 import threading
 
 import pandas as pd
@@ -86,6 +87,7 @@ class ForecastService:
         self._artifact_provider = None
         self._artifact_evaluations = None
         self._artifact_coverage = None
+        self._artifact_fingerprints = None
         self._lock = threading.RLock()
 
     @property
@@ -107,6 +109,7 @@ class ForecastService:
 
         first_date = dates[0] if dates else None
         last_date = dates[-1] if dates else None
+        coverage, fingerprints = _history_snapshot_metadata(histories)
         with self._lock:
             if (
                 expected_revision is not None
@@ -115,6 +118,11 @@ class ForecastService:
                 raise ForecastRevisionChanged(
                     "forecast revision changed after the market-data snapshot"
                 )
+            _frame, provider, evaluations = self._revision_artifacts(
+                histories,
+                coverage,
+                fingerprints,
+            )
             key = (
                 self._database_revision,
                 ticker,
@@ -127,7 +135,7 @@ class ForecastService:
                 self._cache.move_to_end(key)
                 return deepcopy(cached)
 
-            bundle = self._compute(ticker, dates, histories)
+            bundle = self._compute(ticker, dates, provider, evaluations)
             self._cache[key] = deepcopy(bundle)
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_cache_size:
@@ -144,9 +152,9 @@ class ForecastService:
             self._artifact_provider = None
             self._artifact_evaluations = None
             self._artifact_coverage = None
+            self._artifact_fingerprints = None
 
-    def _compute(self, ticker, dates, histories):
-        _frame, provider, evaluations = self._revision_artifacts(histories)
+    def _compute(self, ticker, dates, provider, evaluations):
         forecast_dates = (
             dates
             if self._max_forecast_dates is None
@@ -188,19 +196,23 @@ class ForecastService:
             "forecast_evaluation": evaluations,
         }
 
-    def _revision_artifacts(self, histories):
-        coverage = _history_coverage(histories)
+    def _revision_artifacts(self, histories, coverage, fingerprints):
         same_revision = self._artifact_revision == self._database_revision
         richer_snapshot = same_revision and _coverage_extends(
             coverage, self._artifact_coverage
         )
-        if same_revision and not richer_snapshot:
+        corrected_snapshot = (
+            same_revision
+            and coverage == self._artifact_coverage
+            and fingerprints != self._artifact_fingerprints
+        )
+        if same_revision and not richer_snapshot and not corrected_snapshot:
             return (
                 self._artifact_frame,
                 self._artifact_provider,
                 self._artifact_evaluations,
             )
-        if richer_snapshot:
+        if richer_snapshot or corrected_snapshot:
             self._cache.clear()
         frame = attach_forward_targets(build_feature_frame(histories))
         provider = self._provider_factory(frame)
@@ -221,6 +233,7 @@ class ForecastService:
         self._artifact_provider = provider
         self._artifact_evaluations = evaluations
         self._artifact_coverage = coverage
+        self._artifact_fingerprints = fingerprints
         return frame, provider, evaluations
 
 
@@ -280,17 +293,36 @@ def _unavailable_evaluations(model_key, model_version, reason):
     }
 
 
-def _history_coverage(histories):
+def _history_snapshot_metadata(histories):
     coverage = {}
+    fingerprints = {}
     for ticker, history in histories.items():
+        ticker_key = str(ticker)
         if not isinstance(history, pd.DataFrame) or history.empty:
-            coverage[str(ticker)] = (0, None)
+            coverage[ticker_key] = (0, None)
+            fingerprints[ticker_key] = None
             continue
-        coverage[str(ticker)] = (
-            len(history),
-            pd.Timestamp(history.index[-1]).normalize(),
+        ordered = history.sort_index(kind="mergesort")
+        digest = blake2b(digest_size=16)
+        digest.update(
+            repr(
+                tuple(
+                    (str(column), str(dtype))
+                    for column, dtype in zip(ordered.columns, ordered.dtypes)
+                )
+            ).encode("utf-8")
         )
-    return coverage
+        digest.update(
+            pd.util.hash_pandas_object(ordered, index=True)
+            .to_numpy(dtype="uint64", copy=False)
+            .tobytes()
+        )
+        coverage[ticker_key] = (
+            len(history),
+            pd.Timestamp(ordered.index[-1]).normalize(),
+        )
+        fingerprints[ticker_key] = digest.digest()
+    return coverage, fingerprints
 
 
 def _coverage_extends(incoming, cached):

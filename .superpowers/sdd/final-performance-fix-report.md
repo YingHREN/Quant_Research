@@ -38,9 +38,13 @@ evaluation is never presented as full evidence.
 
 ### Revision artifacts and causal feature performance
 
-One feature/target frame and provider are cached per database revision and
-shared by distinct stock/range bundle keys. Invalidation clears both the
-revision artifacts and the bounded exact-response cache.
+One feature/target frame and provider are normally cached per database revision
+and shared by distinct stock/range bundle keys. A richer point-in-time snapshot
+or an equal-coverage snapshot with changed full-content fingerprints rebuilds
+those artifacts within the same revision before exact-bundle lookup. This
+catches corrected OHLCV values even when row count and latest date do not
+change. Invalidation clears both the revision artifacts and the bounded
+exact-response cache.
 
 The forecast dataset still produces the same point-in-time strict-VCP and
 tight-platform booleans, but computes their gates with rolling/NumPy arrays
@@ -130,6 +134,18 @@ After optimization:
    the Node DOM harness.
 7. Numeric-warning RED: flat histories raised `invalid value encountered in
    divide`. GREEN: guarded `np.divide` is warning-clean.
+8. Update-barrier RED: an update made a committed correction visible during
+   snapshot loading and the route still invoked the old revision's forecast
+   service. GREEN: the route returns typed `update_in_progress` without calling
+   the service; a second test covers terminal invalidation between snapshot and
+   forecast.
+9. Same-shape correction RED: changing an interior close with identical row
+   count and latest date reused the exact bundle and provider (one provider).
+   GREEN: full-content fingerprint comparison runs before bundle lookup and
+   rebuilds the provider (two providers).
+10. Localization RED: mixed `no_available_forecasts` rendered the raw English
+    code in Chinese and lowercase fallback text in English. GREEN: the Node DOM
+    harness verifies stable Chinese and English labels.
 
 ## Independent final review
 
@@ -153,6 +169,31 @@ under the new revision, and the old artifact revision cannot be reused. The job
 continues to publish the typed `failed/cache_invalidation_error` state rather
 than claiming success. No behavior change was needed for this case.
 
+## Post-review consistency barrier
+
+A follow-up review identified a remaining interleaving: individual ticker
+transactions are visible while an update is still running, before terminal
+forecast invalidation. The stock route now establishes a two-part barrier:
+
+1. after loading and analyzing the repository snapshot, a still-running update
+   suppresses forecasts and evaluation with typed `update_in_progress` values;
+2. if the update reached a terminal state during that request, invalidation was
+   completed before terminal publication, so the existing expected-revision
+   check rejects the older repository snapshot.
+
+An update starting only after the post-snapshot state check cannot contaminate
+the response: its database writes occur after the chart/factor snapshot, and
+the forecast either remains on that same preceding revision or is rejected if
+the new run invalidates first. New regression tests cover both the running and
+terminal interleavings.
+
+The same review found that row-count/latest-date coverage alone did not detect
+same-shape history corrections. Forecast snapshots now carry deterministic
+per-ticker full-content fingerprints. Artifact comparison occurs before exact
+bundle lookup, and equal-coverage content changes clear completed bundles and
+rebuild the frame/provider. The UI also has stable Chinese and English mappings
+for mixed `no_available_forecasts` outcomes and the new update barrier reason.
+
 ## Real HTTP measurement
 
 The dashboard was started on `127.0.0.1:5000`; two real curl requests wrote
@@ -169,6 +210,21 @@ The latest model was available; all three evaluation rows were typed
 `not_precomputed`. Date coverage reported 501 requested dates, exactly one
 computed date (`2026-07-21`), and the `latest_only_synchronous` policy.
 
+### Post-barrier performance regression
+
+The new full-content metadata pass took 0.034-0.038 seconds across five runs on
+the real 181-ticker snapshot. Because port 5000 was already occupied, the final
+real endpoint regression used the same loopback application on port 5010:
+
+```text
+cold: http_code=200 time_starttransfer=4.815473 time_total=4.815923 size_download=359440
+warm: http_code=200 time_starttransfer=3.235191 time_total=3.235670 size_download=359440
+```
+
+The bodies remained byte-identical with SHA-256
+`2cdd0210a76b7558f01bd9718b32191dbec4c49355e09621d885d4b83fa7e807`,
+and the sparse/evaluation contract was unchanged.
+
 ## Final verification
 
 All checks were rerun after the independent-review fixes:
@@ -183,6 +239,22 @@ All checks were rerun after the independent-review fixes:
 
 Interactive browser QA was not run, per instruction.
 
+### Post-barrier final verification
+
+After the consistency and fingerprint changes, verification was repeated:
+
+- focused API, asset, dataset, and update suite: 109 tests in 2.278 seconds,
+  `OK`;
+- complete warning-strict suite: 199 tests in 4.547 seconds, `OK`;
+- `node --check` for every dashboard JavaScript file: passed;
+- Python compilation for the app, contracts, services, factors, and forecasts:
+  passed;
+- `git diff --check`: passed;
+- real loopback performance and byte-identity checks: passed with the timings
+  in the post-barrier regression section.
+
+Interactive browser QA remained intentionally excluded.
+
 ## Remaining concerns
 
 - Historical chart forecasts are intentionally unavailable until a separate
@@ -190,11 +262,12 @@ Interactive browser QA was not run, per instruction.
   date is synchronous.
 - The offline exhaustive evaluator remains computationally expensive. It is
   preserved for honest research reproduction, not silently approximated.
-- Warm latency is about 3.22 seconds because the non-forecast selected/peer
+- Warm latency is about 3.24 seconds because the non-forecast selected/peer
   factor route still recomputes diagnostics; this wave did not change that
   separate contract.
-- Revision artifacts are in-memory and rebuild after process restart.
-- Cache invalidation occurs before terminal publication, as required; requests
-  made while an update is still running may observe the prior completed
-  revision until that terminal barrier.
+- Revision artifacts are in-memory and rebuild after process restart or when a
+  richer/corrected same-revision snapshot is observed.
+- During an active update, a stock response may show already committed
+  chart/factor data, but its forecast contract is explicitly unavailable with
+  `update_in_progress`; stale forecasts are not combined with those values.
 - Interactive desktop/mobile browser QA was deliberately not performed.

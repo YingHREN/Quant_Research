@@ -1174,6 +1174,22 @@ class WebAssetTest(unittest.TestCase):
               dateCoverage: {{computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}},
               evaluation: payload.forecast_evaluation['20']}});
             assert.match(textTree(failureDetail), /Unavailable reason Insufficient training samples/);
+
+            const mixedZh = node();
+            forecasts.renderForecastDetail(mixedZh, {{locale: 'zh-CN', horizon: 20,
+              date: '2026-07-17', forecast: null,
+              model: {{unavailable_reason: 'no_available_forecasts'}},
+              dateCoverage: {{computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}},
+              evaluation: payload.forecast_evaluation['20']}});
+            assert.match(textTree(mixedZh), /不可用原因 无可用预测/);
+
+            const mixedEn = node();
+            forecasts.renderForecastDetail(mixedEn, {{locale: 'en', horizon: 20,
+              date: '2026-07-17', forecast: null,
+              model: {{unavailable_reason: 'no_available_forecasts'}},
+              dateCoverage: {{computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}},
+              evaluation: payload.forecast_evaluation['20']}});
+            assert.match(textTree(mixedEn), /Unavailable reason No available forecasts/);
             assert.equal(controller.setForecastHorizon(40), 60);
         """
         result = subprocess.run(

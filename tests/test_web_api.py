@@ -322,6 +322,16 @@ class FakeManager:
         return FakeSnapshot("idle")
 
 
+class StatefulFakeManager(FakeManager):
+    def __init__(self, state="idle"):
+        super().__init__()
+        self.state = state
+
+    def snapshot(self):
+        self.snapshot_calls += 1
+        return FakeSnapshot(self.state)
+
+
 class FakeForecastProvider:
     model_key = "fake_direction"
     model_version = "test-v2"
@@ -674,6 +684,73 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(service.calls[0][3], 7)
+
+    def test_stock_suppresses_forecast_if_update_starts_during_snapshot(self):
+        manager = StatefulFakeManager()
+        repository = FakeRepository()
+        service = RevisionAwareInjectedForecastService()
+        original_load = repository.load_analysis_snapshot
+
+        def load_committed_partial_snapshot(ticker):
+            close_column = repository.histories["AAA"].columns.get_loc("Close")
+            repository.histories["AAA"].iloc[-1, close_column] += 0.25
+            snapshot = original_load(ticker)
+            manager.state = "running"
+            return snapshot
+
+        repository.load_analysis_snapshot = load_committed_partial_snapshot
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            repository,
+            manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["chart"][-1]["close"], 140.25)
+        self.assertEqual(service.calls, [])
+        self.assertEqual(manager.snapshot_calls, 1)
+        self.assertEqual(
+            response.json["forecasts"]["model"]["unavailable_reason"],
+            "update_in_progress",
+        )
+        self.assertEqual(
+            {
+                row["unavailable_reason"]
+                for row in response.json["forecast_evaluation"].values()
+            },
+            {"update_in_progress"},
+        )
+
+    def test_stock_rejects_snapshot_if_update_finishes_before_forecast_barrier(self):
+        manager = StatefulFakeManager("completed")
+        repository = FakeRepository()
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        original_load = repository.load_analysis_snapshot
+
+        def load_then_publish_new_revision(ticker):
+            snapshot = original_load(ticker)
+            service.invalidate()
+            return snapshot
+
+        repository.load_analysis_snapshot = load_then_publish_new_revision
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            repository,
+            manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(factory.providers, [])
+        self.assertEqual(
+            response.json["forecasts"]["model"]["unavailable_reason"],
+            "update_in_progress",
+        )
+        self.assertEqual(manager.snapshot_calls, 1)
 
     def test_injected_forecast_service_does_not_require_update_cache_hook(self):
         service = InjectedForecastService()
@@ -1132,6 +1209,20 @@ class ForecastServiceTest(unittest.TestCase):
 
         service.build("AAA", short_dates[:1], short_histories)
         service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(len(factory.providers), 2)
+
+    def test_same_shape_corrected_snapshot_rebuilds_artifacts_and_exact_bundle(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        corrected = {
+            ticker: history.copy(deep=True)
+            for ticker, history in self.histories.items()
+        }
+        corrected["AAA"].iloc[-5, corrected["AAA"].columns.get_loc("Close")] += 0.25
+
+        service.build("AAA", self.chart_dates, self.histories)
+        service.build("AAA", self.chart_dates, corrected)
 
         self.assertEqual(len(factory.providers), 2)
 

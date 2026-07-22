@@ -134,12 +134,16 @@ from the current point-in-time frame. Supply a callable factory whose own
 Flask config as `FORECAST_SERVICE`. Add API isolation, payload-shape, and cache
 tests under `tests/test_web_api.py`.
 
-The service builds the full feature/target frame and provider once per database
-revision and reuses those immutable artifacts across stock requests. Completed
-response bundles use the exact key
+The service builds a full feature/target frame and provider on first use for a
+database revision and reuses those immutable artifacts across stock requests.
+A later, richer point-in-time snapshot can rebuild them within the same
+revision. A deterministic full-content fingerprint also forces a rebuild when
+OHLCV values are corrected without changing the row count or latest date.
+Completed response bundles use the exact key
 `(database_revision, ticker, first_chart_date, last_chart_date, model_version)`;
-a second identical request returns a defensive copy. Invalidation advances the
-revision and clears both layers.
+a second identical request returns a defensive copy. Snapshot metadata is
+checked before that exact-cache lookup. Invalidation advances the revision and
+clears both layers.
 
 Every update run records whether at least one ticker write committed during
 that run. If so, it invalidates forecasts while the public job state is still
@@ -148,6 +152,18 @@ A resumable run that later commits more writes invalidates again. A terminal run
 with zero committed writes retains the cache. If invalidation itself fails, the
 job is published as `failed` with `cache_invalidation_error`; it is never
 reported as successful over stale forecasts.
+
+Ticker transactions become visible before the whole update reaches a terminal
+state. A stock request therefore checks the update state after loading and
+analyzing its repository snapshot. While the update is still `running`, chart
+and factor data may reflect already committed ticker writes, but forecasts and
+evaluation are suppressed with typed `update_in_progress` values. If the update
+finishes during the request, terminal invalidation has already advanced the
+forecast revision, so the request rejects its older snapshot instead of
+combining it with a cached forecast. If a new update starts only after this
+barrier, the already captured chart/factor snapshot predates its writes; the
+forecast either remains on that same preceding revision or is rejected if the
+new run manages to invalidate first.
 
 ### Synchronous forecast and evaluation budget
 

@@ -27,6 +27,7 @@ from werkzeug.exceptions import HTTPException
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
+from web.forecasts.base import UnavailableReason
 from web.services.analysis import AnalysisContext
 from web.services.forecasts import (
     ForecastRevisionChanged,
@@ -180,7 +181,14 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 tuple(row["time"] for row in chart),
                 peer_histories,
             )
-            if forecast_revision is None:
+            update_snapshot = update_manager.snapshot()
+            if getattr(update_snapshot, "state", None) == "running":
+                forecast_payload = unavailable_forecast_bundle(
+                    getattr(forecast_service, "model_key", "ridge_direction_v1"),
+                    getattr(forecast_service, "model_version", "v1"),
+                    UnavailableReason.UPDATE_IN_PROGRESS,
+                )
+            elif forecast_revision is None:
                 forecast_payload = forecast_service.build(*forecast_arguments)
             else:
                 forecast_payload = forecast_service.build(
@@ -191,6 +199,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             forecast_payload = unavailable_forecast_bundle(
                 getattr(forecast_service, "model_key", "ridge_direction_v1"),
                 getattr(forecast_service, "model_version", "v1"),
+                UnavailableReason.UPDATE_IN_PROGRESS,
             )
         except Exception as error:
             flask_app.logger.exception(

@@ -655,6 +655,7 @@ class ForecastContractTest(unittest.TestCase):
                 "insufficient_training_samples",
                 "degenerate_target",
                 "model_error",
+                "update_in_progress",
             },
         )
         with self.assertRaisesRegex(ValueError, "unavailable_reason"):
