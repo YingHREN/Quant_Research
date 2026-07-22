@@ -22,3 +22,30 @@ class AnalysisContext:
     benchmark_history: pd.DataFrame | None
     cache: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def history_asof(self) -> pd.DataFrame:
+        """Return stock history sorted and truncated at the observation date."""
+        key = "analysis:history_asof"
+        if key not in self.cache:
+            self.cache[key] = self.history.loc[
+                self.history.index <= self.observation_date
+            ].sort_index()
+        return self.cache[key]
+
+    def benchmark_asof(self) -> pd.DataFrame | None:
+        """Return benchmark history through the same point in time, when present."""
+        key = "analysis:benchmark_asof"
+        if key not in self.cache:
+            benchmark = self.benchmark_history
+            self.cache[key] = (
+                None
+                if benchmark is None
+                else benchmark.loc[benchmark.index <= self.observation_date].sort_index()
+            )
+        return self.cache[key]
+
+    def cached(self, key: str, factory):
+        """Compute a shared analysis value once for this context."""
+        if key not in self.cache:
+            self.cache[key] = factory()
+        return self.cache[key]
