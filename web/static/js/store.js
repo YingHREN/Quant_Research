@@ -1,3 +1,5 @@
+import { getLocale } from "./i18n.js";
+
 const STORAGE_KEY = "quant-workstation.selected-ticker";
 
 function normalizeTicker(value) {
@@ -41,6 +43,7 @@ export function createStore(initialState = {}) {
     filters: {},
     sortKey: "ticker",
     sortDirection: "asc",
+    locale: getLocale(),
     ...initialState,
   };
   const listeners = new Set();

@@ -151,6 +151,39 @@ class WebAssetTest(unittest.TestCase):
             json.loads(result.stdout), ["MSFT", "AAPL", "OLD", None]
         )
 
+    def test_i18n_module(self):
+        module_uri = (STATIC / "js/i18n.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            const values = new Map();
+            const storage = {{
+              getItem(key) {{ return values.has(key) ? values.get(key) : null; }},
+              setItem(key, value) {{ values.set(key, String(value)); }},
+            }};
+            globalThis.localStorage = storage;
+            const i18n = await import({json.dumps(module_uri)});
+            assert.equal(i18n.getLocale(), "zh-CN");
+            assert.equal(i18n.setLocale("en"), "en");
+            assert.equal(storage.getItem("quant-dashboard-locale"), "en");
+            assert.equal(i18n.setLocale("fr"), "zh-CN");
+            assert.equal(i18n.formatChartTickDate("2026-07-17"), "07-17");
+            assert.equal(
+              i18n.formatFullDate({{ year: 2026, month: 7, day: 17 }}),
+              "2026-07-17",
+            );
+            assert.equal(
+              i18n.t("universe.shown", {{ shown: 2, total: 3 }}, "zh-CN"),
+              "显示 2/3 只股票",
+            );
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def test_daily_return_formatting_uses_fraction_units_and_quote_clear_is_explicit(self):
         module_uri = (STATIC / "js/app.js").as_uri()
         script = f"""
