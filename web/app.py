@@ -127,7 +127,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
         warnings = []
         benchmark_history = peer_histories.get("SPY")
-        if benchmark_history is None:
+        if benchmark_history is None or benchmark_history.empty:
+            benchmark_history = None
             warnings.append("missing_benchmark")
 
         peer_contexts = [

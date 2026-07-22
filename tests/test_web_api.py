@@ -639,6 +639,19 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("missing_benchmark", response.json["warnings"])
 
+    def test_benchmark_starting_after_selected_date_degrades_to_warning(self):
+        repository = FakeRepository()
+        repository.histories = {
+            "OLD": price_history(periods=80, end="2024-01-31"),
+            "SPY": price_history(periods=80, end="2026-07-21"),
+        }
+        response = create_app(
+            {"TESTING": True}, repository, FakeManager()
+        ).test_client().get("/api/stocks/OLD")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("missing_benchmark", response.json["warnings"])
+
     def test_safe_unknown_ticker_error(self):
         response = self.client.get("/api/stocks/NOPE")
 
