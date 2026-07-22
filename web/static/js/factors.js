@@ -11,7 +11,8 @@ let activeOpenReason = null;
 let pendingPopoverClose = null;
 let suppressFocusOpen = false;
 let popoverPointerOver = false;
-const triggerPresence = new WeakMap();
+const triggerPresence = new Map();
+let triggerInteractionSequence = 0;
 
 function humanize(value) {
   if (value == null || value === "") return "—";
@@ -266,6 +267,29 @@ function activeTriggerHasPresence() {
   return Boolean(presence?.pointerOver || presence?.focused || popoverPointerOver);
 }
 
+function mostRecentPresentTrigger() {
+  let candidate = null;
+  triggerPresence.forEach((presence, trigger) => {
+    if (!presence.pointerOver && !presence.focused) return;
+    if (!candidate || presence.lastInteraction > candidate.presence.lastInteraction) {
+      candidate = { trigger, presence };
+    }
+  });
+  return candidate;
+}
+
+function restorePresentFactorPopover() {
+  if (activePinned) return false;
+  const candidate = mostRecentPresentTrigger();
+  if (!candidate) return false;
+  if (candidate.trigger !== activeTrigger) {
+    openFactorPopover(candidate.trigger, candidate.presence.explanation, {
+      reason: candidate.presence.lastReason,
+    });
+  }
+  return true;
+}
+
 function closeFactorPopover({ restoreFocus = false } = {}) {
   cancelPopoverClose();
   const trigger = activeTrigger;
@@ -291,7 +315,7 @@ function schedulePopoverClose(trigger = activeTrigger) {
   pendingPopoverClose = globalThis.setTimeout(() => {
     pendingPopoverClose = null;
     if (activeTrigger === trigger && !activePinned && !activeTriggerHasPresence()) {
-      closeFactorPopover();
+      if (!restorePresentFactorPopover()) closeFactorPopover();
     }
   }, POPOVER_CLOSE_DELAY);
 }
@@ -376,10 +400,18 @@ function appendFactorInfo(parent, explanation) {
     "aria-label", t("factor.popover.explainAria", { label: explanation.label }, explanation.locale),
   );
   button.textContent = "ⓘ";
-  const presence = { pointerOver: false, focused: false };
+  const presence = {
+    pointerOver: false,
+    focused: false,
+    explanation,
+    lastInteraction: 0,
+    lastReason: "hover",
+  };
   triggerPresence.set(button, presence);
   button.addEventListener?.("pointerenter", () => {
     presence.pointerOver = true;
+    presence.lastInteraction = ++triggerInteractionSequence;
+    presence.lastReason = "hover";
     if (!activePinned) openFactorPopover(button, explanation, { reason: "hover" });
   });
   button.addEventListener?.("pointerleave", () => {
@@ -390,6 +422,8 @@ function appendFactorInfo(parent, explanation) {
   });
   button.addEventListener?.("focus", () => {
     presence.focused = true;
+    presence.lastInteraction = ++triggerInteractionSequence;
+    presence.lastReason = "focus";
     if (suppressFocusOpen) return;
     if (!activePinned || activeTrigger !== button) {
       openFactorPopover(button, explanation, { reason: "focus" });
@@ -398,7 +432,7 @@ function appendFactorInfo(parent, explanation) {
   button.addEventListener?.("blur", () => {
     presence.focused = false;
     if (activeTrigger === button && !activePinned && !activeTriggerHasPresence()) {
-      closeFactorPopover();
+      if (!restorePresentFactorPopover()) closeFactorPopover();
     }
   });
   button.addEventListener?.("click", () => activateFactorPopover(button, explanation, "click"));
@@ -523,6 +557,8 @@ export function renderFactors(results, options = {}) {
   const tableBody = options.tableBody || document.getElementById("factor-table-body");
   const locale = options.locale || getLocale();
   closeFactorPopover();
+  triggerPresence.clear();
+  triggerInteractionSequence = 0;
   if (overview) renderOverview(overview, results, options.groupMetadata, locale);
   if (tableBody) renderDetailTable(tableBody, results, locale);
 }

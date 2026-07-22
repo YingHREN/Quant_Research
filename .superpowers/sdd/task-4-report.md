@@ -137,3 +137,42 @@ and assessed the updated diff ready. Fresh post-review verification repeated
 the 48-test focused suite, 130-test warning-strict full suite, all nine
 JavaScript syntax checks, Python compilation, and `git diff --check`; all
 passed.
+
+### Cross-trigger mixed-modality fix
+
+A final re-review identified that presence arbitration only considered the
+active trigger. Two RED sequences demonstrated the gap:
+
+- focus trigger A, hover trigger B, then leave B: the popover closed instead of
+  restoring A's explanation;
+- hover trigger A, focus trigger B, then blur B: the popover closed instead of
+  restoring A's explanation.
+
+The trigger-presence registry now retains each trigger's explanation and a
+monotonic last-interaction sequence. When the active unpinned trigger loses its
+last presence, the singleton popover deterministically selects the most recent
+remaining focused/hovered trigger. Pointer transitions still use the close
+delay so entering the popover can cancel arbitration; blur can arbitrate
+immediately. Pinned, Escape, outside-click, and rerender-close paths remain
+explicit dismissals, and rerender clears the iterable trigger registry before
+registering the new DOM.
+
+The focused interaction test failed before this change and passed after it,
+including explanation-content and `aria-expanded` assertions for both
+cross-trigger sequences.
+
+Fresh verification for this final pass:
+
+- `../../venv/bin/python -m unittest tests.test_web_factors tests.test_web_assets -v`
+  - PASS (48 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-cross-trigger-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (130 tests)
+- `node --check` for every file in `web/static/js/*.js`
+  - PASS (9 files)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-cross-trigger-pycache ../../venv/bin/python -m py_compile web/factors/*.py`
+  - PASS
+- `git diff --check`
+  - PASS
+
+The independent final re-review found no Critical, Important, or Minor issues
+and assessed the cross-trigger fix ready.
