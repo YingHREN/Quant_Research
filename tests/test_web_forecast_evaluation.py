@@ -62,8 +62,9 @@ class FixedProvider:
     model_key = "fixed"
     model_version = "test-v1"
 
-    def __init__(self, predictions):
+    def __init__(self, predictions, unavailable_reasons=None):
         self.predictions = dict(predictions)
+        self.unavailable_reasons = dict(unavailable_reasons or {})
         self.calls = []
 
     def forecast_series(self, ticker, dates, horizons):
@@ -82,11 +83,14 @@ class FixedProvider:
                     predicted_return=None,
                     up_probability=None,
                     confidence_status="unavailable",
+                    confidence_reason=None,
                     training_sample_count=sample_count,
                     training_cutoff="2025-01-08" if sample_count else None,
                     model_key=self.model_key,
                     model_version=self.model_version,
-                    unavailable_reason=UnavailableReason.INSUFFICIENT_TRAINING_SAMPLES,
+                    unavailable_reason=self.unavailable_reasons.get(
+                        ticker, UnavailableReason.INSUFFICIENT_TRAINING_SAMPLES
+                    ),
                 )
             ]
         if prediction > 0.01:
@@ -104,6 +108,7 @@ class FixedProvider:
                 predicted_return=prediction,
                 up_probability=None,
                 confidence_status="uncalibrated",
+                confidence_reason=CALIBRATION_INSUFFICIENT_SAMPLES,
                 training_sample_count=6,
                 training_cutoff="2025-01-08",
                 model_key=self.model_key,
@@ -175,7 +180,7 @@ class WalkForwardEvaluationTest(unittest.TestCase):
         result = walk_forward_evaluate(frame, 5, FixedProvider({"A": None}))
 
         self.assertEqual(result.sample_count, 0)
-        self.assertIsNone(result.coverage)
+        self.assertEqual(result.coverage, 0.0)
         self.assertIsNone(result.mae)
         self.assertIsNone(result.rmse)
         self.assertIsNone(result.direction_accuracy)
@@ -183,8 +188,13 @@ class WalkForwardEvaluationTest(unittest.TestCase):
         self.assertIsNone(result.historical_mean_mae)
         self.assertIsNone(result.rank_ic)
         self.assertEqual(dict(result.signal_bucket_returns), {})
-        self.assertIsNone(result.evaluation_start)
-        self.assertIsNone(result.evaluation_end)
+        self.assertEqual(
+            result.evaluation_start,
+            frame.index.get_level_values("observation_date").min(),
+        )
+        self.assertEqual(result.evaluation_end, EVALUATION_DATE)
+        self.assertEqual(result.model_key, "fixed")
+        self.assertEqual(result.model_version, "test-v1")
         self.assertEqual(
             result.unavailable_reason,
             UnavailableReason.INSUFFICIENT_TRAINING_SAMPLES,
@@ -199,8 +209,54 @@ class WalkForwardEvaluationTest(unittest.TestCase):
         self.assertEqual(result.unavailable_reason, UnavailableReason.INSUFFICIENT_HISTORY)
         self.assertEqual(provider.calls, [])
 
+    def test_no_forecasts_preserves_unanimous_or_mixed_provider_reasons(self):
+        cases = (
+            (
+                ("A",),
+                {"A": UnavailableReason.DEGENERATE_TARGET},
+                "degenerate_target",
+            ),
+            (
+                ("A",),
+                {"A": UnavailableReason.MODEL_ERROR},
+                "model_error",
+            ),
+            (
+                ("A", "B"),
+                {
+                    "A": UnavailableReason.DEGENERATE_TARGET,
+                    "B": UnavailableReason.MODEL_ERROR,
+                },
+                "no_available_forecasts",
+            ),
+        )
+        for tickers, reasons, expected in cases:
+            with self.subTest(expected=expected):
+                result = walk_forward_evaluate(
+                    evaluation_frame(tickers),
+                    5,
+                    FixedProvider({}, unavailable_reasons=reasons),
+                )
+
+                self.assertEqual(result.unavailable_reason.value, expected)
+                self.assertEqual(result.coverage, 0.0)
+
 
 class CalibrationTest(unittest.TestCase):
+    def test_calibration_minimum_cannot_weaken_the_100_row_gate(self):
+        with self.assertRaisesRegex(ValueError, "at least 100"):
+            calibrate_up_probability([0.1], [], minimum_samples=99)
+
+        stricter = calibrate_up_probability(
+            [*np.linspace(-1.0, 1.0, 100), 0.5],
+            np.resize((-0.01, 0.02), 100),
+            minimum_samples=101,
+        )
+
+        self.assertIsNone(stricter.up_probability)
+        self.assertEqual(stricter.sample_count, 100)
+        self.assertEqual(stricter.reason, CALIBRATION_INSUFFICIENT_SAMPLES)
+
     def test_monotonic_empirical_calibration_requires_earlier_oos_rows(self):
         history_predictions = np.linspace(-1.0, 1.0, 100)
         history_actuals = np.where(history_predictions > 0.0, 0.02, -0.01)
@@ -253,6 +309,7 @@ class CalibrationTest(unittest.TestCase):
         history_predictions = np.linspace(-1.0, 1.0, 100)
         history = pd.DataFrame(
             {
+                "ticker": "AAA",
                 "asof_date": pd.bdate_range("2024-01-02", periods=100),
                 "label_end_date": pd.bdate_range("2024-01-09", periods=100),
                 "training_cutoff": pd.bdate_range("2023-01-02", periods=100),
@@ -265,6 +322,7 @@ class CalibrationTest(unittest.TestCase):
         )
         poisoned = pd.DataFrame(
             {
+                "ticker": ["AAA"],
                 "asof_date": [dates[8]],
                 "label_end_date": [dates[10]],
                 "training_cutoff": [dates[7]],
@@ -286,14 +344,44 @@ class CalibrationTest(unittest.TestCase):
             minimum_samples=4,
             calibration_history=history.iloc[:-1],
         ).forecast_series("AAA", (dates[10],), (5,))[0]
+        one_class_history = history.assign(actual_return=0.02)
+        one_class = RidgeForecastProvider(
+            frame,
+            minimum_samples=4,
+            calibration_history=one_class_history,
+        ).forecast_series("AAA", (dates[10],), (5,))[0]
+        other_ticker = RidgeForecastProvider(
+            frame,
+            minimum_samples=4,
+            calibration_history=history.assign(ticker="BBB"),
+        ).forecast_series("AAA", (dates[10],), (5,))[0]
 
         self.assertEqual(calibrated.confidence_status, "calibrated")
         self.assertIsNotNone(calibrated.up_probability)
         self.assertEqual(calibrated.up_probability, 1.0)
+        self.assertIsNone(calibrated.confidence_reason)
         self.assertEqual(uncalibrated.confidence_status, "uncalibrated")
         self.assertIsNone(uncalibrated.up_probability)
+        self.assertEqual(
+            uncalibrated.confidence_reason, CALIBRATION_INSUFFICIENT_SAMPLES
+        )
+        self.assertEqual(one_class.confidence_status, "uncalibrated")
+        self.assertIsNone(one_class.up_probability)
+        self.assertEqual(
+            one_class.confidence_reason, CALIBRATION_INSUFFICIENT_CLASSES
+        )
+        self.assertEqual(other_ticker.confidence_status, "uncalibrated")
+        self.assertIsNone(other_ticker.up_probability)
+        self.assertEqual(
+            other_ticker.confidence_reason, CALIBRATION_INSUFFICIENT_SAMPLES
+        )
 
-        for missing_provenance in ("training_cutoff", "model_key", "model_version"):
+        for missing_provenance in (
+            "ticker",
+            "training_cutoff",
+            "model_key",
+            "model_version",
+        ):
             with self.subTest(missing_provenance=missing_provenance):
                 with self.assertRaisesRegex(ValueError, "missing columns"):
                     RidgeForecastProvider(
@@ -301,6 +389,39 @@ class CalibrationTest(unittest.TestCase):
                         minimum_samples=4,
                         calibration_history=history.drop(columns=missing_provenance),
                     )
+
+    def test_calibration_history_requires_unique_oos_observation_identity(self):
+        from tests.test_web_forecasts import synthetic_frame
+
+        frame, _ = synthetic_frame(periods=20)
+        row = pd.DataFrame(
+            {
+                "ticker": ["AAA"],
+                "asof_date": ["2024-01-02"],
+                "label_end_date": ["2024-01-09"],
+                "training_cutoff": ["2023-12-29"],
+                "horizon_sessions": [5],
+                "predicted_return": [0.1],
+                "actual_return": [0.2],
+                "model_key": ["ridge_direction_v1"],
+                "model_version": ["v1"],
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "duplicate calibration observation"):
+            RidgeForecastProvider(
+                frame,
+                calibration_history=pd.concat([row] * 100, ignore_index=True),
+            )
+
+        for cutoff in ("2024-01-02", "2024-01-03"):
+            with self.subTest(cutoff=cutoff), self.assertRaisesRegex(
+                ValueError, "cutoffs must precede"
+            ):
+                RidgeForecastProvider(
+                    frame,
+                    calibration_history=row.assign(training_cutoff=cutoff),
+                )
 
 
 if __name__ == "__main__":

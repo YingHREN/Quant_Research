@@ -18,6 +18,9 @@ from web.contracts import iso_date, json_safe
 SUPPORTED_HORIZONS = (5, 20, 60)
 FORECAST_DIRECTIONS = frozenset(("up", "neutral", "down", "unavailable"))
 CONFIDENCE_STATUSES = frozenset(("calibrated", "uncalibrated", "unavailable"))
+CONFIDENCE_REASONS = frozenset(
+    ("insufficient_calibration_samples", "calibration_requires_both_classes")
+)
 
 
 class UnavailableReason(str, Enum):
@@ -27,6 +30,12 @@ class UnavailableReason(str, Enum):
     INSUFFICIENT_TRAINING_SAMPLES = "insufficient_training_samples"
     DEGENERATE_TARGET = "degenerate_target"
     MODEL_ERROR = "model_error"
+
+
+class EvaluationUnavailableReason(str, Enum):
+    """Stable reason used when unavailable forecasts have mixed causes."""
+
+    NO_AVAILABLE_FORECASTS = "no_available_forecasts"
 
 
 @dataclass(frozen=True)
@@ -40,6 +49,7 @@ class ForecastResult:
     predicted_return: float | None
     up_probability: float | None
     confidence_status: str
+    confidence_reason: str | None
     training_sample_count: int
     training_cutoff: object | None
     model_key: str
@@ -64,6 +74,7 @@ class ForecastResult:
         predicted_return = _optional_number(self.predicted_return, "predicted_return")
         up_probability = _optional_number(self.up_probability, "up_probability")
         _validate_probability(up_probability)
+        confidence_reason = _optional_confidence_reason(self.confidence_reason)
         asof_date = _optional_date(self.asof_date, "asof_date")
         training_cutoff = _optional_date(self.training_cutoff, "training_cutoff")
         reason = _normalize_reason(self.unavailable_reason)
@@ -83,6 +94,8 @@ class ForecastResult:
                 raise ValueError("unavailable forecasts cannot contain predictions")
             if self.confidence_status != "unavailable":
                 raise ValueError("unavailable forecasts require unavailable confidence")
+            if confidence_reason is not None:
+                raise ValueError("unavailable forecasts cannot have confidence_reason")
         else:
             if predicted_return is None:
                 raise ValueError("available forecasts require a finite predicted_return")
@@ -94,6 +107,10 @@ class ForecastResult:
                 raise ValueError("calibrated forecasts require up_probability")
             if self.confidence_status != "calibrated" and up_probability is not None:
                 raise ValueError("up_probability requires calibrated confidence")
+            if self.confidence_status == "calibrated" and confidence_reason is not None:
+                raise ValueError("calibrated forecasts cannot have confidence_reason")
+            if self.confidence_status == "uncalibrated" and confidence_reason is None:
+                raise ValueError("uncalibrated forecasts require confidence_reason")
         object.__setattr__(self, "ticker", ticker)
         object.__setattr__(self, "model_key", model_key)
         object.__setattr__(self, "model_version", model_version)
@@ -101,6 +118,7 @@ class ForecastResult:
         object.__setattr__(self, "training_sample_count", int(self.training_sample_count))
         object.__setattr__(self, "predicted_return", predicted_return)
         object.__setattr__(self, "up_probability", up_probability)
+        object.__setattr__(self, "confidence_reason", confidence_reason)
         object.__setattr__(self, "asof_date", asof_date)
         object.__setattr__(self, "training_cutoff", training_cutoff)
         object.__setattr__(self, "unavailable_reason", reason)
@@ -115,6 +133,7 @@ class ForecastResult:
             "predicted_return": json_safe(self.predicted_return),
             "up_probability": json_safe(self.up_probability),
             "confidence_status": self.confidence_status,
+            "confidence_reason": self.confidence_reason,
             "training_sample_count": self.training_sample_count,
             "training_cutoff": iso_date(self.training_cutoff),
             "model_key": self.model_key,
@@ -145,7 +164,7 @@ class ForecastEvaluation:
     evaluation_end: object | None = None
     model_key: str = ""
     model_version: str = ""
-    unavailable_reason: UnavailableReason | str | None = None
+    unavailable_reason: UnavailableReason | EvaluationUnavailableReason | str | None = None
 
     def __post_init__(self):
         model_key = _required_string(self.model_key, "model_key")
@@ -157,7 +176,7 @@ class ForecastEvaluation:
             raise TypeError("sample_count must be an integer")
         if int(self.sample_count) < 0:
             raise ValueError("sample_count must not be negative")
-        reason = _normalize_reason(self.unavailable_reason)
+        reason = _normalize_evaluation_reason(self.unavailable_reason)
         if not isinstance(self.signal_bucket_returns, Mapping):
             raise TypeError("signal_bucket_returns must be a mapping")
         buckets = MappingProxyType(
@@ -184,7 +203,10 @@ class ForecastEvaluation:
         evaluation_end = _optional_date(self.evaluation_end, "evaluation_end")
         _validate_evaluation_metrics(metrics)
         _validate_evaluation_dates(
-            int(self.sample_count), evaluation_start, evaluation_end
+            int(self.sample_count),
+            evaluation_start,
+            evaluation_end,
+            allow_zero_sample_range=(reason is not None and metrics["coverage"] == 0.0),
         )
         required_metrics = (
             "coverage",
@@ -202,8 +224,21 @@ class ForecastEvaluation:
                 raise ValueError(
                     f"unavailable evaluations require unavailable_reason; missing metrics: {missing}"
                 )
-        elif any(value is not None for value in metrics.values()) or buckets:
-            raise ValueError("unavailable evaluations cannot contain metrics")
+        else:
+            unavailable_performance = {
+                name: value for name, value in metrics.items() if name != "coverage"
+            }
+            if any(value is not None for value in unavailable_performance.values()) or buckets:
+                raise ValueError("unavailable evaluations cannot contain performance metrics")
+            if metrics["coverage"] is not None:
+                if metrics["coverage"] != 0.0 or int(self.sample_count) != 0:
+                    raise ValueError(
+                        "unavailable evaluation coverage may only report zero available samples"
+                    )
+                if evaluation_start is None:
+                    raise ValueError(
+                        "zero-coverage evaluations require the candidate date range"
+                    )
 
         object.__setattr__(self, "model_key", model_key)
         object.__setattr__(self, "model_version", model_version)
@@ -308,12 +343,14 @@ def _validate_evaluation_metrics(metrics):
         raise ValueError("rank_ic must be between negative one and one")
 
 
-def _validate_evaluation_dates(sample_count, evaluation_start, evaluation_end):
+def _validate_evaluation_dates(
+    sample_count, evaluation_start, evaluation_end, *, allow_zero_sample_range=False
+):
     if (evaluation_start is None) != (evaluation_end is None):
         raise ValueError("evaluation_start and evaluation_end must be provided together")
     if sample_count > 0 and evaluation_start is None:
         raise ValueError("positive sample_count requires an evaluation date range")
-    if sample_count == 0 and evaluation_start is not None:
+    if sample_count == 0 and evaluation_start is not None and not allow_zero_sample_range:
         raise ValueError("zero sample_count cannot have an evaluation date range")
     if evaluation_start is not None and evaluation_start > evaluation_end:
         raise ValueError("evaluation_start must not be after evaluation_end")
@@ -326,3 +363,26 @@ def _normalize_reason(value):
         return value if isinstance(value, UnavailableReason) else UnavailableReason(value)
     except ValueError as exc:
         raise ValueError(f"invalid unavailable_reason: {value}") from exc
+
+
+def _normalize_evaluation_reason(value):
+    if value is None or isinstance(
+        value, (UnavailableReason, EvaluationUnavailableReason)
+    ):
+        return value
+    try:
+        return UnavailableReason(value)
+    except ValueError:
+        try:
+            return EvaluationUnavailableReason(value)
+        except ValueError as exc:
+            raise ValueError(f"invalid unavailable_reason: {value}") from exc
+
+
+def _optional_confidence_reason(value):
+    if value is None:
+        return None
+    reason = _required_string(value, "confidence_reason")
+    if reason not in CONFIDENCE_REASONS:
+        raise ValueError(f"invalid confidence_reason: {value}")
+    return reason

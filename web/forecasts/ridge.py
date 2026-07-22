@@ -165,8 +165,8 @@ class RidgeForecastProvider:
                 cutoff,
             )
 
-        up_probability = self._calibrated_probability(
-            predicted_return, asof, horizon
+        calibration = self._calibrated_probability(
+            ticker, predicted_return, asof, horizon
         )
         return ForecastResult(
             ticker=ticker,
@@ -174,10 +174,13 @@ class RidgeForecastProvider:
             horizon_sessions=horizon,
             direction=direction_for_return(predicted_return, horizon),
             predicted_return=predicted_return,
-            up_probability=up_probability,
+            up_probability=calibration.up_probability,
             confidence_status=(
-                "calibrated" if up_probability is not None else "uncalibrated"
+                "calibrated"
+                if calibration.up_probability is not None
+                else "uncalibrated"
             ),
+            confidence_reason=calibration.reason,
             training_sample_count=sample_count,
             training_cutoff=cutoff,
             model_key=self.model_key,
@@ -185,19 +188,16 @@ class RidgeForecastProvider:
             unavailable_reason=None,
         )
 
-    def _calibrated_probability(self, predicted_return, asof, horizon):
-        if self._calibration_history.empty:
-            return None
+    def _calibrated_probability(self, ticker, predicted_return, asof, horizon):
         history = self._calibration_history
         matured = history.loc[
-            (history["horizon_sessions"] == horizon)
+            (history["ticker"] == ticker)
+            & (history["horizon_sessions"] == horizon)
             & (history["model_key"] == self.model_key)
             & (history["model_version"] == self.model_version)
             & (history["asof_date"] < asof)
             & (history["label_end_date"] < asof)
         ]
-        if matured.empty:
-            return None
         # Local import avoids coupling the model implementation to evaluation
         # at module-import time.
         from web.forecasts.evaluation import calibrate_up_probability
@@ -206,7 +206,7 @@ class RidgeForecastProvider:
             [*matured["predicted_return"], predicted_return],
             matured["actual_return"],
         )
-        return calibration.up_probability
+        return calibration
 
     def _fit_predict(self, training, target, forecast_row):
         raw_training = training.loc[:, self.feature_columns].to_numpy(
@@ -258,6 +258,7 @@ class RidgeForecastProvider:
             predicted_return=None,
             up_probability=None,
             confidence_status="unavailable",
+            confidence_reason=None,
             training_sample_count=sample_count,
             training_cutoff=cutoff,
             model_key=self.model_key,
@@ -334,6 +335,7 @@ def _validated_horizons(values):
 
 def _validated_calibration_history(history):
     columns = (
+        "ticker",
         "asof_date",
         "label_end_date",
         "training_cutoff",
@@ -385,10 +387,21 @@ def _validated_calibration_history(history):
                 f"calibration_history {column} must contain finite numbers"
             )
         result[column] = numeric
-    for column in ("model_key", "model_version"):
+    for column in ("ticker", "model_key", "model_version"):
         if any(not isinstance(value, str) or not value.strip() for value in result[column]):
             raise ValueError(f"calibration_history {column} must be non-empty strings")
         result[column] = result[column].str.strip()
+    identity_columns = (
+        "ticker",
+        "asof_date",
+        "horizon_sessions",
+        "model_key",
+        "model_version",
+    )
+    if result.duplicated(subset=identity_columns, keep=False).any():
+        raise ValueError(
+            "duplicate calibration observation identities are not allowed"
+        )
     return result.loc[:, columns].sort_values(
-        ["label_end_date", "asof_date"], kind="mergesort"
+        ["label_end_date", "asof_date", "ticker"], kind="mergesort"
     ).reset_index(drop=True)

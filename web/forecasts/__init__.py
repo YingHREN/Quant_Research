@@ -1,6 +1,11 @@
 """Point-in-time forecasting contracts and dataset builders."""
 
-from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
+from web.forecasts.base import (
+    EvaluationUnavailableReason,
+    ForecastEvaluation,
+    ForecastResult,
+    UnavailableReason,
+)
 from web.forecasts.dataset import (
     FEATURE_COLUMNS,
     SUPPORTED_HORIZONS,
@@ -19,6 +24,7 @@ __all__ = (
     "SUPPORTED_HORIZONS",
     "ForecastEvaluation",
     "ForecastResult",
+    "EvaluationUnavailableReason",
     "CalibrationResult",
     "UnavailableReason",
     "attach_forward_targets",

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from web.forecasts.base import (
+    EvaluationUnavailableReason,
     ForecastEvaluation,
     ForecastResult,
     SUPPORTED_HORIZONS,
@@ -21,6 +22,7 @@ from web.forecasts.ridge import direction_for_return
 
 CROSS_SECTION_MINIMUM = 5
 SIGNAL_BUCKETS = ("down", "neutral", "up")
+CALIBRATION_MINIMUM_SAMPLES = 100
 CALIBRATION_INSUFFICIENT_SAMPLES = "insufficient_calibration_samples"
 CALIBRATION_INSUFFICIENT_CLASSES = "calibration_requires_both_classes"
 
@@ -56,6 +58,7 @@ def walk_forward_evaluate(frame, horizon, provider):
         )
 
     observations = []
+    unavailable_reasons = []
     for (ticker, asof), row in candidates.iterrows():
         # This call is intentional even though the provider independently uses
         # the same helper: it gives the historical baseline the identical purge
@@ -74,6 +77,7 @@ def walk_forward_evaluate(frame, horizon, provider):
             forecast, ticker, asof, checked_horizon, model_key, model_version
         )
         if forecast.predicted_return is None:
+            unavailable_reasons.append(forecast.unavailable_reason)
             continue
         if training_values.size == 0:
             raise ValueError(
@@ -94,11 +98,17 @@ def walk_forward_evaluate(frame, horizon, provider):
         )
 
     if not observations:
+        reason = (
+            unavailable_reasons[0]
+            if len(set(unavailable_reasons)) == 1
+            else EvaluationUnavailableReason.NO_AVAILABLE_FORECASTS
+        )
         return _unavailable_evaluation(
             checked_horizon,
             model_key,
             model_version,
-            UnavailableReason.INSUFFICIENT_TRAINING_SAMPLES,
+            reason,
+            candidates=candidates,
         )
 
     evaluated = pd.DataFrame(observations)
@@ -141,8 +151,10 @@ def calibrate_up_probability(predictions, actuals, minimum_samples=100):
     if isinstance(minimum_samples, bool) or not isinstance(minimum_samples, Integral):
         raise TypeError("minimum_samples must be an integer")
     minimum_samples = int(minimum_samples)
-    if minimum_samples <= 0:
-        raise ValueError("minimum_samples must be positive")
+    if minimum_samples < CALIBRATION_MINIMUM_SAMPLES:
+        raise ValueError(
+            f"minimum_samples must be at least {CALIBRATION_MINIMUM_SAMPLES}"
+        )
     prediction_values = _sequence(predictions, "predictions")
     actual_values = _sequence(actuals, "actuals")
     if not prediction_values:
@@ -247,11 +259,19 @@ def _signal_bucket_returns(groups):
     }
 
 
-def _unavailable_evaluation(horizon, model_key, model_version, reason):
+def _unavailable_evaluation(
+    horizon, model_key, model_version, reason, *, candidates=None
+):
+    has_candidates = candidates is not None and not candidates.empty
+    candidate_dates = (
+        candidates.index.get_level_values("observation_date")
+        if has_candidates
+        else None
+    )
     return ForecastEvaluation(
         horizon_sessions=horizon,
         sample_count=0,
-        coverage=None,
+        coverage=0.0 if has_candidates else None,
         mae=None,
         rmse=None,
         direction_accuracy=None,
@@ -259,8 +279,8 @@ def _unavailable_evaluation(horizon, model_key, model_version, reason):
         historical_mean_mae=None,
         rank_ic=None,
         signal_bucket_returns={},
-        evaluation_start=None,
-        evaluation_end=None,
+        evaluation_start=None if not has_candidates else candidate_dates.min(),
+        evaluation_end=None if not has_candidates else candidate_dates.max(),
         model_key=model_key,
         model_version=model_version,
         unavailable_reason=reason,

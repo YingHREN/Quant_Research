@@ -201,6 +201,52 @@ class ForecastDatasetTest(unittest.TestCase):
 
 
 class ForecastContractTest(unittest.TestCase):
+    def test_forecast_result_exposes_coherent_confidence_reason(self):
+        common = {
+            "ticker": "AAA",
+            "asof_date": "2026-07-22",
+            "horizon_sessions": 20,
+            "direction": "up",
+            "predicted_return": 0.1,
+            "training_sample_count": 100,
+            "training_cutoff": "2026-07-21",
+            "model_key": "ridge_direction_v1",
+            "model_version": "v1",
+        }
+        uncalibrated = ForecastResult(
+            **common,
+            up_probability=None,
+            confidence_status="uncalibrated",
+            confidence_reason="insufficient_calibration_samples",
+        )
+
+        self.assertEqual(
+            uncalibrated.to_dict()["confidence_reason"],
+            "insufficient_calibration_samples",
+        )
+        json.dumps(uncalibrated.to_dict(), allow_nan=False)
+
+        invalid_states = (
+            {
+                "up_probability": None,
+                "confidence_status": "uncalibrated",
+                "confidence_reason": None,
+            },
+            {
+                "up_probability": 0.7,
+                "confidence_status": "calibrated",
+                "confidence_reason": "insufficient_calibration_samples",
+            },
+            {
+                "up_probability": None,
+                "confidence_status": "uncalibrated",
+                "confidence_reason": "unknown_reason",
+            },
+        )
+        for invalid in invalid_states:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                ForecastResult(**common, **invalid)
+
     def test_forecast_result_is_immutable_and_json_safe(self):
         result = ForecastResult(
             ticker="AAA",
@@ -210,6 +256,7 @@ class ForecastContractTest(unittest.TestCase):
             predicted_return=np.nan,
             up_probability=None,
             confidence_status="unavailable",
+            confidence_reason=None,
             training_sample_count=np.int64(0),
             training_cutoff=pd.Timestamp("2026-07-21"),
             model_key="ridge_direction_v1",
@@ -227,6 +274,7 @@ class ForecastContractTest(unittest.TestCase):
                 "predicted_return": None,
                 "up_probability": None,
                 "confidence_status": "unavailable",
+                "confidence_reason": None,
                 "training_sample_count": 0,
                 "training_cutoff": "2026-07-21",
                 "model_key": "ridge_direction_v1",
@@ -247,6 +295,7 @@ class ForecastContractTest(unittest.TestCase):
             "training_cutoff": "2026-07-21",
             "model_key": "ridge_direction_v1",
             "model_version": "v1",
+            "confidence_reason": "insufficient_calibration_samples",
         }
         invalid_states = (
             dict(direction="unavailable", predicted_return=0.1,
@@ -279,6 +328,7 @@ class ForecastContractTest(unittest.TestCase):
             "predicted_return": 0.1,
             "up_probability": None,
             "confidence_status": "uncalibrated",
+            "confidence_reason": "insufficient_calibration_samples",
             "training_sample_count": 100,
             "training_cutoff": "2026-07-21",
             "model_key": "ridge_direction_v1",
@@ -303,6 +353,7 @@ class ForecastContractTest(unittest.TestCase):
                 "direction": "unavailable",
                 "predicted_return": None,
                 "confidence_status": "unavailable",
+                "confidence_reason": None,
                 "training_sample_count": 0,
                 "training_cutoff": None,
                 "unavailable_reason": "insufficient_history",
@@ -327,6 +378,7 @@ class ForecastContractTest(unittest.TestCase):
             "direction": "unavailable",
             "predicted_return": None,
             "confidence_status": "unavailable",
+            "confidence_reason": None,
             "unavailable_reason": "model_error",
         }
         for changes in invalid_unavailable_provenance:
@@ -343,6 +395,7 @@ class ForecastContractTest(unittest.TestCase):
                 predicted_return=True,
                 up_probability=None,
                 confidence_status="uncalibrated",
+                confidence_reason="insufficient_calibration_samples",
                 training_sample_count=100,
                 training_cutoff="2026-07-21",
                 model_key="ridge_direction_v1",
@@ -376,6 +429,7 @@ class ForecastContractTest(unittest.TestCase):
             "predicted_return": None,
             "up_probability": None,
             "confidence_status": "unavailable",
+            "confidence_reason": None,
             "training_sample_count": 0,
             "training_cutoff": None,
             "model_key": "ridge_direction_v1",
@@ -418,7 +472,9 @@ class ForecastContractTest(unittest.TestCase):
             ForecastResult(
                 ticker="AAA", asof_date="2026-07-22", horizon_sessions=20,
                 direction="up", predicted_return=object(), up_probability=None,
-                confidence_status="uncalibrated", training_sample_count=100,
+                confidence_status="uncalibrated",
+                confidence_reason="insufficient_calibration_samples",
+                training_sample_count=100,
                 training_cutoff="2026-07-21", model_key="ridge_direction_v1",
                 model_version="v1",
             )
@@ -569,6 +625,7 @@ class ForecastContractTest(unittest.TestCase):
                 predicted_return=None,
                 up_probability=None,
                 confidence_status="unavailable",
+                confidence_reason=None,
                 training_sample_count=0,
                 training_cutoff=None,
                 model_key="ridge_direction_v1",

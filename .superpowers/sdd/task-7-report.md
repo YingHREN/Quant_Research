@@ -76,3 +76,54 @@ repository's existing interpreter at `../../venv/bin/python`.
 
 An independent read-only review against `fac4de9` also returned PASS with no
 requirement-breaking findings.
+
+## Review Follow-up Fixes
+
+Addressed the subsequent Task 7 review and calibration-provenance findings with
+independent red/green cycles:
+
+- The public calibration gate now rejects `minimum_samples < 100` while still
+  allowing stricter thresholds.
+- `ForecastResult` now carries a JSON-safe `confidence_reason`. Calibrated and
+  unavailable states require it to be absent; uncalibrated available forecasts
+  require one of `insufficient_calibration_samples` or
+  `calibration_requires_both_classes`. Ridge preserves the exact calibrator
+  result instead of collapsing both cases to an unexplained `None`.
+- Evaluations with realized candidates but no available forecasts now report
+  `coverage=0.0`, the candidate date range, and model identity while leaving
+  performance metrics unavailable. A unanimous provider failure reason is
+  preserved; mixed causes use the typed evaluation reason
+  `no_available_forecasts`.
+- Calibration history now requires ticker provenance. Its unique observation
+  identity is `(ticker, asof_date, horizon_sessions, model_key, model_version)`;
+  duplicate identities are rejected so copied rows cannot satisfy the 100-row
+  gate. All rows require `training_cutoff < asof_date`, and Ridge selects only
+  earlier, matured OOS rows matching ticker, horizon, model key, and version.
+
+Additional TDD evidence:
+
+1. A requested 99-row calibration minimum was accepted before the floor fix.
+2. `ForecastResult` rejected the new `confidence_reason` argument before the
+   contract migration, and Ridge then failed until it propagated the complete
+   `CalibrationResult`.
+3. Zero-forecast evaluation returned `coverage=None` and no candidate range
+   before the evidence-contract fix.
+4. One calibration observation copied 100 times was accepted before identity
+   validation; another ticker's 100 rows also calibrated the live ticker before
+   ticker-scoped selection.
+5. Completion review exposed a hardcoded evaluation failure reason; all-
+   degenerate, all-model-error, and mixed-cause tests failed before unanimous
+   reason propagation and the mixed-cause evaluation reason were added.
+
+Follow-up verification:
+
+- Focused, warning-strict:
+  `PYTHONWARNINGS=error ../../venv/bin/python -m unittest tests.test_web_forecast_evaluation tests.test_web_forecast_dataset tests.test_web_forecasts -v`
+  - PASS (42 tests)
+- Full, warning-strict:
+  `PYTHONWARNINGS=error ../../venv/bin/python -m unittest discover -s tests -v`
+  - PASS (172 tests)
+- Bytecode compilation of the changed forecast modules and tests: PASS.
+- `git diff --check`: PASS.
+
+No unresolved correctness concerns remain after the follow-up review.
