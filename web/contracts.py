@@ -20,11 +20,15 @@ def iso_date(value):
 
 
 def json_safe(value):
+    if value is pd.NA:
+        return None
     if isinstance(value, dict):
         return {str(key): json_safe(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [json_safe(item) for item in value]
     if isinstance(value, (pd.Timestamp, datetime, date)):
+        return iso_date(value)
+    if isinstance(value, np.datetime64):
         return iso_date(value)
     if isinstance(value, np.generic):
         value = value.item()

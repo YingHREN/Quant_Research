@@ -28,3 +28,9 @@ class WebContractTest(unittest.TestCase):
 
     def test_iso_date_accepts_none(self):
         self.assertIsNone(iso_date(None))
+
+    def test_json_safe_normalizes_numpy_datetime_to_iso_date(self):
+        self.assertEqual(json_safe(np.datetime64("2026-07-21")), "2026-07-21")
+
+    def test_json_safe_normalizes_pandas_missing_value_to_none(self):
+        self.assertIsNone(json_safe(pd.NA))
