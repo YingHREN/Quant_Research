@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import subprocess
+import threading
 from types import SimpleNamespace
 import unittest
 
@@ -12,12 +13,14 @@ import pandas as pd
 
 from web.app import create_app
 from web.factors.registry import FactorRegistry
+from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
+from web.services.forecasts import ForecastService
 from web.services.market_data import (
     InvalidTicker,
     MarketDataUnavailable,
     UnknownTicker,
 )
-from web.services.update_jobs import UpdateAlreadyRunning
+from web.services.update_jobs import UpdateAlreadyRunning, UpdateJobManager
 
 
 def price_history(periods=260, end="2026-07-21", offset=0.0):
@@ -317,12 +320,140 @@ class FakeManager:
         return FakeSnapshot("idle")
 
 
+class FakeForecastProvider:
+    model_key = "fake_direction"
+    model_version = "test-v2"
+
+    def __init__(self):
+        self.calls = []
+
+    def forecast_series(self, ticker, dates, horizons):
+        dates = tuple(pd.Timestamp(value).normalize() for value in dates)
+        horizons = tuple(horizons)
+        self.calls.append((ticker, dates, horizons))
+        results = []
+        for asof in dates:
+            for horizon in horizons:
+                if asof.day % 2:
+                    results.append(
+                        ForecastResult(
+                            ticker=ticker,
+                            asof_date=asof,
+                            horizon_sessions=horizon,
+                            direction="unavailable",
+                            predicted_return=None,
+                            up_probability=None,
+                            confidence_status="unavailable",
+                            confidence_reason=None,
+                            training_sample_count=0,
+                            training_cutoff=None,
+                            model_key=self.model_key,
+                            model_version=self.model_version,
+                            unavailable_reason=UnavailableReason.INSUFFICIENT_HISTORY,
+                        )
+                    )
+                    continue
+                results.append(
+                    ForecastResult(
+                        ticker=ticker,
+                        asof_date=asof,
+                        horizon_sessions=horizon,
+                        direction="up",
+                        predicted_return=horizon / 1000,
+                        up_probability=None,
+                        confidence_status="uncalibrated",
+                        confidence_reason="insufficient_calibration_samples",
+                        training_sample_count=40,
+                        training_cutoff=asof - pd.offsets.BDay(1),
+                        model_key=self.model_key,
+                        model_version=self.model_version,
+                    )
+                )
+        return results
+
+
+class FakeForecastFactory:
+    model_key = FakeForecastProvider.model_key
+    model_version = FakeForecastProvider.model_version
+
+    def __init__(self, error=None):
+        self.error = error
+        self.providers = []
+
+    def __call__(self, _frame):
+        if self.error is not None:
+            raise self.error
+        provider = FakeForecastProvider()
+        self.providers.append(provider)
+        return provider
+
+
+class FalseyForecastFactory(FakeForecastFactory):
+    def __bool__(self):
+        return False
+
+
+def fake_forecast_evaluation(_frame, horizon, provider):
+    return ForecastEvaluation(
+        horizon_sessions=horizon,
+        sample_count=12,
+        coverage=0.5,
+        mae=0.01,
+        rmse=0.02,
+        direction_accuracy=0.75,
+        zero_return_mae=0.03,
+        historical_mean_mae=0.025,
+        rank_ic=None,
+        signal_bucket_returns={"down": None, "neutral": 0.0, "up": 0.02},
+        evaluation_start="2026-06-01",
+        evaluation_end="2026-07-01",
+        model_key=provider.model_key,
+        model_version=provider.model_version,
+    )
+
+
+class InjectedForecastService:
+    model_key = "injected"
+    model_version = "test-v1"
+
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+
+    def build(self, ticker, chart_dates, histories):
+        self.calls.append((ticker, tuple(chart_dates), histories))
+        if self.error is not None:
+            raise self.error
+        return {
+            "forecasts": {
+                "model": {
+                    "key": self.model_key,
+                    "version": self.model_version,
+                    "status": "available",
+                    "unavailable_reason": None,
+                },
+                "horizons": [5, 20, 60],
+                "by_date": {},
+            },
+            "forecast_evaluation": {},
+        }
+
+
+def test_config(**overrides):
+    config = {
+        "TESTING": True,
+        "FORECAST_SERVICE": InjectedForecastService(),
+    }
+    config.update(overrides)
+    return config
+
+
 class WebApiTest(unittest.TestCase):
     def setUp(self):
         self.repository = FakeRepository()
         self.manager = FakeManager()
         self.app = create_app(
-            {"TESTING": True}, self.repository, self.manager
+            test_config(), self.repository, self.manager
         )
         self.client = self.app.test_client()
 
@@ -380,7 +511,7 @@ class WebApiTest(unittest.TestCase):
     def test_universe_diagnostics_feed_real_filter_and_sort_pipeline(self):
         repository = UniverseCohortRepository()
         app = create_app(
-            {"TESTING": True, "FACTOR_REGISTRY": universe_registry()},
+            test_config(FACTOR_REGISTRY=universe_registry()),
             repository,
             FakeManager(),
         )
@@ -446,7 +577,7 @@ class WebApiTest(unittest.TestCase):
         repository = FalseyRepository()
         manager = FakeManager()
 
-        app = create_app({"TESTING": True}, repository, manager)
+        app = create_app(test_config(), repository, manager)
         response = app.test_client().get("/api/universe")
 
         self.assertEqual(response.status_code, 200)
@@ -458,18 +589,18 @@ class WebApiTest(unittest.TestCase):
         payload = response.json
 
         self.assertEqual(response.status_code, 200)
+        legacy_keys = {
+            "ticker",
+            "observation_date",
+            "summary",
+            "chart",
+            "structures",
+            "factors",
+            "scenarios",
+            "warnings",
+        }
         self.assertEqual(
-            set(payload),
-            {
-                "ticker",
-                "observation_date",
-                "summary",
-                "chart",
-                "structures",
-                "factors",
-                "scenarios",
-                "warnings",
-            },
+            set(payload), legacy_keys | {"forecasts", "forecast_evaluation"}
         )
         self.assertEqual(payload["ticker"], "AAA")
         self.assertEqual(payload["chart"][-1]["time"], payload["observation_date"])
@@ -496,6 +627,72 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("tight_platform_pivot", payload["structures"]["key_levels"])
         self.assertIn("annotations", payload["structures"])
 
+    def test_injected_forecast_service_receives_existing_snapshot_and_chart_dates(self):
+        service = InjectedForecastService()
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(app.extensions["dashboard_forecast_service"], service)
+        self.assertEqual(len(service.calls), 1)
+        ticker, chart_dates, histories = service.calls[0]
+        self.assertEqual(ticker, "AAA")
+        self.assertEqual(chart_dates, tuple(row["time"] for row in response.json["chart"]))
+        self.assertEqual(set(histories), {"AAA", "BBB", "SPY"})
+        self.assertEqual(
+            self.repository.calls.count(("load_analysis_snapshot", "AAA")), 1
+        )
+        self.assertFalse(
+            any(call[0] == "load_universe_histories" for call in self.repository.calls)
+        )
+
+    def test_injected_forecast_service_does_not_require_update_cache_hook(self):
+        service = InjectedForecastService()
+
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            self.repository,
+        )
+
+        self.assertIs(app.extensions["dashboard_forecast_service"], service)
+        self.assertIsInstance(
+            app.extensions["dashboard_update_manager"], UpdateJobManager
+        )
+
+    def test_forecast_failure_isolated_with_typed_unavailable_payload(self):
+        secret = "/Users/alice/model.bin?token=secret"
+        service = InjectedForecastService(RuntimeError(secret))
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            self.repository,
+            self.manager,
+        )
+
+        with self.assertLogs(app.logger.name, level="ERROR") as logs:
+            response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["ticker"], "AAA")
+        self.assertTrue(response.json["chart"])
+        self.assertEqual(response.json["forecasts"]["by_date"], {})
+        self.assertEqual(
+            response.json["forecasts"]["model"]["unavailable_reason"],
+            "model_error",
+        )
+        self.assertEqual(
+            {
+                row["unavailable_reason"]
+                for row in response.json["forecast_evaluation"].values()
+            },
+            {"model_error"},
+        )
+        self.assertNotIn(secret, response.get_data(as_text=True))
+        self.assertIn(secret, "\n".join(logs.output))
     def test_stock_percentile_excludes_peer_without_exact_observation_bar(self):
         repository = ExactDatePeerRepository()
         factor = MappedFactor(
@@ -505,7 +702,7 @@ class WebApiTest(unittest.TestCase):
             {ticker: value for value, ticker in enumerate(repository.histories, start=1)},
         )
         client = create_app(
-            {"TESTING": True, "FACTOR_REGISTRY": FactorRegistry([factor])},
+            test_config(FACTOR_REGISTRY=FactorRegistry([factor])),
             repository,
             FakeManager(),
         ).test_client()
@@ -534,7 +731,7 @@ class WebApiTest(unittest.TestCase):
             {ticker: {"state": ticker} for ticker in repository.histories},
         )
         response = create_app(
-            {"TESTING": True, "FACTOR_REGISTRY": FactorRegistry([numeric, structured])},
+            test_config(FACTOR_REGISTRY=FactorRegistry([numeric, structured])),
             repository,
             FakeManager(),
         ).test_client().get("/api/stocks/AAA")
@@ -562,7 +759,7 @@ class WebApiTest(unittest.TestCase):
             ]
         )
         response = create_app(
-            {"TESTING": True, "FACTOR_REGISTRY": registry},
+            test_config(FACTOR_REGISTRY=registry),
             repository,
             FakeManager(),
         ).test_client().get("/api/stocks/AAA")
@@ -582,7 +779,7 @@ class WebApiTest(unittest.TestCase):
     def test_stale_stock_uses_peers_truncated_to_its_observation_date(self):
         repository = StaleSelectionRepository()
         client = create_app(
-            {"TESTING": True}, repository, FakeManager()
+            test_config(), repository, FakeManager()
         ).test_client()
 
         response = client.get("/api/stocks/OLD")
@@ -617,7 +814,7 @@ class WebApiTest(unittest.TestCase):
 
         repository.list_summaries = stale_summaries
         response = create_app(
-            {"TESTING": True}, repository, FakeManager()
+            test_config(), repository, FakeManager()
         ).test_client().get("/api/stocks/AAA")
 
         self.assertEqual(response.status_code, 200)
@@ -635,7 +832,7 @@ class WebApiTest(unittest.TestCase):
     def test_missing_benchmark_degrades_to_warning(self):
         repository = FakeRepository(include_benchmark=False)
         client = create_app(
-            {"TESTING": True}, repository, FakeManager()
+            test_config(), repository, FakeManager()
         ).test_client()
 
         response = client.get("/api/stocks/AAA")
@@ -650,7 +847,7 @@ class WebApiTest(unittest.TestCase):
             "SPY": price_history(periods=80, end="2026-07-21"),
         }
         response = create_app(
-            {"TESTING": True}, repository, FakeManager()
+            test_config(), repository, FakeManager()
         ).test_client().get("/api/stocks/OLD")
 
         self.assertEqual(response.status_code, 200)
@@ -686,7 +883,7 @@ class WebApiTest(unittest.TestCase):
     def test_unexpected_failure_is_redacted(self):
         secret = "/Users/alice/env.sh?token=secret"
         repository = FakeRepository(RuntimeError(secret))
-        app = create_app({"TESTING": True}, repository, FakeManager())
+        app = create_app(test_config(), repository, FakeManager())
 
         with self.assertLogs(app.logger.name, level="ERROR"):
             response = app.test_client().get("/api/universe")
@@ -713,7 +910,7 @@ class WebApiTest(unittest.TestCase):
             UpdateAlreadyRunning("unsafe detail /Users/alice/thread.log")
         )
         client = create_app(
-            {"TESTING": True}, FakeRepository(), manager
+            test_config(), FakeRepository(), manager
         ).test_client()
 
         response = client.post("/api/update")
@@ -729,6 +926,116 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, "text/html")
         self.assertIn("<html", response.get_data(as_text=True))
+
+
+class ForecastServiceTest(unittest.TestCase):
+    def setUp(self):
+        self.histories = {
+            "AAA": price_history(periods=80),
+            "BBB": price_history(periods=80, offset=10),
+        }
+        self.chart_dates = (
+            self.histories["AAA"].index[-2].date().isoformat(),
+            self.histories["AAA"].index[-1].date().isoformat(),
+        )
+
+    def test_serializes_all_horizons_and_contract_fields_with_sparse_dates(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+            max_cache_size=2,
+        )
+
+        payload = service.build("AAA", self.chart_dates, self.histories)
+
+        forecasts = payload["forecasts"]
+        self.assertEqual(forecasts["horizons"], [5, 20, 60])
+        self.assertEqual(set(forecasts["by_date"]), {self.chart_dates[0]})
+        self.assertEqual(
+            set(forecasts["by_date"][self.chart_dates[0]]), {"5", "20", "60"}
+        )
+        self.assertEqual(
+            set(forecasts["by_date"][self.chart_dates[0]]["20"]),
+            {
+                "ticker",
+                "asof_date",
+                "horizon_sessions",
+                "direction",
+                "predicted_return",
+                "up_probability",
+                "confidence_status",
+                "confidence_reason",
+                "training_sample_count",
+                "training_cutoff",
+                "model_key",
+                "model_version",
+                "unavailable_reason",
+            },
+        )
+        self.assertEqual(set(payload["forecast_evaluation"]), {"5", "20", "60"})
+        self.assertEqual(factory.providers[0].calls[0][0], "AAA")
+        self.assertEqual(factory.providers[0].calls[0][2], (5, 20, 60))
+
+    def test_preserves_falsey_injected_provider_factory(self):
+        factory = FalseyForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+        )
+
+        payload = service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(payload["forecasts"]["model"]["key"], "fake_direction")
+        self.assertEqual(len(factory.providers), 1)
+
+    def test_cache_is_bounded_exact_and_invalidated_by_revision(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+            max_cache_size=2,
+        )
+
+        first = service.build("AAA", self.chart_dates, self.histories)
+        repeated = service.build("AAA", self.chart_dates, self.histories)
+        service.build("BBB", self.chart_dates, self.histories)
+        service.build("AAA", self.chart_dates[-1:], self.histories)
+        service.build("AAA", self.chart_dates, self.histories)
+        service.invalidate()
+        after_invalidation = service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(first, repeated)
+        self.assertIsNot(first, repeated)
+        self.assertIsNot(first["forecasts"], repeated["forecasts"])
+        self.assertEqual(len(factory.providers), 5)
+        self.assertEqual(first, after_invalidation)
+
+    def test_same_key_concurrent_requests_compute_once(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+            max_cache_size=2,
+        )
+        barrier = threading.Barrier(3)
+        payloads = []
+
+        def request_bundle():
+            barrier.wait(timeout=2)
+            payloads.append(service.build("AAA", self.chart_dates, self.histories))
+
+        threads = [threading.Thread(target=request_bundle) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        barrier.wait(timeout=2)
+        for thread in threads:
+            thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual(payloads[0], payloads[1])
+        self.assertEqual(len(factory.providers), 1)
 
 
 if __name__ == "__main__":

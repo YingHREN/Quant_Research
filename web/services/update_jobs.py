@@ -76,9 +76,12 @@ class UpdateJobManager:
         "failed": frozenset({"running"}),
     }
 
-    def __init__(self, repository, provider):
+    def __init__(self, repository, provider, on_success=None):
+        if on_success is not None and not callable(on_success):
+            raise TypeError("on_success must be callable")
         self._repository = repository
         self._provider = provider
+        self._on_success = on_success
         self._lock = threading.Lock()
         self._thread = None
         self._state = "idle"
@@ -156,8 +159,8 @@ class UpdateJobManager:
                         state = "partial" if self._had_errors else "completed"
                         error = "provider_error" if self._had_errors else None
                         self._current_ticker = None
-                        self._finish_locked(state, error, resumable=False)
-                        return
+                        notify_success = state == "completed" and self._updated > 0
+                        break
                     ticker = self._remaining_tickers[0]
                     self._current_ticker = ticker
 
@@ -182,6 +185,10 @@ class UpdateJobManager:
                     self._updated += 1
                     self._completed += 1
                     self._remaining_tickers.pop(0)
+            if notify_success:
+                self._notify_success()
+            with self._lock:
+                self._finish_locked(state, error, resumable=False)
         except Exception:
             logger.exception("Dashboard price-update worker failed")
             with self._lock:
@@ -190,6 +197,14 @@ class UpdateJobManager:
                     "provider_error",
                     resumable=bool(self._remaining_tickers),
                 )
+
+    def _notify_success(self):
+        if self._on_success is None:
+            return
+        try:
+            self._on_success()
+        except Exception:
+            logger.exception("Post-update success callback failed")
 
     def _load_tickers_if_needed(self):
         with self._lock:

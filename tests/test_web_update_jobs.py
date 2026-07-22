@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import sqlite3
 import tempfile
 import threading
@@ -52,6 +53,11 @@ class FakeRepository:
 class RejectingInvalidRepository(FakeRepository):
     def upsert_history(self, ticker, frame):
         raise ValueError("Provider history is invalid")
+
+
+class FailingSummaryRepository(FakeRepository):
+    def list_summaries(self):
+        raise RuntimeError("Unable to read ticker summaries")
 
 
 class FakeProvider:
@@ -117,6 +123,77 @@ def wait_until_terminal(manager, timeout=2.0):
 
 
 class UpdateJobManagerTest(unittest.TestCase):
+    def test_completed_update_invokes_success_callback_once(self):
+        callbacks = []
+        manager = UpdateJobManager(
+            FakeRepository(("AAA", "BBB")),
+            FakeProvider({"AAA": history(10), "BBB": history(20)}),
+            on_success=lambda: callbacks.append("invalidated"),
+        )
+
+        snapshot = manager.run_synchronously_for_test()
+
+        self.assertEqual(snapshot.state, "completed")
+        self.assertEqual(callbacks, ["invalidated"])
+
+    def test_completed_state_is_not_published_before_success_callback_finishes(self):
+        callback_entered = threading.Event()
+        release_callback = threading.Event()
+
+        def invalidate():
+            callback_entered.set()
+            release_callback.wait(timeout=2)
+
+        manager = UpdateJobManager(
+            FakeRepository(("AAA",)),
+            FakeProvider({"AAA": history()}),
+            on_success=invalidate,
+        )
+
+        manager.start()
+        self.assertTrue(callback_entered.wait(timeout=1))
+        self.assertEqual(manager.snapshot().state, "running")
+        release_callback.set()
+        self.assertEqual(wait_until_terminal(manager).state, "completed")
+
+    def test_failed_partial_and_rate_limited_updates_do_not_invoke_success_callback(self):
+        cases = (
+            (
+                FailingSummaryRepository(("AAA",)),
+                FakeProvider({}),
+                "failed",
+            ),
+            (
+                FakeRepository(("AAA",)),
+                FakeProvider({"AAA": RuntimeError("bad")}),
+                "partial",
+            ),
+            (
+                FakeRepository(("AAA",)),
+                FakeProvider({"AAA": RateLimited("429")}),
+                "rate_limited",
+            ),
+        )
+        for repository, provider, expected_state in cases:
+            with self.subTest(expected_state=expected_state):
+                callbacks = []
+                manager = UpdateJobManager(
+                    repository,
+                    provider,
+                    on_success=lambda: callbacks.append("invalidated"),
+                )
+
+                log_context = (
+                    self.assertLogs("web.services.update_jobs", level="ERROR")
+                    if expected_state in {"failed", "partial"}
+                    else nullcontext()
+                )
+                with log_context:
+                    snapshot = manager.run_synchronously_for_test()
+
+                self.assertEqual(snapshot.state, expected_state)
+                self.assertEqual(callbacks, [])
+
     def test_completed_job_updates_active_tickers_only(self):
         repository = FakeRepository(("AAA", "OLD", "BBB"), inactive=("OLD",))
         provider = FakeProvider({"AAA": history(10), "BBB": history(20)})

@@ -28,6 +28,7 @@ from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
+from web.services.forecasts import ForecastService, unavailable_forecast_bundle
 from web.services.market_data import (
     InvalidTicker,
     MarketDataRepository,
@@ -66,8 +67,17 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
     if repository is None:
         repository = MarketDataRepository(flask_app.config["MARKET_DATA_DATABASE"])
+    forecast_service = flask_app.config.get("FORECAST_SERVICE")
+    if forecast_service is None:
+        forecast_service = ForecastService(
+            max_cache_size=flask_app.config.get("FORECAST_CACHE_SIZE", 16)
+        )
     if update_manager is None:
-        update_manager = UpdateJobManager(repository, PriceProvider())
+        update_manager = UpdateJobManager(
+            repository,
+            PriceProvider(),
+            on_success=getattr(forecast_service, "invalidate", None),
+        )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
         factor_registry = build_default_registry()
@@ -79,6 +89,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions["dashboard_update_manager"] = update_manager
     flask_app.extensions["dashboard_factor_registry"] = factor_registry
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
+    flask_app.extensions["dashboard_forecast_service"] = forecast_service
 
     @flask_app.get("/")
     def index():
@@ -158,6 +169,21 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         if len(chart) < 200:
             warnings.append("insufficient_indicator_history")
 
+        try:
+            forecast_payload = forecast_service.build(
+                normalized_ticker,
+                tuple(row["time"] for row in chart),
+                peer_histories,
+            )
+        except Exception as error:
+            flask_app.logger.exception(
+                "Forecast service failed for %s", normalized_ticker, exc_info=error
+            )
+            forecast_payload = unavailable_forecast_bundle(
+                getattr(forecast_service, "model_key", "ridge_direction_v1"),
+                getattr(forecast_service, "model_version", "v1"),
+            )
+
         payload = {
             "ticker": normalized_ticker,
             "observation_date": observation_date,
@@ -167,6 +193,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "factors": factor_payload,
             "scenarios": scenario_provider.build(history, observation_timestamp),
             "warnings": warnings,
+            "forecasts": forecast_payload["forecasts"],
+            "forecast_evaluation": forecast_payload["forecast_evaluation"],
         }
         return _json_response(payload)
 
