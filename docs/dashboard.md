@@ -20,6 +20,12 @@ SQLite database. Viewing them does not require a market-data credential and
 does not make a provider request. Stop the server with `Ctrl-C` in the terminal
 where it is running.
 
+The interface defaults to Simplified Chinese (`zh-CN`). The `中文` / `EN`
+control changes the language without reloading and stores the validated choice
+under the local-storage key `quant-dashboard-locale`. Chart ticks are always
+`MM-DD`, while details and observation dates are always ISO `YYYY-MM-DD`; both
+formats are deliberately independent of browser and operating-system locale.
+
 ## Update market data
 
 `Update market data` is an explicit, price-only refresh. It fetches Tiingo EOD
@@ -58,6 +64,89 @@ Use `history_asof()` and `benchmark_asof()` so calculations remain truncated at
 the observation date, and use `cached()` for shared intermediate calculations.
 Return `None` when a value is unavailable; the API and UI expose the missing
 state rather than inventing a score.
+
+Every translated factor keeps the top-level English compatibility fields and
+adds an `i18n` mapping. A complete Simplified Chinese entry has all five fields:
+`label`, `description`, `methodology`, `window`, and `direction`. For a
+first-party factor, add its English window to `FACTOR_WINDOWS`, add the complete
+`zh-CN` mapping to `FACTOR_ZH`, and let `build_default_registry()` attach both.
+If the factor introduces a group, add the corresponding complete entry to
+`GROUP_ZH` and register a `FactorGroup`; a custom factor may instead provide
+`i18n={"zh-CN": {...}}` and `group_i18n` directly. Keep technical identifiers
+such as ticker symbols, VCP, EMA20, SMA50, SMA200, ATR20, and OHLCV unchanged.
+Extend `tests/test_web_factors.py` to require complete metadata and
+`tests/test_web_assets.py` when the popover rendering or interaction changes.
+
+## Direction forecasts
+
+The chart direction model is separate from the descriptive 20/40/60-session
+scenario panel. Forecast targets are exactly the close-to-close return after 5,
+20, or 60 observed trading sessions:
+
+```text
+target_return_h[i] = close[i + h] / close[i] - 1
+SUPPORTED_HORIZONS = (5, 20, 60)
+NEUTRAL_BANDS = {5: 0.01, 20: 0.02, 60: 0.04}
+```
+
+The selected horizon defaults to 20 sessions. Predicted returns above the
+positive band are `up`, returns below the negative band are `down`, and both
+band boundaries are inclusive `neutral`: 5-session ±1%, 20-session ±2%, and
+60-session ±4%. These versioned thresholds classify a model return; they are
+not target prices, expected profits, or recommendations.
+
+Each row stores `label_end_date_<horizon>`. At forecast date `t`, training may
+use features observed through `t`, but includes a labeled row only when its
+label end is strictly before `t`. Feature imputation, means, and scales are fit
+only on that eligible training set. The live model requires 30 finite training
+targets and reports a typed unavailable state for insufficient history or
+samples, a degenerate target, or a model error.
+
+`up_probability` is intentionally absent unless calibration succeeds. The gate
+requires at least 100 earlier, out-of-sample predictions for the same ticker,
+horizon, model key, and model version; their outcomes must already be observable
+and must contain both classes of the current positive-return event
+(`actual_return > 0`). This event is not the neutral-band direction class: for
+example, a positive 20-session return up to +2% is `neutral` for direction but
+counts as positive for calibration. Therefore `up_probability` must currently
+be read as probability of a positive return, not probability that direction is
+`up`. Otherwise the response preserves `null` with `insufficient_calibration_samples` or
+`calibration_requires_both_classes`. The default local service does not load a
+persisted calibration history, so a predicted return and direction can be
+available while probability remains absent. Never derive a probability by
+rescaling the raw return.
+
+### Add a forecast provider
+
+A provider exposes non-empty `model_key` and `model_version` strings and a
+`forecast_series(ticker, dates, horizons)` method returning one validated
+`ForecastResult` for every requested date/horizon pair, in date-major order.
+Use the shared `SUPPORTED_HORIZONS`, preserve typed unavailable results, and
+obey the same `label_end_date < forecast date` leakage boundary. Unit-test the
+provider in `tests/test_web_forecasts.py`, including unavailable paths and a
+future-data trap.
+
+For duplicate-safe discovery, create a registry and call
+`ForecastRegistry.register(provider)`; duplicate `model_key` values are
+rejected. Production serving is factory-based because the provider is built
+from the current point-in-time frame. Supply a callable factory whose own
+`model_key` and `model_version` match every provider it creates, construct
+`ForecastService(provider_factory=factory)`, and inject that service through
+Flask config as `FORECAST_SERVICE`. Add API isolation, payload-shape, and cache
+tests under `tests/test_web_api.py`.
+
+The revision cache key is exactly
+`(database_revision, ticker, first_chart_date, last_chart_date, model_version)`.
+A second identical stock request returns a defensive copy of the cached bundle.
+The current implementation clears the bounded cache and advances
+`database_revision` only after a fully successful price update that wrote at
+least one ticker. Failed and rate-limited terminal states do not invalidate.
+Because ticker writes commit individually, a partial or rate-limited job after
+one or more commits can leave stale forecasts under the old revision. This is a
+known correctness limitation; do not rely on cached forecasts after such an
+update until invalidation is made write-aware or the process is restarted. If
+post-update invalidation itself fails, the update is published as `failed` with
+`cache_invalidation_error`, never as a successful update over stale forecasts.
 
 ## Historical scenario methodology
 
@@ -104,12 +193,13 @@ From the repository root, run:
 ```bash
 PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -W error -m unittest discover -s tests -v
 for file in web/static/js/*.js; do node --check "$file"; done
-./venv/bin/python -m py_compile web/app.py web/contracts.py web/services/*.py web/factors/*.py
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m py_compile web/app.py web/contracts.py web/services/*.py web/factors/*.py web/forecasts/*.py
 git diff --check
 ```
 
-Then start the dashboard on loopback, exercise both local read APIs, and perform
-a desktop and narrow-width browser pass. Confirm filtering and ticker changes,
-all five chart ranges, linked hover/click-to-lock detail, the volume panel,
-missing factor and scenario states, stale/inactive status, update progress with
-a fake provider, and a browser console free of uncaught errors.
+Then start the dashboard on loopback, load one stock twice to exercise the cold
+and revision-cache paths, and perform desktop and 390x844 browser passes. Confirm
+the Chinese default, English switch and reload persistence, a `07-17` tick, an
+ISO detail date, factor popover pointer and keyboard behavior, all 5/20/60
+forecast controls, linked crosshair hover and click-lock, forecast unavailable
+state, no horizontal overflow, and a browser console free of uncaught errors.

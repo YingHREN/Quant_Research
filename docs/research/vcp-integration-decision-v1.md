@@ -32,6 +32,75 @@ individual coefficient was `mom_12_1_rank` (positive in 4/4 training folds).
 `vol_adjusted_mom_6_1` was negative in 4/4 folds. Both require longer data and
 the missing validation gates.
 
+## Dashboard direction model evidence
+
+The dashboard's `ridge_direction_v1` output is a separate research aid and does
+not change this VCP decision. Its 5-, 20-, and 60-session targets are absolute
+close-to-close returns, not the 40-day SPY-relative primary outcome above. The
+three classes use fixed version-one neutral bands of ±1%, ±2%, and ±4%,
+respectively. A direction, predicted return, or evaluation metric is not a
+claim of validated alpha, profitability, or suitability for live trading.
+
+The evaluation is expanding-window and point-in-time. Features for an
+observation date use only that date and its past. Forward targets are created by
+`attach_forward_targets(build_feature_frame(histories))`, and every target
+carries an explicit `label_end_date`. For a forecast at date `t`, a training row
+is eligible only when its `label_end_date` is strictly before `t`; a label that
+ends on `t` is excluded. The historical-mean baseline uses the same boundary.
+Preprocessing is refit on each eligible training set, and calibration may use
+only earlier out-of-sample predictions whose own outcomes have matured.
+
+To reproduce the API's walk-forward summaries from the same local database,
+run this from the repository root. It performs repeated expanding-window fits
+and can take substantially longer than the unit tests:
+
+```bash
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python - <<'PY'
+import json
+
+from web.forecasts.base import SUPPORTED_HORIZONS
+from web.forecasts.dataset import attach_forward_targets, build_feature_frame
+from web.forecasts.evaluation import walk_forward_evaluate
+from web.forecasts.ridge import RidgeForecastProvider
+from web.services.market_data import MarketDataRepository
+
+repository = MarketDataRepository("data/prices.db")
+histories = repository.load_universe_histories()
+frame = attach_forward_targets(build_feature_frame(histories))
+provider = RidgeForecastProvider(frame)
+
+for horizon in SUPPORTED_HORIZONS:
+    result = walk_forward_evaluate(frame, horizon, provider)
+    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+PY
+```
+
+Interpret the fields conservatively:
+
+- `coverage` is available forecasts divided by all structurally valid rows with
+  realized targets; it is not accuracy.
+- MAE and RMSE measure return-prediction error on available forecast rows. The
+  zero-return baseline and expanding historical-mean baseline use those same
+  rows, so compare errors on a like-for-like basis.
+- `direction accuracy` is the share of the three fixed-band classes predicted
+  correctly. Class imbalance can make this look useful when return errors are
+  not, so inspect it alongside both baselines and coverage.
+- `rank IC` is the mean per-date Spearman correlation between predicted and
+  realized returns. A date contributes only with at least five names and usable
+  cross-sectional variation.
+- `signal-bucket returns` are realized mean returns for `down`, `neutral`, and
+  `up` predictions, again only on dates meeting the cross-sectional threshold.
+  They are descriptive and have no uncertainty estimate in this report.
+
+Short history, survivorship in the local ticker universe, overlapping forward
+outcomes, regime concentration, repeated use of the same data for inspection,
+and absent transaction costs all limit interpretation. Probability is omitted
+unless at least 100 matured earlier out-of-sample rows contain both
+positive-return (`actual_return > 0`) and non-positive-return outcomes. The
+current `up_probability` therefore estimates the positive-return event, not the
+neutral-band `up` direction event. A missing probability is evidence that the
+calibration gate did not pass, not a zero-probability forecast.
+
 ## Known legacy conflict
 
 `scoring/engine.py` currently:
@@ -53,4 +122,3 @@ explicit. This iteration does not silently change historical backtest behavior.
    new selection paths in a separately approved change.
 5. If momentum survives every gate, introduce it in shadow mode before allocating
    capital.
-
