@@ -9,7 +9,7 @@ from numbers import Real
 import pandas as pd
 
 from web.contracts import iso_date
-from web.factors.base import FactorDefinition, FactorResult
+from web.factors.base import FactorDefinition, FactorGroup, FactorResult
 from web.services.analysis import AnalysisContext
 
 
@@ -23,8 +23,12 @@ class DuplicateFactorKey(ValueError):
 class FactorRegistry:
     """Ordered factor collection with isolated per-factor evaluation failures."""
 
-    def __init__(self, factors=()):
+    def __init__(self, factors=(), group_metadata=()):
         self._factors = {}
+        self._groups = {}
+        for group in group_metadata:
+            metadata = group if isinstance(group, FactorGroup) else FactorGroup(**group)
+            self._groups[metadata.key] = metadata
         for factor in factors:
             self.register(factor)
 
@@ -32,10 +36,24 @@ class FactorRegistry:
     def factors(self):
         return tuple(self._factors.values())
 
+    @property
+    def groups(self):
+        return tuple(self._groups.values())
+
     def register(self, factor: FactorDefinition):
         if factor.key in self._factors:
             raise DuplicateFactorKey(f"Factor key already registered: {factor.key}")
         self._factors[factor.key] = factor
+        if factor.group not in self._groups:
+            self._groups[factor.group] = FactorGroup(
+                key=factor.group,
+                label=getattr(factor, "group_label", None) or _humanize(factor.group),
+                methodology=(
+                    getattr(factor, "group_methodology", None)
+                    or "Point-in-time descriptive diagnostics from registered factors."
+                ),
+                overview=bool(getattr(factor, "overview", False)),
+            )
         return factor
 
     def evaluate_one(self, factor: FactorDefinition, context: AnalysisContext):
@@ -46,6 +64,8 @@ class FactorRegistry:
             "group": factor.group,
             "direction": factor.direction,
             "description": factor.description,
+            "methodology": getattr(factor, "methodology", factor.description),
+            "overview": bool(getattr(factor, "overview", False)),
             "version": factor.version,
         }
         try:
@@ -132,3 +152,7 @@ def _display_score(direction, percentile):
     if direction == "lower":
         return (1 - percentile) * 100
     return None
+
+
+def _humanize(value):
+    return str(value).replace("_", " ").title()

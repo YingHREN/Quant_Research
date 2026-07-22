@@ -49,6 +49,11 @@ class FakeRepository:
         self.upserts.append((ticker, frame.copy()))
 
 
+class RejectingInvalidRepository(FakeRepository):
+    def upsert_history(self, ticker, frame):
+        raise ValueError("Provider history is invalid")
+
+
 class FakeProvider:
     def __init__(self, outcomes):
         self.outcomes = {
@@ -253,6 +258,22 @@ class UpdateJobManagerTest(unittest.TestCase):
         self.assertEqual(snapshot["state"], "partial")
         self.assertEqual(snapshot["error"], "provider_error")
         self.assertFalse(snapshot["resumable"])
+
+    def test_invalid_provider_bars_are_a_partial_failure_not_an_update(self):
+        repository = RejectingInvalidRepository(("AAA",))
+        manager = UpdateJobManager(
+            repository,
+            FakeProvider({"AAA": history(close=-5.0)}),
+        )
+
+        with self.assertLogs("web.services.update_jobs", level="ERROR"):
+            snapshot = manager.run_synchronously_for_test().to_dict()
+
+        self.assertEqual(snapshot["state"], "partial")
+        self.assertEqual(snapshot["completed"], 1)
+        self.assertEqual(snapshot["updated"], 0)
+        self.assertEqual(snapshot["error"], "provider_error")
+        self.assertEqual(repository.upserts, [])
 
 
 class PriceProviderTest(unittest.TestCase):

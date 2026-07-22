@@ -157,6 +157,8 @@ class MappedFactor:
         self.group = group
         self.direction = direction
         self.description = "API cohort fixture"
+        self.methodology = "Use the exact-date API fixture value."
+        self.overview = True
         self.version = "test-v1"
         self.values = values
 
@@ -176,6 +178,7 @@ class UniverseCohortRepository(FakeRepository):
             for number, ticker in enumerate(current)
         }
         self.histories["OLD"] = price_history(end="2026-06-01", offset=70)
+        self.histories["STALE"] = price_history(end="2026-07-20", offset=80)
 
     def list_summaries(self):
         self.calls.append(("list_summaries",))
@@ -183,7 +186,7 @@ class UniverseCohortRepository(FakeRepository):
             SimpleNamespace(
                 ticker=ticker,
                 latest_date=history.index[-1].date().isoformat(),
-                lag_days=50 if ticker == "OLD" else 0,
+                lag_days=50 if ticker == "OLD" else 1 if ticker == "STALE" else 0,
                 inactive=ticker == "OLD",
             )
             for ticker, history in sorted(self.histories.items())
@@ -195,6 +198,7 @@ class UniverseCohortRepository(FakeRepository):
             "latest_date": "2026-07-21",
             "by_date": [
                 {"date": "2026-07-21", "tickers": 6},
+                {"date": "2026-07-20", "tickers": 1},
                 {"date": "2026-06-01", "tickers": 1},
             ],
         }
@@ -211,7 +215,7 @@ def universe_registry():
                 {
                     ticker: {"reject_reason": None if ticker == "AAA" else "none"}
                     for ticker in current
-                },
+                } | {"STALE": {"reject_reason": None}},
             ),
             MappedFactor(
                 "tight_platform",
@@ -220,13 +224,14 @@ def universe_registry():
                 {
                     ticker: {"is_platform": ticker == "BBB"}
                     for ticker in current
-                },
+                } | {"STALE": {"is_platform": False}},
             ),
             MappedFactor(
                 "pivot_distance_pct",
                 "structure",
                 "neutral",
-                {ticker: 2.0 if ticker == "CCC" else 12.0 for ticker in current},
+                {ticker: 2.0 if ticker == "CCC" else 12.0 for ticker in current}
+                | {"STALE": 3.0},
             ),
             MappedFactor(
                 "mom_12_1",
@@ -235,7 +240,7 @@ def universe_registry():
                 {
                     ticker: value
                     for ticker, value in zip(current, (60, 50, 40, 30, 20, 10))
-                },
+                } | {"STALE": 35},
             ),
             MappedFactor(
                 "realized_vol_63",
@@ -246,10 +251,20 @@ def universe_registry():
                     for ticker, value in zip(
                         current, (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
                     )
-                },
+                } | {"STALE": 0.25},
             ),
         ]
     )
+
+
+class ExactDatePeerRepository(FakeRepository):
+    def __init__(self):
+        super().__init__(include_benchmark=False)
+        self.histories = {
+            ticker: price_history(end="2026-07-21", offset=position * 10)
+            for position, ticker in enumerate(("AAA", "BBB", "CCC", "DDD"))
+        }
+        self.histories["OLDER"] = price_history(end="2026-07-20", offset=50)
 
 
 class FakeManager:
@@ -286,6 +301,11 @@ class WebApiTest(unittest.TestCase):
             set(response.json), {"asof", "freshness", "tickers", "factor_groups"}
         )
         self.assertEqual(response.json["asof"], "2026-07-21")
+        self.assertTrue(response.json["factor_groups"])
+        self.assertEqual(
+            set(response.json["factor_groups"][0]),
+            {"key", "label", "methodology", "overview"},
+        )
         self.assertEqual(
             set(response.json["tickers"][0]),
             {
@@ -293,6 +313,8 @@ class WebApiTest(unittest.TestCase):
                 "latest_date",
                 "lag_days",
                 "inactive",
+                "stale",
+                "data_status",
                 "fresh",
                 "strict_vcp",
                 "tight_platform",
@@ -334,7 +356,10 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(by_ticker["BBB"]["shape_state"], "tight_platform")
         self.assertEqual(by_ticker["CCC"]["shape_state"], "near_pivot")
         self.assertEqual(by_ticker["DDD"]["shape_state"], "none")
-        self.assertEqual(by_ticker["OLD"]["shape_state"], "inactive")
+        self.assertEqual(by_ticker["OLD"]["shape_state"], "none")
+        self.assertTrue(by_ticker["OLD"]["inactive"])
+        self.assertFalse(by_ticker["OLD"]["stale"])
+        self.assertEqual(by_ticker["OLD"]["data_status"], "inactive")
         self.assertEqual(by_ticker["AAA"]["momentum_percentile"], 100.0)
         self.assertEqual(by_ticker["AAA"]["momentum_factor_key"], "mom_12_1")
         self.assertEqual(
@@ -346,6 +371,11 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertIsNone(by_ticker["OLD"]["momentum_percentile"])
         self.assertIsNone(by_ticker["OLD"]["volatility"])
+        self.assertTrue(by_ticker["STALE"]["stale"])
+        self.assertFalse(by_ticker["STALE"]["inactive"])
+        self.assertEqual(by_ticker["STALE"]["data_status"], "stale")
+        self.assertEqual(by_ticker["STALE"]["shape_state"], "strict_vcp")
+        self.assertEqual(by_ticker["STALE"]["volatility"], 25.0)
 
         module_uri = (
             Path(__file__).resolve().parents[1] / "web/static/js/universe.js"
@@ -369,11 +399,11 @@ class WebApiTest(unittest.TestCase):
             text=True,
         )
         actual = json.loads(result.stdout)
-        self.assertEqual(actual["strict"], ["AAA"])
+        self.assertEqual(actual["strict"], ["AAA", "STALE"])
         self.assertEqual(actual["tight"], ["BBB"])
-        self.assertEqual(actual["near"], ["CCC"])
+        self.assertEqual(actual["near"], ["CCC", "STALE"])
         self.assertEqual(actual["momentum"][:3], ["AAA", "BBB", "CCC"])
-        self.assertEqual(actual["volatility"][:3], ["AAA", "BBB", "CCC"])
+        self.assertEqual(actual["volatility"][:3], ["AAA", "BBB", "STALE"])
 
     def test_factory_preserves_falsey_injected_dependencies(self):
         repository = FalseyRepository()
@@ -410,6 +440,9 @@ class WebApiTest(unittest.TestCase):
             {factor["observation_date"] for factor in payload["factors"]},
             {payload["observation_date"]},
         )
+        for factor in payload["factors"]:
+            self.assertTrue(factor.get("methodology"))
+            self.assertIsInstance(factor.get("overview"), bool)
         self.assertEqual(
             payload["scenarios"]["observation_date"], payload["observation_date"]
         )
@@ -419,6 +452,81 @@ class WebApiTest(unittest.TestCase):
             if call[0] == "load_history" and call[1] == "AAA"
         ]
         self.assertEqual(len(selected_loads), 1)
+        bulk_loads = [call for call in self.repository.calls if call[0] == "load_universe_histories"]
+        self.assertEqual(len(bulk_loads), 1)
+        peer_loads = [
+            call for call in self.repository.calls
+            if call[0] == "load_history" and call[1] != "AAA"
+        ]
+        self.assertEqual(peer_loads, [])
+        self.assertEqual(payload["summary"]["daily_return_unit"], "fraction")
+        self.assertIn("strict_vcp_pivot", payload["structures"]["key_levels"])
+        self.assertIn("tight_platform_pivot", payload["structures"]["key_levels"])
+        self.assertIn("annotations", payload["structures"])
+
+    def test_stock_percentile_excludes_peer_without_exact_observation_bar(self):
+        repository = ExactDatePeerRepository()
+        factor = MappedFactor(
+            "exact_date_value",
+            "momentum",
+            "higher",
+            {ticker: value for value, ticker in enumerate(repository.histories, start=1)},
+        )
+        client = create_app(
+            {"TESTING": True, "FACTOR_REGISTRY": FactorRegistry([factor])},
+            repository,
+            FakeManager(),
+        ).test_client()
+
+        response = client.get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json["factors"][0]
+        self.assertEqual(result["observation_date"], "2026-07-21")
+        self.assertEqual(result["peer_count"], 4)
+        self.assertIsNone(result["percentile"])
+        self.assertEqual(
+            repository.calls.count(
+                ("load_universe_histories", pd.Timestamp("2026-07-21"))
+            ),
+            1,
+        )
+
+    def test_stock_structures_expose_shape_specific_pivots_and_annotations(self):
+        repository = FakeRepository()
+        registry = FactorRegistry(
+            [
+                MappedFactor(
+                    "strict_vcp",
+                    "structure",
+                    "neutral",
+                    {"AAA": {"reject_reason": None, "vcp_pivot": 141.5}},
+                ),
+                MappedFactor(
+                    "tight_platform",
+                    "structure",
+                    "neutral",
+                    {"AAA": {"is_platform": True, "reason": None, "platform_pivot": 142.0}},
+                ),
+            ]
+        )
+        response = create_app(
+            {"TESTING": True, "FACTOR_REGISTRY": registry},
+            repository,
+            FakeManager(),
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        structures = response.json["structures"]
+        self.assertEqual(structures["key_levels"].get("strict_vcp_pivot"), 141.5)
+        self.assertEqual(structures["key_levels"].get("tight_platform_pivot"), 142.0)
+        self.assertEqual(
+            [(item["type"], item["label"]) for item in structures["annotations"]],
+            [("strict_vcp", "Strict VCP"), ("tight_platform", "Tight platform")],
+        )
+        self.assertTrue(
+            all(item["time"] == response.json["observation_date"] for item in structures["annotations"])
+        )
 
     def test_stale_stock_uses_peers_truncated_to_its_observation_date(self):
         repository = StaleSelectionRepository()
@@ -440,9 +548,35 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("inactive_ticker", response.json["warnings"])
         for ticker in ("P1", "P2", "P3", "P4", "P5"):
             self.assertIn(
-                ("load_history", ticker, pd.Timestamp("2026-07-15")),
+                ("load_universe_histories", pd.Timestamp("2026-07-15")),
                 repository.calls,
             )
+
+    def test_stale_active_stock_has_distinct_summary_and_warning(self):
+        repository = FakeRepository()
+        repository.histories["AAA"] = price_history(end="2026-07-20")
+        original_summaries = repository.list_summaries
+
+        def stale_summaries():
+            return [
+                SimpleNamespace(
+                    ticker=summary.ticker,
+                    latest_date=summary.latest_date,
+                    lag_days=2 if summary.ticker == "AAA" else 0,
+                    inactive=False,
+                )
+                for summary in original_summaries()
+            ]
+
+        repository.list_summaries = stale_summaries
+        response = create_app(
+            {"TESTING": True}, repository, FakeManager()
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["summary"].get("stale"))
+        self.assertFalse(response.json["summary"]["inactive"])
+        self.assertIn("stale_ticker", response.json["warnings"])
 
     def test_stock_ticker_is_normalized_before_repository_access(self):
         response = self.client.get("/api/stocks/%20aaa%20")

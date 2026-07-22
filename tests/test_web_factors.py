@@ -18,6 +18,7 @@ from web.services.analysis import AnalysisContext
 class ConstantFactor:
     key, label, group, direction = "constant", "Constant", "test", "higher"
     description, version = "fixture", "v1"
+    methodology, overview = "Fixture values supplied by the test context.", True
 
     def compute(self, context):
         return context.metadata["value"]
@@ -134,6 +135,8 @@ class FactorRegistryTest(unittest.TestCase):
                 "missing": False,
                 "missing_reason": None,
                 "description": "fixture",
+                "methodology": "Fixture values supplied by the test context.",
+                "overview": True,
                 "version": "v1",
             },
         )
@@ -164,8 +167,12 @@ class BuiltinFactorTest(unittest.TestCase):
                 "atr20",
                 "pivot",
                 "pivot_distance_pct",
+                "volume_ratio_change",
+                "pivot_distance_change_pct",
                 "crossed_ema20",
                 "crossed_sma50",
+                "ema20_cross",
+                "sma50_cross",
             },
         )
         self.assertEqual(last["time"], "2026-07-21")
@@ -176,8 +183,18 @@ class BuiltinFactorTest(unittest.TestCase):
         )
         self.assertAlmostEqual(last["volume_ratio"], last["volume"] / last["volume_ma20"])
         self.assertAlmostEqual(last["pivot_distance_pct"], (110.0 / last["pivot"] - 1) * 100)
+        self.assertAlmostEqual(
+            last["volume_ratio_change"],
+            last["volume_ratio"] - rows[-2]["volume_ratio"],
+        )
+        self.assertAlmostEqual(
+            last["pivot_distance_change_pct"],
+            last["pivot_distance_pct"] - rows[-2]["pivot_distance_pct"],
+        )
         self.assertIsInstance(last["crossed_ema20"], bool)
         self.assertIsInstance(last["crossed_sma50"], bool)
+        self.assertIn(last["ema20_cross"], (None, "above", "below"))
+        self.assertIn(last["sma50_cross"], (None, "above", "below"))
 
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()
@@ -200,6 +217,18 @@ class BuiltinFactorTest(unittest.TestCase):
 
         self.assertEqual(factor.label, "Traditional rules score")
         self.assertIn("Not validated for prediction", factor.description)
+
+    def test_every_builtin_exposes_methodology_and_overview_metadata(self):
+        registry = build_default_registry()
+
+        for factor in registry.factors:
+            with self.subTest(factor=factor.key):
+                self.assertTrue(getattr(factor, "methodology", None))
+                self.assertIsInstance(getattr(factor, "overview", None), bool)
+
+        result = registry.evaluate_one(registry.factors[0], context_from_history(price_history()))
+        self.assertTrue(result.to_dict().get("methodology"))
+        self.assertIsInstance(result.to_dict().get("overview"), bool)
 
     def test_legacy_score_preserves_canonical_non_price_only_evaluation(self):
         registry = build_default_registry()

@@ -162,3 +162,33 @@ class MarketDataRepositoryTest(unittest.TestCase):
             self.repo.upsert_history("AAA", valid.drop(columns="Volume"))
 
         self.assertNotIn(pd.Timestamp("2026-07-22"), self.repo.load_history("AAA").index)
+
+    def test_upsert_history_rejects_impossible_or_empty_bars_atomically(self):
+        before = self.repo.load_history("AAA")
+        index = pd.DatetimeIndex(["2026-07-21", "2026-07-22"], name="Date")
+        invalid_frames = {
+            "empty": pd.DataFrame(columns=("Open", "High", "Low", "Close", "Volume"),
+                                  index=pd.DatetimeIndex([], name="Date")).astype(float),
+            "non_positive_price": pd.DataFrame(
+                {"Open": [11.5, 12.0], "High": [13.0, 13.0], "Low": [11.0, 0.0],
+                 "Close": [12.5, 12.5], "Volume": [175.0, 200.0]}, index=index),
+            "negative_volume": pd.DataFrame(
+                {"Open": [11.5, 12.0], "High": [13.0, 13.0], "Low": [11.0, 11.5],
+                 "Close": [12.5, 12.5], "Volume": [175.0, -1.0]}, index=index),
+            "high_below_price": pd.DataFrame(
+                {"Open": [11.5, 14.0], "High": [13.0, 13.0], "Low": [11.0, 11.5],
+                 "Close": [12.5, 12.5], "Volume": [175.0, 200.0]}, index=index),
+            "low_above_price": pd.DataFrame(
+                {"Open": [11.5, 12.0], "High": [13.0, 14.0], "Low": [11.0, 12.25],
+                 "Close": [12.5, 12.5], "Volume": [175.0, 200.0]}, index=index),
+            "high_below_low": pd.DataFrame(
+                {"Open": [11.5, 12.0], "High": [13.0, 11.0], "Low": [11.0, 11.5],
+                 "Close": [12.5, 11.75], "Volume": [175.0, 200.0]}, index=index),
+        }
+
+        for label, frame in invalid_frames.items():
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(ValueError, "^Provider history is invalid$") as context:
+                    self.repo.upsert_history("AAA", frame)
+                self.assertEqual(context.exception.__class__.__name__, "InvalidMarketData")
+                pd.testing.assert_frame_equal(self.repo.load_history("AAA"), before)

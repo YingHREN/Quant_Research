@@ -93,7 +93,7 @@ export function createUpdateController(options = {}) {
     timer = null;
   }
 
-  async function accept(snapshot, currentGeneration) {
+  async function accept(snapshot, currentGeneration, notifyTerminal = true) {
     if (destroyed || currentGeneration !== generation) return;
     statusFailureCount = 0;
     render(snapshot);
@@ -102,8 +102,24 @@ export function createUpdateController(options = {}) {
       return;
     }
     clearPoll();
-    if (snapshot.state && snapshot.state !== "idle" && isUpdateTerminal(snapshot.state)) {
+    if (notifyTerminal && snapshot.state && snapshot.state !== "idle" && isUpdateTerminal(snapshot.state)) {
       await onTerminal(snapshot);
+    }
+  }
+
+  async function initialize() {
+    if (destroyed) return;
+    generation += 1;
+    const currentGeneration = generation;
+    clearPoll();
+    try {
+      const snapshot = await apiClient.getUpdateStatus();
+      await accept(snapshot, currentGeneration, false);
+    } catch (_error) {
+      if (destroyed || currentGeneration !== generation) return;
+      if (status) status.textContent = "Update status is temporarily unavailable.";
+      setTone(status, "warning");
+      if (button) button.disabled = false;
     }
   }
 
@@ -154,6 +170,7 @@ export function createUpdateController(options = {}) {
   }
 
   return Object.freeze({
+    initialize,
     start,
     isTerminal: isUpdateTerminal,
     destroy() {

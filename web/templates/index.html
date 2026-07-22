@@ -129,8 +129,10 @@
           </div>
           <p class="safety-copy">Display scores organize observations; they are not probabilities.</p>
           <div id="factor-overview" class="empty-state">Factor diagnostics load with a selected ticker.</div>
-          <div class="table-scroll">
-            <table id="factor-table">
+          <details class="factor-detail">
+            <summary>Factor detail table</summary>
+            <div class="table-scroll">
+              <table id="factor-table">
               <caption>Raw factor observations and methodology</caption>
               <thead>
                 <tr>
@@ -141,12 +143,14 @@
                   <th>Display score</th>
                   <th>Date</th>
                   <th>Description / version</th>
+                  <th>Methodology</th>
                   <th>Missing reason</th>
                 </tr>
               </thead>
               <tbody id="factor-table-body"></tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </details>
         </section>
 
         <section class="panel" aria-labelledby="structure-title">

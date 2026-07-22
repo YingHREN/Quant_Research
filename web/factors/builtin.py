@@ -25,6 +25,7 @@ from research.momentum import momentum_features
 from run import market_uptrend
 from scoring.engine import evaluate
 from web.contracts import iso_date
+from web.factors.base import FactorGroup
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
 
@@ -39,6 +40,8 @@ class BuiltinFactor:
     _compute: Callable[[AnalysisContext], Any]
     _format: Callable[[Any], str] = str
     version: str = "builtin-v1"
+    methodology: str = "Computed point in time from local OHLCV history through the observation date."
+    overview: bool = True
 
     def compute(self, context: AnalysisContext):
         return self._compute(context)
@@ -146,48 +149,71 @@ def build_default_registry():
     factors = [
         BuiltinFactor("close_vs_ema20_pct", "Close vs EMA20", "trend", "higher",
                       "Close relative to the point-in-time 20-session EMA.",
-                      lambda c: _distance_from(c, "ema20"), _percent),
+                      lambda c: _distance_from(c, "ema20"), _percent,
+                      methodology="Close divided by the 20-session exponential moving average, minus one, expressed in percent."),
         BuiltinFactor("close_vs_sma50_pct", "Close vs SMA50", "trend", "higher",
                       "Close relative to the point-in-time 50-session average.",
-                      lambda c: _distance_from(c, "sma50"), _percent),
+                      lambda c: _distance_from(c, "sma50"), _percent,
+                      methodology="Close divided by the trailing 50-session simple moving average, minus one, expressed in percent."),
         BuiltinFactor("close_vs_sma200_pct", "Close vs SMA200", "trend", "higher",
                       "Close relative to the point-in-time 200-session average.",
-                      lambda c: _distance_from(c, "sma200"), _percent),
+                      lambda c: _distance_from(c, "sma200"), _percent,
+                      methodology="Close divided by the trailing 200-session simple moving average, minus one, expressed in percent."),
         BuiltinFactor("mom_3_1", "3-1 month momentum", "momentum", "higher",
                       "Three-month return excluding the latest month.",
-                      _momentum_value("mom_3_1"), lambda v: f"{v:.2%}"),
+                      _momentum_value("mom_3_1"), lambda v: f"{v:.2%}",
+                      methodology="Point-in-time 63-session return ending 21 sessions before the observation date."),
         BuiltinFactor("mom_6_1", "6-1 month momentum", "momentum", "higher",
                       "Six-month return excluding the latest month.",
-                      _momentum_value("mom_6_1"), lambda v: f"{v:.2%}"),
+                      _momentum_value("mom_6_1"), lambda v: f"{v:.2%}",
+                      methodology="Point-in-time 126-session return ending 21 sessions before the observation date."),
         BuiltinFactor("mom_12_1", "12-1 month momentum", "momentum", "higher",
                       "Twelve-month return excluding the latest month.",
-                      _momentum_value("mom_12_1"), lambda v: f"{v:.2%}"),
+                      _momentum_value("mom_12_1"), lambda v: f"{v:.2%}",
+                      methodology="Point-in-time 252-session return ending 21 sessions before the observation date."),
         BuiltinFactor("strict_vcp", "Strict VCP", "structure", "neutral",
                       "Precision-first VCP diagnostic, including its rejection reason.",
-                      _vcp, _dict_format),
+                      _vcp, _dict_format,
+                      methodology="Canonical strict VCP gates evaluate trend, base depth, contraction legs, volume dry-up, and extension."),
         BuiltinFactor("tight_platform", "Tight platform", "structure", "neutral",
                       "High-level tight-platform diagnostic, including its rejection reason.",
-                      _platform, _dict_format),
+                      _platform, _dict_format,
+                      methodology="Canonical tight-platform gates evaluate trend, high proximity, 20-session width, efficiency, and volume dry-up."),
         BuiltinFactor("pivot_distance_pct", "Distance to pivot", "structure", "neutral",
                       "Close distance from the prior 20-session pivot.",
-                      _chart_value("pivot_distance_pct"), _percent),
+                      _chart_value("pivot_distance_pct"), _percent,
+                      methodology="Close divided by the highest close in the prior 20 sessions, minus one, expressed in percent."),
         BuiltinFactor("volume_ratio", "Volume ratio", "volume", "higher",
                       "Current volume divided by its point-in-time 20-session average.",
-                      _chart_value("volume_ratio"), _ratio),
+                      _chart_value("volume_ratio"), _ratio,
+                      methodology="Session volume divided by the trailing 20-session simple average volume."),
         BuiltinFactor("atr20_pct", "ATR20", "risk", "lower",
                       "Twenty-session average true range as a percentage of close.",
-                      lambda c: _atr_percent(c), _percent),
+                      lambda c: _atr_percent(c), _percent,
+                      methodology="Canonical 20-session average true range divided by observation-date close and expressed in percent."),
         BuiltinFactor("realized_vol_63", "63-day realized volatility", "risk", "lower",
                       "Annualized volatility from up to 63 point-in-time daily returns.",
-                      _momentum_value("realized_vol_63"), lambda v: f"{v:.2%}"),
+                      _momentum_value("realized_vol_63"), lambda v: f"{v:.2%}",
+                      methodology="Standard deviation of up to 63 daily close returns annualized with the square root of 252."),
         BuiltinFactor("overheat_score", "Overheat", "risk", "lower",
                       "Existing non-monotonic extension and volatility diagnostic.",
-                      lambda c: _overheat(c).get("overheat_score"), lambda v: f"{v:.1f}"),
+                      lambda c: _overheat(c).get("overheat_score"), lambda v: f"{v:.1f}",
+                      methodology="Canonical descriptive composite of ATR-normalized short returns, moving-average extension, streak, and recent range."),
         BuiltinFactor("legacy_score", "Traditional rules score", "legacy", "neutral",
                       "Not validated for prediction; retained only as a traditional-rule diagnostic.",
-                      _legacy_score, lambda v: f"{v:.1f}"),
+                      _legacy_score, lambda v: f"{v:.1f}",
+                      methodology="Existing traditional rule engine evaluated point in time with price and benchmark inputs; not validated for prediction.",
+                      overview=False),
     ]
-    return FactorRegistry(factors)
+    groups = [
+        FactorGroup("trend", "Trend", "Moving-average position diagnostics.", True),
+        FactorGroup("momentum", "Momentum", "Point-in-time trailing returns excluding the latest month.", True),
+        FactorGroup("structure", "VCP / structure", "Canonical strict-VCP, platform, and pivot diagnostics.", True),
+        FactorGroup("volume", "Volume / price", "Volume participation relative to trailing local history.", True),
+        FactorGroup("risk", "Risk", "Range, volatility, and extension diagnostics.", True),
+        FactorGroup("legacy", "Traditional rules", "Legacy descriptive rule output retained for comparison only.", False),
+    ]
+    return FactorRegistry(factors, group_metadata=groups)
 
 
 def _distance_from(context, average_key):
@@ -233,7 +259,11 @@ def build_chart_rows(context: AnalysisContext):
         sma200 = close.rolling(200).mean()
         atr20 = true_range.rolling(20).mean()
         volume_ma20 = volume.rolling(20).mean()
+        volume_ratio = volume / volume_ma20
+        volume_ratio_change = volume_ratio.diff()
         pivot = close.shift(1).rolling(20).max()
+        pivot_distance = (close / pivot - 1) * 100
+        pivot_distance_change = pivot_distance.diff()
         atr20.iloc[:20] = float("nan")
         pivot.iloc[:21] = float("nan")
         above_ema20 = close >= ema20
@@ -243,6 +273,15 @@ def build_chart_rows(context: AnalysisContext):
         for position, (timestamp, source) in enumerate(history.iterrows()):
             row_close = float(source["Close"])
             row_pivot = _optional_float(pivot.iloc[position])
+            crossed_ema20 = bool(
+                position > 0
+                and above_ema20.iloc[position] != above_ema20.iloc[position - 1]
+            )
+            crossed_sma50 = bool(
+                position > 0
+                and pd.notna(sma50.iloc[position - 1])
+                and above_sma50.iloc[position] != above_sma50.iloc[position - 1]
+            )
             rows.append(
                 {
                     "time": iso_date(timestamp),
@@ -259,28 +298,29 @@ def build_chart_rows(context: AnalysisContext):
                     ),
                     "volume_change": _optional_float(volume_change.iloc[position]),
                     "volume_ma20": _optional_float(volume_ma20.iloc[position]),
-                    "volume_ratio": (
-                        float(volume.iloc[position] / volume_ma20.iloc[position])
-                        if pd.notna(volume_ma20.iloc[position]) and volume_ma20.iloc[position]
-                        else None
+                    "volume_ratio": _optional_float(volume_ratio.iloc[position]),
+                    "volume_ratio_change": _optional_float(
+                        volume_ratio_change.iloc[position]
                     ),
                     "ema20": _optional_float(ema20.iloc[position]),
                     "sma50": _optional_float(sma50.iloc[position]),
                     "sma200": _optional_float(sma200.iloc[position]),
                     "atr20": _optional_float(atr20.iloc[position]),
                     "pivot": row_pivot,
-                    "pivot_distance_pct": (
-                        (row_close / row_pivot - 1) * 100 if row_pivot else None
+                    "pivot_distance_pct": _optional_float(
+                        pivot_distance.iloc[position]
                     ),
-                    "crossed_ema20": bool(
-                        position > 0
-                        and above_ema20.iloc[position] != above_ema20.iloc[position - 1]
+                    "pivot_distance_change_pct": _optional_float(
+                        pivot_distance_change.iloc[position]
                     ),
-                    "crossed_sma50": bool(
-                        position > 0
-                        and pd.notna(sma50.iloc[position - 1])
-                        and above_sma50.iloc[position] != above_sma50.iloc[position - 1]
-                    ),
+                    "crossed_ema20": crossed_ema20,
+                    "crossed_sma50": crossed_sma50,
+                    "ema20_cross": (
+                        "above" if above_ema20.iloc[position] else "below"
+                    ) if crossed_ema20 else None,
+                    "sma50_cross": (
+                        "above" if above_sma50.iloc[position] else "below"
+                    ) if crossed_sma50 else None,
                 }
             )
         return rows

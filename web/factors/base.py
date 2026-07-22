@@ -17,6 +17,8 @@ class FactorDefinition(Protocol):
     group: str
     direction: str
     description: str
+    methodology: str
+    overview: bool
     version: str
 
     def compute(self, context: AnalysisContext) -> Any:
@@ -38,6 +40,8 @@ class FactorResult:
     missing: bool
     missing_reason: str | None
     description: str
+    methodology: str
+    overview: bool
     version: str
     percentile: float | None = None
     peer_count: int | None = None
@@ -59,5 +63,25 @@ class FactorResult:
             "missing": self.missing,
             "missing_reason": self.missing_reason,
             "description": self.description,
+            "methodology": self.methodology,
+            "overview": self.overview,
             "version": self.version,
+        }
+
+
+@dataclass(frozen=True)
+class FactorGroup:
+    """Registry metadata for one user-facing factor group."""
+
+    key: str
+    label: str
+    methodology: str
+    overview: bool
+
+    def to_dict(self):
+        return {
+            "key": self.key,
+            "label": self.label,
+            "methodology": self.methodology,
+            "overview": self.overview,
         }

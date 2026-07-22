@@ -15,6 +15,10 @@ const COLORS = Object.freeze({
   sma50: "#f2bd5d",
   sma200: "#c084fc",
   pivot: "#ff9f43",
+  strictPivot: "#ff9f43",
+  platformPivot: "#f472b6",
+  volumeMa20: "#5cc8ff",
+  volumeRatio: "#f2bd5d",
 });
 
 function finite(value) {
@@ -46,6 +50,45 @@ function percentText(value, fraction = false) {
   return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
 }
 
+function ratioDeltaText(value) {
+  if (!finite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}×`;
+}
+
+function pointDeltaText(value) {
+  if (!finite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)} pp`;
+}
+
+function crossText(value) {
+  return value === "above" ? "Crossed above" : value === "below" ? "Crossed below" : "—";
+}
+
+export function detailItems(row) {
+  return [
+    { label: "Open", value: numberText(row.open) },
+    { label: "High", value: numberText(row.high) },
+    { label: "Low", value: numberText(row.low) },
+    { label: "Close", value: numberText(row.close) },
+    { label: "Return", value: percentText(row.daily_return, true) },
+    { label: "True range", value: percentText(row.true_range_pct) },
+    { label: "Volume", value: numberText(row.volume, 0) },
+    { label: "Volume change", value: percentText(row.volume_change, true) },
+    { label: "Volume / MA20", value: finite(row.volume_ratio) ? `${row.volume_ratio.toFixed(2)}×` : "—" },
+    { label: "Volume ratio change", value: ratioDeltaText(row.volume_ratio_change) },
+    { label: "Volume MA20", value: numberText(row.volume_ma20, 0) },
+    { label: "EMA20", value: numberText(row.ema20) },
+    { label: "SMA50", value: numberText(row.sma50) },
+    { label: "SMA200", value: numberText(row.sma200) },
+    { label: "ATR20", value: numberText(row.atr20) },
+    { label: "Pivot", value: numberText(row.pivot) },
+    { label: "Pivot distance", value: percentText(row.pivot_distance_pct) },
+    { label: "Pivot-distance change", value: pointDeltaText(row.pivot_distance_change_pct) },
+    { label: "EMA20 cross", value: crossText(row.ema20_cross) },
+    { label: "SMA50 cross", value: crossText(row.sma50_cross) },
+  ];
+}
+
 function appendDetail(detailEl, label, value) {
   const item = document.createElement("div");
   const term = document.createElement("dt");
@@ -73,22 +116,7 @@ function renderDetail(detailEl, row, locked) {
 
   const values = document.createElement("dl");
   values.className = "crosshair-values";
-  appendDetail(values, "Open", numberText(row.open));
-  appendDetail(values, "High", numberText(row.high));
-  appendDetail(values, "Low", numberText(row.low));
-  appendDetail(values, "Close", numberText(row.close));
-  appendDetail(values, "Return", percentText(row.daily_return, true));
-  appendDetail(values, "True range", percentText(row.true_range_pct));
-  appendDetail(values, "Volume", numberText(row.volume, 0));
-  appendDetail(values, "Volume change", percentText(row.volume_change, true));
-  appendDetail(values, "Volume / MA20", finite(row.volume_ratio) ? `${row.volume_ratio.toFixed(2)}×` : "—");
-  appendDetail(values, "Volume MA20", numberText(row.volume_ma20, 0));
-  appendDetail(values, "EMA20", numberText(row.ema20));
-  appendDetail(values, "SMA50", numberText(row.sma50));
-  appendDetail(values, "SMA200", numberText(row.sma200));
-  appendDetail(values, "ATR20", numberText(row.atr20));
-  appendDetail(values, "Pivot", numberText(row.pivot));
-  appendDetail(values, "Pivot distance", percentText(row.pivot_distance_pct));
+  detailItems(row).forEach((item) => appendDetail(values, item.label, item.value));
 
   detailEl.append(heading, values);
 }
@@ -154,12 +182,35 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     priceLineVisible: false,
     lastValueVisible: false,
   });
+  const volumeMa20Series = volumeChart.addSeries(LightweightCharts.LineSeries, {
+    title: "Volume MA20",
+    color: COLORS.volumeMa20,
+    lineWidth: 1,
+    priceScaleId: "right",
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  const volumeRatioSeries = volumeChart.addSeries(LightweightCharts.LineSeries, {
+    title: "Volume ratio",
+    color: COLORS.volumeRatio,
+    lineWidth: 2,
+    priceScaleId: "volume-ratio",
+    priceLineVisible: false,
+    lastValueVisible: true,
+  });
+  if (typeof volumeChart.priceScale === "function") {
+    volumeChart.priceScale("volume-ratio").applyOptions({
+      scaleMargins: { top: 0.05, bottom: 0.7 },
+      borderVisible: false,
+    });
+  }
+  const shapeMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
 
   const priceScale = priceChart.timeScale();
   const volumeScale = volumeChart.timeScale();
   let rows = [];
   let rowByTime = new Map();
-  let pivotPriceLine = null;
+  let pivotPriceLines = [];
   let lockedTime = null;
   let selectedRange = "1y";
   let syncing = false;
@@ -285,22 +336,39 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     ema20Series.setData(seriesPoints(rows, "ema20"));
     sma50Series.setData(seriesPoints(rows, "sma50"));
     sma200Series.setData(seriesPoints(rows, "sma200"));
+    volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
+    volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
-    if (pivotPriceLine) {
-      candleSeries.removePriceLine(pivotPriceLine);
-      pivotPriceLine = null;
-    }
-    const pivotRow = [...rows].reverse().find((row) => finite(row.pivot));
-    if (pivotRow) {
-      pivotPriceLine = candleSeries.createPriceLine({
-        price: pivotRow.pivot,
-        color: COLORS.pivot,
+    pivotPriceLines.forEach((line) => candleSeries.removePriceLine(line));
+    pivotPriceLines = [];
+    const levels = payload && payload.structures && payload.structures.key_levels;
+    const configuredLevels = [
+      [levels && levels.strict_vcp_pivot, "Strict VCP pivot", COLORS.strictPivot],
+      [levels && levels.tight_platform_pivot, "Tight-platform pivot", COLORS.platformPivot],
+    ].filter(([price]) => finite(price));
+    const fallbackPivot = [...rows].reverse().find((row) => finite(row.pivot));
+    const visibleLevels = configuredLevels.length
+      ? configuredLevels
+      : fallbackPivot ? [[fallbackPivot.pivot, "20-session pivot", COLORS.pivot]] : [];
+    pivotPriceLines = visibleLevels.map(([price, title, color]) => (
+      candleSeries.createPriceLine({
+        price,
+        color,
         lineWidth: 1,
         lineStyle: LightweightCharts.LineStyle.Dashed,
         axisLabelVisible: true,
-        title: "Pivot",
-      });
-    }
+        title,
+      })
+    ));
+
+    const annotations = payload && payload.structures && payload.structures.annotations;
+    shapeMarkers.setMarkers((Array.isArray(annotations) ? annotations : []).map((annotation) => ({
+      time: annotation.time,
+      position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
+      color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
+      shape: annotation.type === "tight_platform" ? "arrowUp" : "arrowDown",
+      text: annotation.label || "Shape",
+    })));
 
     renderDetail(detailEl, rows.at(-1) || null, false);
     setRange(selectedRange);

@@ -84,13 +84,13 @@ class WebAssetTest(unittest.TestCase):
             import {{ filterTickers, sortTickers }} from {json.dumps(module_uri)};
             const rows = [
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
-                inactive: false, strict_vcp: true, tight_platform: false,
+                inactive: false, stale: false, strict_vcp: true, tight_platform: false,
                 near_pivot: true, momentum_percentile: 92, volatility: 18}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
-                inactive: false, strict_vcp: false, tight_platform: true,
+                inactive: false, stale: true, strict_vcp: false, tight_platform: true,
                 near_pivot: false, momentum_percentile: 71, volatility: 24}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
-                inactive: true, strict_vcp: true, tight_platform: true,
+                inactive: true, stale: false, strict_vcp: true, tight_platform: true,
                 near_pivot: true, momentum_percentile: null, volatility: null}}
             ];
             const snapshot = JSON.stringify(rows);
@@ -118,7 +118,7 @@ class WebAssetTest(unittest.TestCase):
             {
                 "searched": ["MSFT"],
                 "filtered": ["MSFT"],
-                "inactive": ["OLD"],
+                "inactive": ["AAPL", "OLD"],
                 "sorted": ["MSFT", "AAPL", "OLD"],
                 "unchanged": True,
             },
@@ -151,6 +151,67 @@ class WebAssetTest(unittest.TestCase):
             json.loads(result.stdout), ["MSFT", "AAPL", "OLD", None]
         )
 
+    def test_daily_return_formatting_uses_fraction_units_and_quote_clear_is_explicit(self):
+        module_uri = (STATIC / "js/app.js").as_uri()
+        script = f"""
+            import * as appModule from {json.dumps(module_uri)};
+            const fields = {{
+              selectedClose: {{textContent: '101.25'}},
+              selectedChange: {{textContent: '+1.00%'}},
+              observationDate: {{textContent: '2026-07-22'}},
+            }};
+            if (appModule.clearStockQuote) appModule.clearStockQuote(fields);
+            console.log(JSON.stringify({{
+              changes: appModule.formatDailyReturn
+                ? [0.01, -0.025, 0].map((value) => appModule.formatDailyReturn(value)) : null,
+              quote: [fields.selectedClose.textContent, fields.selectedChange.textContent,
+                      fields.observationDate.textContent],
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"changes": ["+1.00%", "-2.50%", "0.00%"], "quote": ["—", "—", "—"]},
+        )
+        source = (STATIC / "js/app.js").read_text()
+        self.assertLess(
+            source.index("clearStockQuote(elements)"),
+            source.index("await api.getStock(ticker)"),
+        )
+
+    def test_stale_and_inactive_statuses_remain_distinct_from_shape(self):
+        module_uri = (STATIC / "js/universe.js").as_uri()
+        script = f"""
+            import * as universeModule from {json.dumps(module_uri)};
+            const describe = universeModule.describeTickerState || (() => null);
+            console.log(JSON.stringify([
+              describe({{stale: false, inactive: false, shape_state: 'strict_vcp'}}),
+              describe({{stale: true, inactive: false, shape_state: 'tight_platform'}}),
+              describe({{stale: false, inactive: true, shape_state: 'near_pivot'}}),
+            ]));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                {"status": "Current", "shape": "Strict VCP"},
+                {"status": "Stale", "shape": "Tight platform"},
+                {"status": "Inactive", "shape": "Near pivot"},
+            ],
+        )
+
     def test_linked_chart_contract(self):
         source = (STATIC / "js/charts.js").read_text()
 
@@ -180,7 +241,22 @@ class WebAssetTest(unittest.TestCase):
 
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
-        self.assertEqual(source.count("LightweightCharts.LineSeries"), 3)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 5)
+        for title in (
+            "Strict VCP pivot",
+            "Tight-platform pivot",
+            "Volume MA20",
+            "Volume ratio",
+        ):
+            self.assertIn(title, source)
+        for field in (
+            "volume_ratio_change",
+            "pivot_distance_change_pct",
+            "ema20_cross",
+            "sma50_cross",
+        ):
+            self.assertIn(field, source)
+        self.assertIn("createSeriesMarkers", source)
         for range_name, bars in (("3m", 63), ("6m", 126), ("1y", 252), ("2y", 504)):
             self.assertIn(f'"{range_name}": {bars}', source)
 
@@ -194,6 +270,84 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-range="1y"', html)
         self.assertIn('data-range="2y"', html)
         self.assertIn('data-range="all"', html)
+
+    def test_chart_adapter_plots_shape_levels_annotations_and_volume_diagnostics(self):
+        module_uri = (STATIC / "js/charts.js").as_uri()
+        script = f"""
+            const created = [];
+            const markerSets = [];
+            function node() {{
+              return {{textContent: '', className: '', children: [], dataset: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }} }};
+            }}
+            globalThis.document = {{ createElement: () => node() }};
+            function chart(name) {{
+              const series = [];
+              const priceLines = [];
+              const scale = {{subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}}, setVisibleLogicalRange() {{}}, fitContent() {{}}}};
+              const value = {{name, series, priceLines, timeScale: () => scale,
+                addSeries(type, options) {{
+                  const item = {{type, options, data: [], setData(data) {{ this.data = data; }},
+                    createPriceLine(line) {{ priceLines.push(line); return line; }}, removePriceLine() {{}}}};
+                  series.push(item); return item;
+                }}, subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
+                subscribeClick() {{}}, unsubscribeClick() {{}}, applyOptions() {{}}, remove() {{}},
+                setCrosshairPosition() {{}}, clearCrosshairPosition() {{}}}};
+              created.push(value); return value;
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
+              createChart(element) {{ return chart(element.name); }},
+              createSeriesMarkers(_series, markers) {{
+                const controller = {{markers, setMarkers(next) {{ this.markers = next; markerSets.push(next); }}}};
+                markerSets.push(markers); return controller;
+              }},
+            }};
+            const chartModule = await import({json.dumps(module_uri)});
+            const {{ createLinkedCharts }} = chartModule;
+            const detail = node();
+            const controller = createLinkedCharts(
+              {{name: 'price', clientWidth: 800, clientHeight: 400}},
+              {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
+            );
+            const row = {{time: '2026-07-22', open: 99, high: 102, low: 98, close: 101,
+              volume: 1200, volume_ma20: 1000, volume_ratio: 1.2, volume_ratio_change: 0.15,
+              ema20: 100, sma50: 95, sma200: 90, daily_return: 0.01, true_range_pct: 4,
+              volume_change: 0.1, atr20: 3, pivot: 100, pivot_distance_pct: 1,
+              pivot_distance_change_pct: 0.75, ema20_cross: 'above', sma50_cross: null}};
+            controller.setChartData({{chart: [row], structures: {{key_levels: {{
+              strict_vcp_pivot: 103, tight_platform_pivot: 104,
+            }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
+            console.log(JSON.stringify({{
+              priceLines: created[0].priceLines.map(line => line.title),
+              volumeLines: created[1].series.filter(series => series.type === 'line')
+                .map(series => [series.options.title, series.data]),
+              markers: markerSets.at(-1),
+              detail: chartModule.detailItems
+                ? chartModule.detailItems(row).map(item => [item.label, item.value]) : [],
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        actual = json.loads(result.stdout)
+        self.assertEqual(actual["priceLines"], ["Strict VCP pivot", "Tight-platform pivot"])
+        self.assertEqual(
+            [line[0] for line in actual["volumeLines"]],
+            ["Volume MA20", "Volume ratio"],
+        )
+        self.assertEqual(actual["markers"][0]["text"], "Strict VCP")
+        details = dict(actual["detail"])
+        self.assertEqual(details["Volume ratio change"], "+0.15×")
+        self.assertEqual(details["Pivot-distance change"], "+0.75 pp")
+        self.assertEqual(details["EMA20 cross"], "Crossed above")
 
     def test_chart_panels_contain_canvas_intrinsic_width_on_mobile(self):
         css = (STATIC / "css/dashboard.css").read_text()
@@ -234,31 +388,50 @@ class WebAssetTest(unittest.TestCase):
     def test_factor_helpers_are_payload_driven_and_preserve_diagnostics(self):
         module_uri = (STATIC / "js/factors.js").as_uri()
         script = f"""
-            import {{ factorDetailRows, groupFactorResults }} from {json.dumps(module_uri)};
+            import * as factorModule from {json.dumps(module_uri)};
+            const {{ factorDetailRows, groupFactorResults }} = factorModule;
             const factors = [
-              {{key: 'fresh_factor', label: 'Fresh factor', group: 'trend',
+              {{key: 'fresh_factor', label: 'Fresh factor', group: 'trend', overview: true,
                 raw_value: 1.25, formatted: '1.25x', percentile: 0.75,
                 peer_count: 11, display_score: 75,
                 observation_date: '2026-07-22', missing: false,
-                missing_reason: null, description: 'A registry factor.', version: 'v2'}},
-              {{key: 'future_factor', label: 'Future factor', group: 'future_lab',
+                missing_reason: null, description: 'A registry factor.',
+                methodology: 'Rank exact-date observations.', version: 'v2'}},
+              {{key: 'future_factor', label: 'Future factor', group: 'future_lab', overview: false,
                 raw_value: {{window: 12}}, formatted: null, percentile: null,
                 peer_count: 4,
                 display_score: null, observation_date: '2026-07-22', missing: false,
-                missing_reason: null, description: 'Added after this UI.', version: 'v1'}},
-              {{key: 'missing_factor', label: 'Missing factor', group: 'risk',
+                missing_reason: null, description: 'Added after this UI.',
+                methodology: 'Future method.', version: 'v1'}},
+              {{key: 'future_visible', label: 'Future visible', group: 'future_visible', overview: true,
+                raw_value: 2, formatted: '2', percentile: 0.8, peer_count: 7,
+                display_score: 80, observation_date: '2026-07-22', missing: false,
+                missing_reason: null, description: 'Opted in.', methodology: 'Visible method.', version: 'v1'}},
+              {{key: 'missing_factor', label: 'Missing factor', group: 'risk', overview: true,
                 raw_value: null, formatted: null, percentile: null,
                 display_score: null, observation_date: '2026-07-22', missing: true,
-                missing_reason: 'missing_benchmark', description: 'Needs a peer.', version: 'v3'}}
+                missing_reason: 'missing_benchmark', description: 'Needs a peer.',
+                methodology: 'Compare to benchmark.', version: 'v3'}}
             ];
-            const groups = groupFactorResults(factors, ['risk', 'trend']);
+            const metadata = [
+              {{key: 'risk', label: 'Risk', methodology: 'Risk method.', overview: true}},
+              {{key: 'trend', label: 'Trend', methodology: 'Trend method.', overview: true}},
+              {{key: 'future_lab', label: 'Future lab', methodology: 'Hidden method.', overview: false}},
+              {{key: 'future_visible', label: 'Future visible', methodology: 'Visible method.', overview: true}},
+            ];
+            const groups = groupFactorResults(factors, metadata);
             const rows = factorDetailRows(factors);
+            const overview = factorModule.overviewFactorGroups
+              ? factorModule.overviewFactorGroups(factors, metadata) : [];
             console.log(JSON.stringify({{
               groups: groups.map(group => [group.label, group.factors.map(row => row.key)]),
+              overview: overview.map(group => [group.label, group.factors.map(row => row.key)]),
+              groupMethodology: groups.map(group => group.methodology),
               raw: rows.map(row => row.rawValue),
               percentiles: rows.map(row => row.percentile),
-              missingReason: rows[2].missingReason,
+              missingReason: rows[3].missingReason,
               descriptions: rows.map(row => row.description),
+              methodologies: rows.map(row => row.methodology),
               versions: rows.map(row => row.version),
             }}));
         """
@@ -275,21 +448,40 @@ class WebAssetTest(unittest.TestCase):
                 "groups": [
                     ["Risk", ["missing_factor"]],
                     ["Trend", ["fresh_factor"]],
-                    ["Other", ["future_factor"]],
+                    ["Future lab", ["future_factor"]],
+                    ["Future visible", ["future_visible"]],
                 ],
-                "raw": ["1.25", '{"window":12}', "null"],
+                "overview": [
+                    ["Trend", ["fresh_factor"]],
+                    ["Future visible", ["future_visible"]],
+                ],
+                "groupMethodology": [
+                    "Risk method.",
+                    "Trend method.",
+                    "Hidden method.",
+                    "Visible method.",
+                ],
+                "raw": ["1.25", '{"window":12}', "2", "null"],
                 "percentiles": [
                     "75th percentile · 11 same-date peers",
                     "Unavailable · 4 same-date peers",
+                    "80th percentile · 7 same-date peers",
                     "Unavailable · peer count unavailable",
                 ],
                 "missingReason": "missing benchmark",
                 "descriptions": [
                     "A registry factor.",
                     "Added after this UI.",
+                    "Opted in.",
                     "Needs a peer.",
                 ],
-                "versions": ["v2", "v1", "v3"],
+                "methodologies": [
+                    "Rank exact-date observations.",
+                    "Future method.",
+                    "Visible method.",
+                    "Compare to benchmark.",
+                ],
+                "versions": ["v2", "v1", "v1", "v3"],
             },
         )
 
@@ -455,6 +647,49 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(actual["reloadPredicate"], [False, True, False])
         self.assertEqual(actual["retryDelays"], [2000, 4000, 5000, 5000, 5000])
 
+    def test_update_controller_recovers_running_status_during_initialization(self):
+        module_uri = (STATIC / "js/update.js").as_uri()
+        script = f"""
+            import {{ createUpdateController }} from {json.dumps(module_uri)};
+            const button = {{disabled: false, textContent: '', dataset: {{}},
+              addEventListener() {{}}, removeEventListener() {{}}}};
+            const status = {{textContent: '', dataset: {{}}}};
+            const timers = [];
+            let statusCalls = 0;
+            const controller = createUpdateController({{
+              button, status,
+              apiClient: {{
+                async getUpdateStatus() {{
+                  statusCalls += 1;
+                  return {{state: 'running', total: 8, completed: 3, updated: 2,
+                    current_ticker: 'MSFT', error: null, resumable: false}};
+                }},
+              }},
+              schedule(callback, delay) {{ timers.push({{callback, delay}}); return timers.length; }},
+              cancel() {{}},
+            }});
+            const initialized = typeof controller.initialize === 'function';
+            if (initialized) await controller.initialize();
+            console.log(JSON.stringify({{
+              initialized, statusCalls, disabled: button.disabled, buttonText: button.textContent,
+              statusText: status.textContent, timers: timers.map(timer => timer.delay),
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        )
+        actual = json.loads(result.stdout)
+        self.assertTrue(actual["initialized"])
+        self.assertEqual(actual["statusCalls"], 1)
+        self.assertTrue(actual["disabled"])
+        self.assertEqual(actual["buttonText"], "Update market data")
+        self.assertIn("3/8 checked", actual["statusText"])
+        self.assertEqual(actual["timers"], [1000])
+
+        app_source = (STATIC / "js/app.js").read_text()
+        self.assertIn("await updateController.initialize()", app_source)
+
     def test_task_ten_modules_are_integrated_with_the_dashboard(self):
         app_source = (STATIC / "js/app.js").read_text()
         for marker in (
@@ -474,12 +709,15 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('requestJson("/api/update/status")', api_source)
 
         html = HTML.read_text()
+        self.assertIn("<details", html)
+        self.assertIn("<summary>Factor detail table</summary>", html)
         for heading in (
             "Formatted value",
             "Raw value",
             "Percentile / peers",
             "Display score",
             "Description / version",
+            "Methodology",
             "Missing reason",
         ):
             self.assertIn(heading, html)

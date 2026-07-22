@@ -122,37 +122,25 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             None,
         )
 
-        peer_histories = {normalized_ticker: history}
-        for summary in summaries:
-            if summary.ticker != normalized_ticker:
-                peer_history = repository.load_history(
-                    summary.ticker, asof=observation_timestamp
-                )
-                if not peer_history.empty:
-                    peer_histories[summary.ticker] = peer_history.sort_index()
+        peer_histories = repository.load_universe_histories(
+            asof=observation_timestamp
+        )
+        peer_histories[normalized_ticker] = history
 
         warnings = []
         benchmark_history = peer_histories.get("SPY")
-        if benchmark_history is None:
-            try:
-                benchmark_history = repository.load_history(
-                    "SPY", asof=observation_timestamp
-                ).sort_index()
-                if benchmark_history.empty:
-                    benchmark_history = None
-            except UnknownTicker:
-                benchmark_history = None
         if benchmark_history is None:
             warnings.append("missing_benchmark")
 
         contexts = [
             AnalysisContext(
                 ticker=peer_ticker,
-                observation_date=observation_timestamp,
+                observation_date=pd.Timestamp(peer_history.index[-1]),
                 history=peer_history,
                 benchmark_history=benchmark_history,
             )
             for peer_ticker, peer_history in peer_histories.items()
+            if not peer_history.empty
         ]
         context_by_ticker = {context.ticker: context for context in contexts}
         factor_rows = factor_registry.evaluate_universe(contexts)[normalized_ticker]
@@ -162,6 +150,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
         if selected_summary is not None and selected_summary.inactive:
             warnings.append("inactive_ticker")
+        elif selected_summary is not None and selected_summary.lag_days > 0:
+            warnings.append("stale_ticker")
         if len(chart) < 200:
             warnings.append("insufficient_indicator_history")
 
@@ -239,29 +229,18 @@ def _summary_dict(summary):
 
 
 def _universe_rows(summaries, histories, asof, registry):
-    """Build descriptive universe diagnostics from one same-date cohort."""
-    asof_date = iso_date(asof)
-    current_tickers = {
-        summary.ticker
+    """Build diagnostics at each ticker's real last bar from one bulk snapshot."""
+    benchmark = histories.get("SPY")
+    contexts = [
+        AnalysisContext(
+            ticker=summary.ticker,
+            observation_date=pd.Timestamp(histories[summary.ticker].index[-1]),
+            history=histories[summary.ticker],
+            benchmark_history=benchmark,
+        )
         for summary in summaries
-        if not summary.inactive
-        and summary.latest_date == asof_date
-        and summary.ticker in histories
-        and not histories[summary.ticker].empty
-    }
-    benchmark = histories.get("SPY") if "SPY" in current_tickers else None
-    contexts = []
-    if asof_date is not None:
-        contexts = [
-            AnalysisContext(
-                ticker=summary.ticker,
-                observation_date=pd.Timestamp(asof_date),
-                history=histories[summary.ticker],
-                benchmark_history=benchmark,
-            )
-            for summary in summaries
-            if summary.ticker in current_tickers
-        ]
+        if summary.ticker in histories and not histories[summary.ticker].empty
+    ]
     selected_factors = [
         factor for factor in registry.factors if factor.key in UNIVERSE_FACTOR_KEYS
     ]
@@ -278,17 +257,18 @@ def _universe_rows(summaries, histories, asof, registry):
         momentum = _percentile_0_100(results.get(UNIVERSE_MOMENTUM_FACTOR_KEY))
         volatility = _annualized_percent(results.get(UNIVERSE_VOLATILITY_FACTOR_KEY))
         inactive = bool(summary.inactive)
+        stale = not inactive and summary.lag_days > 0
 
         row = _summary_dict(summary)
         row.update(
             {
                 "fresh": not inactive and summary.lag_days == 0,
+                "stale": stale,
+                "data_status": "inactive" if inactive else "stale" if stale else "current",
                 "strict_vcp": strict_vcp,
                 "tight_platform": tight_platform,
                 "near_pivot": near_pivot,
-                "shape_state": _shape_state(
-                    inactive, strict_vcp, tight_platform, near_pivot
-                ),
+                "shape_state": _shape_state(strict_vcp, tight_platform, near_pivot),
                 "momentum_percentile": momentum,
                 "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
                 "momentum_percentile_unit": "percentile_0_100",
@@ -337,9 +317,7 @@ def _finite_number(value):
     )
 
 
-def _shape_state(inactive, strict_vcp, tight_platform, near_pivot):
-    if inactive:
-        return "inactive"
+def _shape_state(strict_vcp, tight_platform, near_pivot):
     if strict_vcp:
         return "strict_vcp"
     if tight_platform:
@@ -350,7 +328,18 @@ def _shape_state(inactive, strict_vcp, tight_platform, near_pivot):
 
 
 def _factor_groups(registry):
-    return list(dict.fromkeys(factor.group for factor in registry.factors))
+    groups = getattr(registry, "groups", ())
+    if groups:
+        return [group.to_dict() for group in groups]
+    return [
+        {
+            "key": group,
+            "label": group.replace("_", " ").title(),
+            "methodology": "Point-in-time descriptive diagnostics.",
+            "overview": False,
+        }
+        for group in dict.fromkeys(factor.group for factor in registry.factors)
+    ]
 
 
 def _snapshot_dict(snapshot):
@@ -362,21 +351,58 @@ def _stock_summary(chart, ticker_summary):
     return {
         "close": latest["close"],
         "daily_return": latest["daily_return"],
+        "daily_return_unit": "fraction",
         "latest_date": latest["time"],
         "lag_days": None if ticker_summary is None else ticker_summary.lag_days,
         "inactive": False if ticker_summary is None else ticker_summary.inactive,
+        "stale": (
+            False
+            if ticker_summary is None
+            else not ticker_summary.inactive and ticker_summary.lag_days > 0
+        ),
     }
 
 
 def _structure_payload(factors, chart):
     by_key = {factor["key"]: factor for factor in factors}
     latest = chart[-1]
+    strict_vcp = by_key.get("strict_vcp", {}).get("raw_value")
+    tight_platform = by_key.get("tight_platform", {}).get("raw_value")
+    strict_vcp = strict_vcp if isinstance(strict_vcp, dict) else None
+    tight_platform = tight_platform if isinstance(tight_platform, dict) else None
+    strict_vcp_pivot = (
+        strict_vcp.get("vcp_pivot")
+        if strict_vcp and strict_vcp.get("reject_reason") is None
+        else None
+    )
+    tight_platform_pivot = (
+        tight_platform.get("platform_pivot")
+        if tight_platform and tight_platform.get("is_platform")
+        else None
+    )
+    annotations = []
+    if _finite_number(strict_vcp_pivot):
+        annotations.append(
+            {"time": latest["time"], "type": "strict_vcp", "label": "Strict VCP"}
+        )
+    if _finite_number(tight_platform_pivot):
+        annotations.append(
+            {
+                "time": latest["time"],
+                "type": "tight_platform",
+                "label": "Tight platform",
+            }
+        )
     return {
-        "strict_vcp": by_key.get("strict_vcp", {}).get("raw_value"),
-        "tight_platform": by_key.get("tight_platform", {}).get("raw_value"),
+        "strict_vcp": strict_vcp,
+        "tight_platform": tight_platform,
+        "annotations": annotations,
         "key_levels": {
             "pivot": latest["pivot"],
+            "strict_vcp_pivot": strict_vcp_pivot,
+            "tight_platform_pivot": tight_platform_pivot,
             "pivot_distance_pct": latest["pivot_distance_pct"],
+            "pivot_distance_change_pct": latest["pivot_distance_change_pct"],
             "ema20": latest["ema20"],
             "sma50": latest["sma50"],
             "sma200": latest["sma200"],

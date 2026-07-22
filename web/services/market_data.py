@@ -33,6 +33,13 @@ class MarketDataUnavailable(RuntimeError):
         super().__init__("Market data is unavailable")
 
 
+class InvalidMarketData(ValueError):
+    """Raised when a provider frame cannot be persisted safely."""
+
+    def __init__(self):
+        super().__init__("Provider history is invalid")
+
+
 @dataclass(frozen=True)
 class TickerSummary:
     ticker: str
@@ -202,20 +209,32 @@ class MarketDataRepository:
         self._validate_ticker(ticker)
         columns = ("Open", "High", "Low", "Close", "Volume")
         if not isinstance(frame, pd.DataFrame):
-            raise ValueError("History must be a pandas DataFrame")
+            raise InvalidMarketData()
         missing = [column for column in columns if column not in frame.columns]
         if missing:
-            raise ValueError("History must contain OHLCV columns")
+            raise InvalidMarketData()
+        if frame.empty:
+            raise InvalidMarketData()
         if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.hasnans:
-            raise ValueError("History must have a valid DatetimeIndex")
+            raise InvalidMarketData()
         if frame.index.has_duplicates:
-            raise ValueError("History dates must be unique")
+            raise InvalidMarketData()
         for column in columns:
             values = frame[column]
             if not pd.api.types.is_numeric_dtype(values):
-                raise ValueError("History OHLCV values must be numeric")
+                raise InvalidMarketData()
             if not np.isfinite(values.to_numpy(dtype=float)).all():
-                raise ValueError("History OHLCV values must be finite")
+                raise InvalidMarketData()
+
+        values = frame.loc[:, columns].astype(float)
+        prices = values.loc[:, ("Open", "High", "Low", "Close")]
+        if (prices <= 0).to_numpy().any() or (values["Volume"] < 0).any():
+            raise InvalidMarketData()
+        if (
+            (values["High"] < prices.max(axis=1)).any()
+            or (values["Low"] > prices.min(axis=1)).any()
+        ):
+            raise InvalidMarketData()
 
         rows = [
             (
@@ -227,7 +246,7 @@ class MarketDataRepository:
                 float(row.Close),
                 float(row.Volume),
             )
-            for index, row in frame.loc[:, columns].iterrows()
+            for index, row in values.iterrows()
         ]
         with self._connect_writable() as connection:
             connection.executemany(

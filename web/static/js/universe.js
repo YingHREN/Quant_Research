@@ -23,7 +23,7 @@ export function filterTickers(rows, query = "", filters = {}) {
         && !(firstDefined(row, FIELD_ALIASES.nearPivot) || row.shape_state === "near_pivot")) return false;
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
-    if (filters.inactive && !row.inactive) return false;
+    if (filters.inactive && !(row.inactive || row.stale)) return false;
     return true;
   });
 }
@@ -66,12 +66,17 @@ function describeShape(row) {
     tight_platform: "Tight platform",
     near_pivot: "Near pivot",
     none: "No shape",
-    inactive: "Inactive",
   };
   const state = row.shape_state || row.shapeState;
   if (state) return labels[state] || String(state);
-  if (row.inactive) return "Inactive";
-  return "Active history";
+  return "No shape";
+}
+
+export function describeTickerState(row = {}) {
+  return {
+    status: row.inactive ? "Inactive" : row.stale ? "Stale" : "Current",
+    shape: describeShape(row),
+  };
 }
 
 export function renderUniverse(container, rows, options = {}) {
@@ -100,8 +105,10 @@ export function renderUniverse(container, rows, options = {}) {
     const headline = document.createElement("span");
     headline.className = "ticker-line";
     appendText(headline, "ticker-symbol", ticker);
-    const state = appendText(headline, "ticker-state", describeShape(row));
-    state.dataset.state = row.inactive ? "inactive" : "active";
+    const description = describeTickerState(row);
+    const state = appendText(headline, "ticker-state", description.status);
+    state.dataset.state = row.inactive ? "inactive" : row.stale ? "stale" : "current";
+    appendText(headline, "ticker-shape", description.shape);
 
     const metadata = document.createElement("span");
     metadata.className = "ticker-meta";

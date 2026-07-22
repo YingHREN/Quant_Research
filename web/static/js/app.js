@@ -30,10 +30,17 @@ function formatNumber(value) {
     : "—";
 }
 
-function formatPercent(value) {
+export function formatDailyReturn(value, unit = "fraction") {
   if (!Number.isFinite(value)) return "—";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
+  const percent = unit === "fraction" ? value * 100 : value;
+  const sign = percent > 0 ? "+" : "";
+  return `${sign}${percent.toFixed(2)}%`;
+}
+
+export function clearStockQuote(fields) {
+  for (const key of ["selectedClose", "selectedChange", "observationDate"]) {
+    if (fields && fields[key]) fields[key].textContent = "—";
+  }
 }
 
 function describeError(error) {
@@ -80,9 +87,15 @@ function renderStockHeader(payload) {
   const summary = payload.summary || {};
   setText(elements.selectedTicker, payload.ticker);
   setText(elements.selectedClose, formatNumber(summary.close));
-  setText(elements.selectedChange, formatPercent(summary.daily_return));
+  setText(
+    elements.selectedChange,
+    formatDailyReturn(summary.daily_return, summary.daily_return_unit),
+  );
   setText(elements.observationDate, payload.observation_date);
-  setText(elements.securityState, summary.inactive ? "Inactive" : "Active");
+  setText(
+    elements.securityState,
+    summary.inactive ? "Inactive" : summary.stale ? "Stale" : "Current",
+  );
   setText(elements.researchStatus, `Loaded observations through ${payload.observation_date || "an unknown date"}.`);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
@@ -113,6 +126,7 @@ async function selectTicker(ticker) {
   paintUniverse();
   setText(elements.selectedTicker, ticker);
   setText(elements.securityState, "Loading");
+  clearStockQuote(elements);
   setText(elements.researchStatus, `Loading ${ticker} from the local database…`);
   elements.researchStatus.removeAttribute("data-tone");
   renderWarnings([]);
@@ -270,6 +284,7 @@ export async function initializeDashboard() {
     onTerminal: refreshUniverseAfterUpdate,
   });
   bindControls();
+  await updateController.initialize();
   await loadUniverse();
 }
 

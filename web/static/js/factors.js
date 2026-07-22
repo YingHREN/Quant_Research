@@ -53,7 +53,15 @@ function normalizeGroupMetadata(groupMetadata) {
     const normalizedKey = String(key);
     seen.add(normalizedKey);
     const suppliedLabel = typeof metadata === "object" && metadata ? metadata.label : null;
-    return [{ key: normalizedKey, label: suppliedLabel || humanize(normalizedKey), factors: [] }];
+    const suppliedMethodology = typeof metadata === "object" && metadata ? metadata.methodology : null;
+    const overview = typeof metadata === "string" ? true : Boolean(metadata && metadata.overview);
+    return [{
+      key: normalizedKey,
+      label: suppliedLabel || humanize(normalizedKey),
+      methodology: suppliedMethodology || "—",
+      overview,
+      factors: [],
+    }];
   });
 }
 
@@ -61,7 +69,13 @@ export function groupFactorResults(results, groupMetadata = []) {
   const factors = Array.isArray(results) ? results : [];
   const configuredGroups = normalizeGroupMetadata(groupMetadata);
   const known = new Map(configuredGroups.map((group) => [group.key, group]));
-  const other = { key: "other", label: "Other", factors: [] };
+  const other = {
+    key: "other",
+    label: "Other",
+    methodology: "Unconfigured factor groups remain visible in the detail table.",
+    overview: false,
+    factors: [],
+  };
 
   factors.forEach((factor) => {
     const bucket = known.get(factor && factor.group) || other;
@@ -83,10 +97,23 @@ export function factorDetailRows(results) {
     displayScore: finite(factor.display_score) ? factor.display_score.toFixed(1) : "—",
     observationDate: factor.observation_date || "—",
     description: factor.description || "—",
+    methodology: factor.methodology || "—",
     version: factor.version || "—",
     missingReason: factor.missing_reason ? humanize(factor.missing_reason).toLowerCase() : "—",
     missing: Boolean(factor.missing),
   }));
+}
+
+export function overviewFactorGroups(results, groupMetadata = []) {
+  return groupFactorResults(results, groupMetadata)
+    .filter((group) => group.overview)
+    .map((group) => ({
+      ...group,
+      factors: group.factors.filter(
+        (factor) => factor.overview !== false && finite(factor.display_score),
+      ),
+    }))
+    .filter((group) => group.factors.length);
 }
 
 function appendText(parent, tagName, className, value) {
@@ -99,12 +126,7 @@ function appendText(parent, tagName, className, value) {
 
 function renderOverview(container, results, groupMetadata) {
   container.replaceChildren();
-  const groups = groupFactorResults(results, groupMetadata)
-    .map((group) => ({
-      ...group,
-      factors: group.factors.filter((factor) => finite(factor.display_score)),
-    }))
-    .filter((group) => group.factors.length);
+  const groups = overviewFactorGroups(results, groupMetadata);
 
   if (!groups.length) {
     container.className = "empty-state";
@@ -118,6 +140,7 @@ function renderOverview(container, results, groupMetadata) {
     const card = document.createElement("section");
     card.className = "factor-group";
     appendText(card, "h3", "factor-group-title", group.label);
+    appendText(card, "p", "factor-group-methodology", group.methodology);
     const list = document.createElement("ul");
     list.className = "factor-bars";
     group.factors.forEach((factor) => {
@@ -152,7 +175,7 @@ function renderDetailTable(tableBody, results) {
   if (!rows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     cell.className = "empty-table-cell";
     cell.textContent = "No factor diagnostics are available.";
     row.append(cell);
@@ -174,6 +197,7 @@ function renderDetailTable(tableBody, results) {
     appendText(description, "span", "factor-description", factor.description);
     appendText(description, "small", "factor-version", factor.version);
     row.append(description);
+    appendText(row, "td", "factor-methodology", factor.methodology);
     appendText(row, "td", "missing-reason", factor.missingReason);
     fragment.append(row);
   });
