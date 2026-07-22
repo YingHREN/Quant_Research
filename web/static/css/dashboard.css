@@ -229,7 +229,19 @@ caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: r
 th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-size: 0.69rem; letter-spacing: 0.04em; text-transform: uppercase; }
 
-footer { padding: 8px 20px 28px; color: var(--muted); font-size: 0.72rem; text-align: center; }
+footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  justify-content: center;
+  padding: 8px 20px 28px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+footer a { color: var(--muted); text-underline-offset: 2px; }
+footer a:hover { color: var(--text); }
 
 @media (max-width: 960px) {
   .workstation { grid-template-columns: minmax(230px, 280px) minmax(0, 1fr); }

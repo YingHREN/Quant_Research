@@ -161,6 +161,42 @@ class MarketDataRepository:
         frame.index.name = "Date"
         return frame
 
+    def load_universe_histories(self, asof=None):
+        """Load every ticker through one date with one read-only database query."""
+        asof_date = iso_date(asof)
+        query = """
+            SELECT ticker AS Ticker,
+                   date AS Date,
+                   open AS Open,
+                   high AS High,
+                   low AS Low,
+                   close AS Close,
+                   volume AS Volume
+            FROM prices
+        """
+        params = ()
+        if asof_date is not None:
+            query += " WHERE date <= ?"
+            params = (asof_date,)
+        query += " ORDER BY ticker ASC, date ASC"
+
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        frame = pd.DataFrame.from_records(
+            rows,
+            columns=("Ticker", "Date", "Open", "High", "Low", "Close", "Volume"),
+        )
+        if frame.empty:
+            return {}
+
+        frame["Date"] = pd.to_datetime(frame["Date"])
+        histories = {}
+        for ticker, ticker_frame in frame.groupby("Ticker", sort=False):
+            history = ticker_frame.drop(columns="Ticker").set_index("Date")
+            history.index.name = "Date"
+            histories[str(ticker)] = history
+        return histories
+
     def upsert_history(self, ticker, frame):
         """Validate and commit one ticker's OHLCV frame in one transaction."""
         self._validate_ticker(ticker)

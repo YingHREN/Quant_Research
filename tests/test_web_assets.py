@@ -46,10 +46,18 @@ class WebAssetTest(unittest.TestCase):
             "LICENSE-lightweight-charts.txt": (
                 "70c9d5382506dd184465425c08a99ad9bd6d9ac1313c252968ba0b585e5ef823"
             ),
+            "NOTICE-lightweight-charts.txt": (
+                "f76c6afab94884448f0426e30d6e9d555ca7247894cd3484e477d2f87513036e"
+            ),
         }
         for name, digest in expected.items():
             payload = (STATIC / "vendor" / name).read_bytes()
             self.assertEqual(hashlib.sha256(payload).hexdigest(), digest)
+
+    def test_page_carries_visible_tradingview_attribution(self):
+        html = HTML.read_text()
+        self.assertIn("Charts by TradingView", html)
+        self.assertIn('href="https://www.tradingview.com/"', html)
 
     def test_page_uses_semantic_controls_and_live_status_regions(self):
         html = HTML.read_text()
@@ -76,13 +84,13 @@ class WebAssetTest(unittest.TestCase):
             const rows = [
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, strict_vcp: true, tight_platform: false,
-                near_pivot: true, factor_percentile: 92, volatility: 18}},
+                near_pivot: true, momentum_percentile: 92, volatility: 18}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, strict_vcp: false, tight_platform: true,
-                near_pivot: false, factor_percentile: 71, volatility: 24}},
+                near_pivot: false, momentum_percentile: 71, volatility: 24}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, strict_vcp: true, tight_platform: true,
-                near_pivot: true, factor_percentile: null, volatility: null}}
+                near_pivot: true, momentum_percentile: null, volatility: null}}
             ];
             const snapshot = JSON.stringify(rows);
             const searched = filterTickers(rows, 'ms', {{}}).map(row => row.ticker);
@@ -90,7 +98,7 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             const inactive = filterTickers(rows, '', {{inactive: true}})
               .map(row => row.ticker);
-            const sorted = sortTickers(rows, 'factor_percentile', 'desc')
+            const sorted = sortTickers(rows, 'momentum_percentile', 'desc')
               .map(row => row.ticker);
             console.log(JSON.stringify({{
               searched, filtered, inactive, sorted,

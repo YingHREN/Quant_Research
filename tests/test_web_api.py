@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import unittest
 
@@ -8,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from web.app import create_app
+from web.factors.registry import FactorRegistry
 from web.services.market_data import (
     InvalidTicker,
     MarketDataUnavailable,
@@ -100,6 +104,19 @@ class FakeRepository:
             return history.copy()
         return history.loc[history.index <= pd.Timestamp(asof)].copy()
 
+    def load_universe_histories(self, asof=None):
+        self.calls.append(("load_universe_histories", asof))
+        if self.failure is not None:
+            raise self.failure
+        return {
+            ticker: (
+                history.copy()
+                if asof is None
+                else history.loc[history.index <= pd.Timestamp(asof)].copy()
+            )
+            for ticker, history in self.histories.items()
+        }
+
 
 class FalseyRepository(FakeRepository):
     def __bool__(self):
@@ -131,6 +148,108 @@ class StaleSelectionRepository(FakeRepository):
             )
             for summary in summaries
         ]
+
+
+class MappedFactor:
+    def __init__(self, key, group, direction, values):
+        self.key = key
+        self.label = key.replace("_", " ").title()
+        self.group = group
+        self.direction = direction
+        self.description = "API cohort fixture"
+        self.version = "test-v1"
+        self.values = values
+
+    def compute(self, context):
+        return self.values.get(context.ticker)
+
+    def format(self, value):
+        return str(value)
+
+
+class UniverseCohortRepository(FakeRepository):
+    def __init__(self):
+        super().__init__()
+        current = ("AAA", "BBB", "CCC", "DDD", "EEE", "SPY")
+        self.histories = {
+            ticker: price_history(offset=number * 10)
+            for number, ticker in enumerate(current)
+        }
+        self.histories["OLD"] = price_history(end="2026-06-01", offset=70)
+
+    def list_summaries(self):
+        self.calls.append(("list_summaries",))
+        return [
+            SimpleNamespace(
+                ticker=ticker,
+                latest_date=history.index[-1].date().isoformat(),
+                lag_days=50 if ticker == "OLD" else 0,
+                inactive=ticker == "OLD",
+            )
+            for ticker, history in sorted(self.histories.items())
+        ]
+
+    def freshness(self):
+        self.calls.append(("freshness",))
+        return {
+            "latest_date": "2026-07-21",
+            "by_date": [
+                {"date": "2026-07-21", "tickers": 6},
+                {"date": "2026-06-01", "tickers": 1},
+            ],
+        }
+
+
+def universe_registry():
+    current = ("AAA", "BBB", "CCC", "DDD", "EEE", "SPY")
+    return FactorRegistry(
+        [
+            MappedFactor(
+                "strict_vcp",
+                "structure",
+                "neutral",
+                {
+                    ticker: {"reject_reason": None if ticker == "AAA" else "none"}
+                    for ticker in current
+                },
+            ),
+            MappedFactor(
+                "tight_platform",
+                "structure",
+                "neutral",
+                {
+                    ticker: {"is_platform": ticker == "BBB"}
+                    for ticker in current
+                },
+            ),
+            MappedFactor(
+                "pivot_distance_pct",
+                "structure",
+                "neutral",
+                {ticker: 2.0 if ticker == "CCC" else 12.0 for ticker in current},
+            ),
+            MappedFactor(
+                "mom_12_1",
+                "momentum",
+                "higher",
+                {
+                    ticker: value
+                    for ticker, value in zip(current, (60, 50, 40, 30, 20, 10))
+                },
+            ),
+            MappedFactor(
+                "realized_vol_63",
+                "risk",
+                "lower",
+                {
+                    ticker: value
+                    for ticker, value in zip(
+                        current, (0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+                    )
+                },
+            ),
+        ]
+    )
 
 
 class FakeManager:
@@ -169,10 +288,92 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.json["asof"], "2026-07-21")
         self.assertEqual(
             set(response.json["tickers"][0]),
-            {"ticker", "latest_date", "lag_days", "inactive"},
+            {
+                "ticker",
+                "latest_date",
+                "lag_days",
+                "inactive",
+                "fresh",
+                "strict_vcp",
+                "tight_platform",
+                "near_pivot",
+                "shape_state",
+                "momentum_percentile",
+                "momentum_factor_key",
+                "momentum_percentile_unit",
+                "volatility",
+                "volatility_factor_key",
+                "volatility_unit",
+            },
         )
         self.assertEqual(self.repository.calls.count(("freshness",)), 1)
         self.assertEqual(self.repository.calls.count(("list_summaries",)), 1)
+        self.assertEqual(
+            self.repository.calls.count(
+                ("load_universe_histories", pd.Timestamp("2026-07-21"))
+            ),
+            1,
+        )
+        self.assertFalse(
+            any(call[0] == "load_history" for call in self.repository.calls)
+        )
+
+    def test_universe_diagnostics_feed_real_filter_and_sort_pipeline(self):
+        repository = UniverseCohortRepository()
+        app = create_app(
+            {"TESTING": True, "FACTOR_REGISTRY": universe_registry()},
+            repository,
+            FakeManager(),
+        )
+
+        response = app.test_client().get("/api/universe")
+
+        self.assertEqual(response.status_code, 200)
+        by_ticker = {row["ticker"]: row for row in response.json["tickers"]}
+        self.assertEqual(by_ticker["AAA"]["shape_state"], "strict_vcp")
+        self.assertEqual(by_ticker["BBB"]["shape_state"], "tight_platform")
+        self.assertEqual(by_ticker["CCC"]["shape_state"], "near_pivot")
+        self.assertEqual(by_ticker["DDD"]["shape_state"], "none")
+        self.assertEqual(by_ticker["OLD"]["shape_state"], "inactive")
+        self.assertEqual(by_ticker["AAA"]["momentum_percentile"], 100.0)
+        self.assertEqual(by_ticker["AAA"]["momentum_factor_key"], "mom_12_1")
+        self.assertEqual(
+            by_ticker["AAA"]["momentum_percentile_unit"], "percentile_0_100"
+        )
+        self.assertEqual(by_ticker["AAA"]["volatility"], 10.0)
+        self.assertEqual(
+            by_ticker["AAA"]["volatility_unit"], "annualized_percent"
+        )
+        self.assertIsNone(by_ticker["OLD"]["momentum_percentile"])
+        self.assertIsNone(by_ticker["OLD"]["volatility"])
+
+        module_uri = (
+            Path(__file__).resolve().parents[1] / "web/static/js/universe.js"
+        ).as_uri()
+        script = f"""
+            import {{ filterTickers, sortTickers }} from {json.dumps(module_uri)};
+            const rows = {json.dumps(response.json["tickers"])};
+            console.log(JSON.stringify({{
+              strict: filterTickers(rows, '', {{strictVcp: true}}).map(row => row.ticker),
+              tight: filterTickers(rows, '', {{tightPlatform: true}}).map(row => row.ticker),
+              near: filterTickers(rows, '', {{nearPivot: true}}).map(row => row.ticker),
+              momentum: sortTickers(rows, 'momentum_percentile', 'desc').map(row => row.ticker),
+              volatility: sortTickers(rows, 'volatility', 'asc').map(row => row.ticker)
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=Path(__file__).resolve().parents[1],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        actual = json.loads(result.stdout)
+        self.assertEqual(actual["strict"], ["AAA"])
+        self.assertEqual(actual["tight"], ["BBB"])
+        self.assertEqual(actual["near"], ["CCC"])
+        self.assertEqual(actual["momentum"][:3], ["AAA", "BBB", "CCC"])
+        self.assertEqual(actual["volatility"][:3], ["AAA", "BBB", "CCC"])
 
     def test_factory_preserves_falsey_injected_dependencies(self):
         repository = FalseyRepository()

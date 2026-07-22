@@ -9,6 +9,8 @@ Usage::
 from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
+import math
+from numbers import Real
 import os
 from pathlib import Path
 import sys
@@ -24,6 +26,7 @@ from werkzeug.exceptions import HTTPException
 
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
+from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
 from web.services.market_data import (
     InvalidTicker,
@@ -40,6 +43,16 @@ from web.services.update_jobs import (
 
 
 DEFAULT_DATABASE = PROJECT_ROOT / "data" / "prices.db"
+UNIVERSE_FACTOR_KEYS = (
+    "strict_vcp",
+    "tight_platform",
+    "pivot_distance_pct",
+    "mom_12_1",
+    "realized_vol_63",
+)
+UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
+UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
+NEAR_PIVOT_ABS_PCT = 5.0
 
 
 def create_app(config=None, repository=None, update_manager=None) -> Flask:
@@ -75,10 +88,16 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     def universe():
         freshness = repository.freshness()
         summaries = repository.list_summaries()
+        asof = freshness.get("latest_date")
+        histories = repository.load_universe_histories(
+            None if asof is None else pd.Timestamp(asof)
+        )
         payload = {
-            "asof": freshness.get("latest_date"),
+            "asof": asof,
             "freshness": freshness,
-            "tickers": [_summary_dict(summary) for summary in summaries],
+            "tickers": _universe_rows(
+                summaries, histories, asof, factor_registry
+            ),
             "factor_groups": _factor_groups(factor_registry),
         }
         return _json_response(payload)
@@ -217,6 +236,117 @@ def _summary_dict(summary):
         "lag_days": summary.lag_days,
         "inactive": summary.inactive,
     }
+
+
+def _universe_rows(summaries, histories, asof, registry):
+    """Build descriptive universe diagnostics from one same-date cohort."""
+    asof_date = iso_date(asof)
+    current_tickers = {
+        summary.ticker
+        for summary in summaries
+        if not summary.inactive
+        and summary.latest_date == asof_date
+        and summary.ticker in histories
+        and not histories[summary.ticker].empty
+    }
+    benchmark = histories.get("SPY") if "SPY" in current_tickers else None
+    contexts = []
+    if asof_date is not None:
+        contexts = [
+            AnalysisContext(
+                ticker=summary.ticker,
+                observation_date=pd.Timestamp(asof_date),
+                history=histories[summary.ticker],
+                benchmark_history=benchmark,
+            )
+            for summary in summaries
+            if summary.ticker in current_tickers
+        ]
+    selected_factors = [
+        factor for factor in registry.factors if factor.key in UNIVERSE_FACTOR_KEYS
+    ]
+    evaluated = FactorRegistry(selected_factors).evaluate_universe(contexts)
+
+    rows = []
+    for summary in summaries:
+        results = {
+            result.key: result for result in evaluated.get(summary.ticker, ())
+        }
+        strict_vcp = _strict_vcp_present(results.get("strict_vcp"))
+        tight_platform = _tight_platform_present(results.get("tight_platform"))
+        near_pivot = _near_pivot(results.get("pivot_distance_pct"))
+        momentum = _percentile_0_100(results.get(UNIVERSE_MOMENTUM_FACTOR_KEY))
+        volatility = _annualized_percent(results.get(UNIVERSE_VOLATILITY_FACTOR_KEY))
+        inactive = bool(summary.inactive)
+
+        row = _summary_dict(summary)
+        row.update(
+            {
+                "fresh": not inactive and summary.lag_days == 0,
+                "strict_vcp": strict_vcp,
+                "tight_platform": tight_platform,
+                "near_pivot": near_pivot,
+                "shape_state": _shape_state(
+                    inactive, strict_vcp, tight_platform, near_pivot
+                ),
+                "momentum_percentile": momentum,
+                "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
+                "momentum_percentile_unit": "percentile_0_100",
+                "volatility": volatility,
+                "volatility_factor_key": UNIVERSE_VOLATILITY_FACTOR_KEY,
+                "volatility_unit": "annualized_percent",
+            }
+        )
+        rows.append(row)
+    return rows
+
+
+def _strict_vcp_present(result):
+    if result is None or result.missing or not isinstance(result.raw_value, dict):
+        return False
+    return result.raw_value.get("reject_reason") is None
+
+
+def _tight_platform_present(result):
+    if result is None or result.missing or not isinstance(result.raw_value, dict):
+        return False
+    return bool(result.raw_value.get("is_platform"))
+
+
+def _near_pivot(result):
+    value = None if result is None or result.missing else result.raw_value
+    return _finite_number(value) and abs(float(value)) <= NEAR_PIVOT_ABS_PCT
+
+
+def _percentile_0_100(result):
+    if result is None or result.percentile is None:
+        return None
+    return round(float(result.percentile) * 100, 2)
+
+
+def _annualized_percent(result):
+    value = None if result is None or result.missing else result.raw_value
+    return round(float(value) * 100, 2) if _finite_number(value) else None
+
+
+def _finite_number(value):
+    return (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _shape_state(inactive, strict_vcp, tight_platform, near_pivot):
+    if inactive:
+        return "inactive"
+    if strict_vcp:
+        return "strict_vcp"
+    if tight_platform:
+        return "tight_platform"
+    if near_pivot:
+        return "near_pivot"
+    return "none"
 
 
 def _factor_groups(registry):

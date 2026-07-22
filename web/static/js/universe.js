@@ -15,10 +15,14 @@ export function filterTickers(rows, query = "", filters = {}) {
   const normalizedQuery = String(query || "").trim().toUpperCase();
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     if (!String(row.ticker || "").toUpperCase().includes(normalizedQuery)) return false;
-    if (filters.strictVcp && !firstDefined(row, FIELD_ALIASES.strictVcp)) return false;
-    if (filters.tightPlatform && !firstDefined(row, FIELD_ALIASES.tightPlatform)) return false;
-    if (filters.nearPivot && !firstDefined(row, FIELD_ALIASES.nearPivot)) return false;
-    if (filters.fresh && (row.inactive || Number(row.lag_days) !== 0)) return false;
+    if (filters.strictVcp
+        && !(firstDefined(row, FIELD_ALIASES.strictVcp) || row.shape_state === "strict_vcp")) return false;
+    if (filters.tightPlatform
+        && !(firstDefined(row, FIELD_ALIASES.tightPlatform) || row.shape_state === "tight_platform")) return false;
+    if (filters.nearPivot
+        && !(firstDefined(row, FIELD_ALIASES.nearPivot) || row.shape_state === "near_pivot")) return false;
+    const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
+    if (filters.fresh && !fresh) return false;
     if (filters.inactive && !row.inactive) return false;
     return true;
   });
@@ -27,9 +31,6 @@ export function filterTickers(rows, query = "", filters = {}) {
 function sortableValue(row, key) {
   if (key === "shape_state") {
     return row.shape_state ?? row.shapeState ?? "";
-  }
-  if (key === "factor_percentile") {
-    return row.factor_percentile ?? row.factorPercentile ?? null;
   }
   return row[key] ?? null;
 }
@@ -60,7 +61,15 @@ function appendText(parent, className, value) {
 }
 
 function describeShape(row) {
-  if (row.shape_state || row.shapeState) return String(row.shape_state || row.shapeState);
+  const labels = {
+    strict_vcp: "Strict VCP",
+    tight_platform: "Tight platform",
+    near_pivot: "Near pivot",
+    none: "No shape",
+    inactive: "Inactive",
+  };
+  const state = row.shape_state || row.shapeState;
+  if (state) return labels[state] || String(state);
   if (row.inactive) return "Inactive";
   return "Active history";
 }
@@ -96,7 +105,7 @@ export function renderUniverse(container, rows, options = {}) {
 
     const metadata = document.createElement("span");
     metadata.className = "ticker-meta";
-    const percentile = row.factor_percentile ?? row.factorPercentile;
+    const percentile = row.momentum_percentile ?? row.momentumPercentile;
     appendText(metadata, "ticker-factor", percentile == null ? "Momentum —" : `Momentum P${percentile}`);
     appendText(metadata, "ticker-date", row.latest_date || "No date");
 

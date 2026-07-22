@@ -74,6 +74,18 @@ class MarketDataRepositoryTest(unittest.TestCase):
         self.assertEqual(history.index.max(), pd.Timestamp("2026-07-20"))
         self.assertEqual(list(history.columns), ["Open", "High", "Low", "Close", "Volume"])
 
+    def test_load_universe_histories_returns_all_frames_in_one_asof_snapshot(self):
+        histories = self.repo.load_universe_histories("2026-07-20")
+
+        self.assertEqual(set(histories), {"AAA", "BBB", "OLD"})
+        self.assertEqual(histories["AAA"].index.max(), pd.Timestamp("2026-07-20"))
+        self.assertEqual(histories["BBB"].index.max(), pd.Timestamp("2026-07-20"))
+        self.assertEqual(histories["OLD"].index.max(), pd.Timestamp("2026-06-20"))
+        for history in histories.values():
+            self.assertEqual(
+                list(history.columns), ["Open", "High", "Low", "Close", "Volume"]
+            )
+
     def test_rejects_ticker_before_query(self):
         with self.assertRaises(InvalidTicker):
             self.repo.load_history("AAA' OR 1=1 --")
@@ -100,6 +112,16 @@ class MarketDataRepositoryTest(unittest.TestCase):
         malformed_db.write_text("not a sqlite database")
         with self.assertRaises(MarketDataUnavailable) as context:
             MarketDataRepository(malformed_db).freshness()
+        self.assertEqual(str(context.exception), "Market data is unavailable")
+        self.assertNotIn("file is not a database", str(context.exception).lower())
+
+    def test_bulk_read_malformed_database_raises_safe_market_data_error(self):
+        malformed_db = Path(self.tmp.name) / "malformed-bulk.db"
+        malformed_db.write_text("not a sqlite database")
+
+        with self.assertRaises(MarketDataUnavailable) as context:
+            MarketDataRepository(malformed_db).load_universe_histories("2026-07-21")
+
         self.assertEqual(str(context.exception), "Market data is unavailable")
         self.assertNotIn("file is not a database", str(context.exception).lower())
 
