@@ -1,0 +1,76 @@
+# Task 5 Report: Forecast Contracts and Point-in-Time Dataset Builder
+
+## Result
+
+Added immutable `ForecastResult` and `ForecastEvaluation` contracts with fresh,
+JSON-safe serialization and a typed `UnavailableReason` enum containing
+`insufficient_history`, `insufficient_training_samples`, `degenerate_target`,
+and `model_error`.
+
+Added pure dataset builders for the supported 5/20/60-session horizons. Feature
+rows use a unique `(ticker, observation_date)` index and causal trend, momentum,
+structure, volume, and risk calculations. Forward targets are aligned by each
+ticker's own trading-session positions and retain an explicit
+`label_end_date_{horizon}`. Training eligibility requires this end date to be
+strictly before the forecast date.
+
+Malformed duplicate keys fail closed, sparse and NaN histories retain their
+rows and missing values, infinities are normalized to missing values, and input
+histories are not mutated.
+
+## TDD evidence
+
+1. The initial target-alignment, strict eligibility-boundary, and future-spike
+   leakage tests failed because `web.forecasts` did not exist.
+2. The minimal dataset implementation made those three tests pass under
+   `-W error` after removing a pandas downcasting warning exposed by the suite.
+3. Contract, 5/20/60, sparse/NaN, duplicate-key, missing-label, and invalid-
+   horizon tests then failed because `web.forecasts.base` did not exist.
+4. The immutable contracts and validation made the expanded suite pass except
+   for a warning-strict sparse-history test. That test exposed the existing
+   chart helper's deprecated missing-value fill behavior.
+5. Computing the causal indicator series directly with the shared canonical
+   `_ema`, `_sma`, `vcp_analysis`, and `tight_platform` primitives eliminated
+   that warning; all 11 focused tests then passed.
+
+## Verification
+
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-review-pycache ../../venv/bin/python -W error -m unittest tests.test_web_forecast_dataset -v`
+  - PASS (14 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-review-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (144 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-pycache ../../venv/bin/python -m py_compile web/forecasts/__init__.py web/forecasts/base.py web/forecasts/dataset.py tests/test_web_forecast_dataset.py`
+  - PASS
+- `git diff --check`
+  - PASS
+
+## Self-review
+
+Reviewed the session-vs-calendar alignment, strict `< asof` purge boundary,
+per-ticker grouping, no cross-ticker target bleed, duplicate rejection, sparse
+history behavior, source-frame immutability, non-finite serialization, nested
+mapping immutability, and post-cutoff feature leakage. No UI files changed.
+
+The structure features intentionally use the canonical VCP and tight-platform
+implementations once 60 sessions are available; this is more computationally
+expensive than the vectorized features but keeps their definitions consistent
+with the registered dashboard factors. Model fitting, minimum training sample
+policy, and error isolation remain Task 6 responsibilities.
+
+## Independent review fixes
+
+The completion review found three downstream-safety gaps. New RED tests first
+proved that incoherent result states, unsupported scalar values, `NaT` dates,
+and malformed label metadata were accepted.
+
+The contracts now normalize all optional numeric/date values at construction,
+reject unsupported values, deeply copy and validate signal-bucket values, and
+enforce coherent availability/calibration states. `json.dumps(...,
+allow_nan=False)` is exercised directly. Eligibility now requires datetime
+keys and label-end values, asserts each label end follows its observation and
+matches the ticker-local horizon shift, and only then applies the strict
+`label_end < asof` cutoff. Horizon types are consistently integral across the
+dataset and result contracts.
+
+The independent re-review reported no remaining Critical, Important, or Minor
+findings and marked the dataset contracts ready for Task 6.
