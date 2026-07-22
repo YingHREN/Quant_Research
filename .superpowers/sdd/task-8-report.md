@@ -21,7 +21,7 @@ Implemented and verified.
     contracts when the provider/service boundary raises.
 - Added a bounded LRU cache.
   - Keys include database revision, normalized ticker, exact first/last chart
-    dates, model key, and model version.
+    dates, and model version.
   - Returns deep copies so response consumers cannot mutate cached state.
   - Uses one re-entrant lock across cold computation/publication, preventing
     duplicate same-key fits and races with invalidation under threaded Flask.

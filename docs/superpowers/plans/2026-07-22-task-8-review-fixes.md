@@ -45,7 +45,7 @@ and explicitly assert its length is five.
 
 - [x] **Step 2: Run the focused test and verify RED**
 
-Run: `PYTHONWARNINGS=error PYTHONPYCACHEPREFIX=/private/tmp/task8-fix-red-cache ../../venv/bin/python -m unittest tests.test_web_api.ForecastServiceTest.test_cache_is_bounded_exact_and_invalidated_by_revision -v`
+Run: `PYTHONWARNINGS=error PYTHONPYCACHEPREFIX=/private/tmp/task8-fix-red-cache ../../venv/bin/python -m unittest tests.test_web_api.ForecastServiceTest.test_cache_key_is_exact_five_field_versioned_identity -v`
 
 Expected: FAIL because the current key has six fields and includes `model_key`.
 
@@ -115,7 +115,7 @@ Run: `git diff --check`
 
 Record both review findings, red/green evidence, final verification counts, and remaining concerns without replacing the original report.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-07-22-task-8-review-fixes.md .superpowers/sdd/task-8-report.md tests/test_web_api.py tests/test_web_update_jobs.py web/services/forecasts.py web/services/update_jobs.py
