@@ -36,3 +36,29 @@ The changed code is limited to the chart locale update path and its focused
 runtime asset test. Existing Task 2 localization behavior and formatter wiring
 remain intact. The worktree does not have `./venv`; verification used the
 repository virtual environment at the absolute path above.
+
+## Reviewer follow-up: locked-row and runtime-localization coverage
+
+Added `WebAssetTest.test_chart_locale_switch_preserves_locked_row_and_localizes_runtime_details`.
+It supplies two rows, clicks the earlier one to lock it, and switches `en → zh-CN → en`.
+The test asserts the locked `2026-07-17` row remains selected, the lock instruction is
+localized on each switch, detail labels are localized in both locales, and the Volume
+MA20 / Volume ratio line-series titles are reapplied in both locales.
+
+### TDD evidence
+
+The first focused run failed because the new test expected an outdated English lock
+instruction (`Locked · click chart to unlock`) while the catalog correctly provides
+`Locked · click a chart to unlock`. Correcting that fixture expectation produced a
+green run; no production defect or production-code change was exposed.
+
+### Follow-up verification
+
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest tests.test_web_assets.WebAssetTest.test_chart_locale_switch_preserves_locked_row_and_localizes_runtime_details -v`
+  - PASS (1 test)
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest tests.test_web_assets -v`
+  - PASS (30 tests)
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest discover -v`
+  - PASS (125 tests)
+- `git diff --check`
+  - PASS

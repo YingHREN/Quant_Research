@@ -643,6 +643,81 @@ class WebAssetTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_chart_locale_switch_preserves_locked_row_and_localizes_runtime_details(self):
+        module_uri = (STATIC / "js/charts.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            const created = [];
+            function node() {{
+              return {{textContent: '', className: '', children: [],
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }}}};
+            }}
+            globalThis.document = {{ createElement: () => node() }};
+            function chart(name) {{
+              const scale = {{subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}}, setVisibleLogicalRange() {{}}, fitContent() {{}}}};
+              const value = {{name, series: [], clickHandler: null, timeScale: () => scale,
+                addSeries(type, options) {{
+                  const series = {{type, options, applied: [], setData() {{}},
+                    createPriceLine() {{ return {{}}; }}, removePriceLine() {{}},
+                    applyOptions(next) {{ this.applied.push(next); }}}};
+                  this.series.push(series); return series;
+                }}, subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
+                subscribeClick(handler) {{ this.clickHandler = handler; }}, unsubscribeClick() {{}},
+                applyOptions() {{}}, remove() {{}}, setCrosshairPosition() {{}}, clearCrosshairPosition() {{}}}};
+              created.push(value); return value;
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
+              createChart(element) {{ return chart(element.name); }},
+              createSeriesMarkers() {{ return {{setMarkers() {{}}}}; }},
+            }};
+            const {{ createLinkedCharts }} = await import({json.dumps(module_uri)});
+            const detail = node();
+            const controller = createLinkedCharts(
+              {{name: 'price', clientWidth: 800, clientHeight: 400}},
+              {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
+              {{locale: 'en'}},
+            );
+            const lockedRow = {{time: '2026-07-17', open: 10, high: 12, low: 9, close: 11,
+              volume: 1000, volume_ma20: 900, volume_ratio: 1.11}};
+            const latestRow = {{time: '2026-07-18', open: 11, high: 13, low: 10, close: 12,
+              volume: 1200, volume_ma20: 1000, volume_ratio: 1.2}};
+            controller.setChartData({{chart: [lockedRow, latestRow]}});
+            created[0].clickHandler({{time: lockedRow.time}});
+            assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
+            assert.equal(detail.children[0].children[1].textContent, 'Locked · click a chart to unlock');
+
+            controller.setLocale('zh-CN');
+            assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
+            assert.equal(detail.children[0].children[1].textContent, '已锁定 · 点击图表解锁');
+            const zhLabels = detail.children[1].children.map(item => item.children[0].textContent);
+            assert.ok(zhLabels.includes('开盘价'));
+            assert.ok(zhLabels.includes('成交量 MA20'));
+            const zhVolumeTitles = created[1].series.filter(series => series.type === 'line')
+              .map(series => series.applied.at(-1).title);
+            assert.deepEqual(zhVolumeTitles, ['成交量 MA20', '成交量比率']);
+
+            controller.setLocale('en');
+            assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
+            assert.equal(detail.children[0].children[1].textContent, 'Locked · click a chart to unlock');
+            const enLabels = detail.children[1].children.map(item => item.children[0].textContent);
+            assert.ok(enLabels.includes('Open'));
+            assert.ok(enLabels.includes('Volume MA20'));
+            const enVolumeTitles = created[1].series.filter(series => series.type === 'line')
+              .map(series => series.applied.at(-1).title);
+            assert.deepEqual(enVolumeTitles, ['Volume MA20', 'Volume ratio']);
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_chart_adapter_plots_shape_levels_annotations_and_volume_diagnostics(self):
         module_uri = (STATIC / "js/charts.js").as_uri()
         script = f"""
