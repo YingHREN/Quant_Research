@@ -110,6 +110,18 @@ class ForecastDatasetTest(unittest.TestCase):
         boundary = frame.xs("AAA", level="ticker").index[15]
         self.assertNotIn(("AAA", boundary), eligible.index)
 
+    def test_intraday_asof_uses_the_same_session_cutoff_as_midnight(self):
+        frame = attach_forward_targets(
+            build_feature_frame({"AAA": price_history(periods=80)}), horizons=(5,)
+        )
+        session = frame.xs("AAA", level="ticker").index[20]
+
+        at_midnight = eligible_training_rows(frame, session, 5)
+        at_noon = eligible_training_rows(frame, session + pd.Timedelta(hours=12), 5)
+
+        pd.testing.assert_frame_equal(at_noon, at_midnight)
+        self.assertFalse((at_noon["label_end_date_5"] == session).any())
+
     def test_future_price_spike_cannot_change_features_at_cutoff(self):
         history = price_history(periods=280)
         cutoff = history.index[259]

@@ -38,6 +38,74 @@ function rawValueText(value) {
   return String(value);
 }
 
+const LEGACY_REJECTION_REASON_CODES = new Map([
+  ["历史不足", "insufficient_history"],
+  ["价格未站上MA50", "below_ma50"],
+  ["价未站上MA50", "below_ma50"],
+  ["MA50<MA200(非上升趋势)", "ma50_below_ma200"],
+  ["MA50<MA200", "ma50_below_ma200"],
+  ["距52周高>25%", "too_far_from_52_week_high"],
+  ["距52周高>10%", "too_far_from_52_week_high"],
+  ["近20日涨幅>12%(加速上涨非整理)", "accelerated_20_session_rise"],
+  ["近20日涨幅>12%(加速上涨)", "accelerated_20_session_rise"],
+  ["无合格base(深度/单边/长度不满足)", "no_qualifying_base"],
+  ["base内峰谷不足", "insufficient_base_swings"],
+  ["base内收缩腿<2", "insufficient_contraction_legs"],
+  ["非横盘(净涨幅或效率比过高)", "not_sideways"],
+]);
+
+function legacyRejectionReasonCode(reason) {
+  if (reason == null || reason === "") return null;
+  const text = String(reason);
+  if (LEGACY_REJECTION_REASON_CODES.has(text)) {
+    return LEGACY_REJECTION_REASON_CODES.get(text);
+  }
+  if (text.startsWith("收缩腿未严格递减")) return "contractions_not_decreasing";
+  if (text.startsWith("区间宽度")) return "platform_too_wide";
+  return null;
+}
+
+function rejectionReason(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value.reject_reason ?? value.reason;
+  if (raw == null || raw === "") return null;
+  return {
+    code: value.rejection_reason_code || legacyRejectionReasonCode(raw),
+    raw: String(raw),
+  };
+}
+
+function localizedRejectionReason(value, locale) {
+  const rejection = rejectionReason(value);
+  if (!rejection) return null;
+  if (!rejection.code) return rejection.raw;
+  const key = `factor.rejection.${rejection.code}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? rejection.raw : localized;
+}
+
+function localizedFactorValue(factor, locale) {
+  const reason = localizedRejectionReason(factor?.raw_value, locale);
+  if (reason) return t("factor.rejectedValue", { reason }, locale);
+  return factor?.formatted == null ? null : String(factor.formatted);
+}
+
+function localizedRawValue(value, locale) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return rawValueText(value);
+  }
+  const reason = localizedRejectionReason(value, locale);
+  const localized = Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== "rejection_reason_code")
+      .map(([key, nested]) => [
+        key,
+        reason && (key === "reject_reason" || key === "reason") ? reason : nested,
+      ]),
+  );
+  return rawValueText(localized);
+}
+
 function ordinal(value) {
   const rounded = Math.round(value);
   const modulo100 = rounded % 100;
@@ -146,37 +214,40 @@ function localizedMissingReason(reason, locale) {
 }
 
 export function factorDetailRows(results, locale = getLocale()) {
-  return (Array.isArray(results) ? results : []).map((factor) => ({
-    key: factor.key == null ? "" : String(factor.key),
-    label: localizedMetadata(
-      factor,
-      "factor.item",
-      "label",
-      factor.label || humanize(factor.key),
-      locale,
-    ),
-    formattedValue: factor.formatted == null ? "—" : String(factor.formatted),
-    rawValue: rawValueText(factor.raw_value),
-    percentile: percentileText(factor, locale),
-    displayScore: finite(factor.display_score) ? factor.display_score.toFixed(1) : "—",
-    observationDate: factor.observation_date || "—",
-    description: localizedMetadata(
-      factor, "factor.item", "description", factor.description || "—", locale,
-    ),
-    methodology: localizedMetadata(
-      factor, "factor.item", "methodology", factor.methodology || "—", locale,
-    ),
-    version: factor.version || "—",
-    window: localizedMetadata(
-      factor, "factor.item", "window", factor.window || "—", locale,
-    ),
-    direction: localizedDirection(factor, locale),
-    currentValue: factor.formatted == null
-      ? (factor.missing ? "—" : rawValueText(factor.raw_value))
-      : String(factor.formatted),
-    missingReason: localizedMissingReason(factor.missing_reason, locale),
-    missing: Boolean(factor.missing),
-  }));
+  return (Array.isArray(results) ? results : []).map((factor) => {
+    const formattedValue = localizedFactorValue(factor, locale);
+    return ({
+      key: factor.key == null ? "" : String(factor.key),
+      label: localizedMetadata(
+        factor,
+        "factor.item",
+        "label",
+        factor.label || humanize(factor.key),
+        locale,
+      ),
+      formattedValue: formattedValue == null ? "—" : formattedValue,
+      rawValue: localizedRawValue(factor.raw_value, locale),
+      percentile: percentileText(factor, locale),
+      displayScore: finite(factor.display_score) ? factor.display_score.toFixed(1) : "—",
+      observationDate: factor.observation_date || "—",
+      description: localizedMetadata(
+        factor, "factor.item", "description", factor.description || "—", locale,
+      ),
+      methodology: localizedMetadata(
+        factor, "factor.item", "methodology", factor.methodology || "—", locale,
+      ),
+      version: factor.version || "—",
+      window: localizedMetadata(
+        factor, "factor.item", "window", factor.window || "—", locale,
+      ),
+      direction: localizedDirection(factor, locale),
+      currentValue: formattedValue == null
+        ? (factor.missing ? "—" : rawValueText(factor.raw_value))
+        : formattedValue,
+      missingReason: localizedMissingReason(factor.missing_reason, locale),
+      missing: Boolean(factor.missing),
+    });
+  });
 }
 
 export function overviewFactorGroups(results, groupMetadata = [], locale = getLocale()) {
@@ -589,7 +660,15 @@ function appendStructure(parent, key, value, locale) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const nested = document.createElement("dl");
     nested.className = "structure-nested";
-    const entries = Object.entries(value);
+    const reason = localizedRejectionReason(value, locale);
+    const entries = Object.entries(value)
+      .filter(([nestedKey]) => nestedKey !== "rejection_reason_code")
+      .map(([nestedKey, nestedValue]) => [
+        nestedKey,
+        reason && (nestedKey === "reject_reason" || nestedKey === "reason")
+          ? reason
+          : nestedValue,
+      ]);
     if (entries.length) entries.forEach(
       ([nestedKey, nestedValue]) => appendStructure(nested, nestedKey, nestedValue, locale),
     );

@@ -61,12 +61,18 @@ def _cached(context, key, function):
 
 
 def _vcp(context):
-    return _cached(context, "strict_vcp", lambda: vcp_analysis(context.history_asof()))
+    return _cached(
+        context,
+        "strict_vcp",
+        lambda: _with_rejection_reason_code(vcp_analysis(context.history_asof())),
+    )
 
 
 def _platform(context):
     return _cached(
-        context, "tight_platform", lambda: tight_platform(context.history_asof())
+        context,
+        "tight_platform",
+        lambda: _with_rejection_reason_code(tight_platform(context.history_asof())),
     )
 
 
@@ -140,6 +146,45 @@ def _dict_format(value):
     if value.get("reason"):
         return f"Rejected: {value['reason']}"
     return "Detected"
+
+
+_LEGACY_REJECTION_REASON_CODES = {
+    "历史不足": "insufficient_history",
+    "价格未站上MA50": "below_ma50",
+    "价未站上MA50": "below_ma50",
+    "MA50<MA200(非上升趋势)": "ma50_below_ma200",
+    "MA50<MA200": "ma50_below_ma200",
+    "距52周高>25%": "too_far_from_52_week_high",
+    "距52周高>10%": "too_far_from_52_week_high",
+    "近20日涨幅>12%(加速上涨非整理)": "accelerated_20_session_rise",
+    "近20日涨幅>12%(加速上涨)": "accelerated_20_session_rise",
+    "无合格base(深度/单边/长度不满足)": "no_qualifying_base",
+    "base内峰谷不足": "insufficient_base_swings",
+    "base内收缩腿<2": "insufficient_contraction_legs",
+    "非横盘(净涨幅或效率比过高)": "not_sideways",
+}
+
+
+def _rejection_reason_code(reason):
+    if reason in (None, ""):
+        return None
+    exact = _LEGACY_REJECTION_REASON_CODES.get(str(reason))
+    if exact:
+        return exact
+    if str(reason).startswith("收缩腿未严格递减"):
+        return "contractions_not_decreasing"
+    if str(reason).startswith("区间宽度"):
+        return "platform_too_wide"
+    return None
+
+
+def _with_rejection_reason_code(value):
+    result = dict(value)
+    reason = result.get("reject_reason")
+    if reason is None:
+        reason = result.get("reason")
+    result["rejection_reason_code"] = _rejection_reason_code(reason)
+    return result
 
 
 def _percent(value):

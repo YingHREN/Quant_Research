@@ -93,6 +93,7 @@ const ids = [
 const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
 elements.get("price-chart").clientHeight = 400;
 elements.get("volume-chart").clientHeight = 180;
+const body = new Element("body");
 
 const zhButton = new Element("button");
 zhButton.dataset.locale = "zh-CN";
@@ -107,6 +108,7 @@ const staticNodes = [zhButton, enButton, rangeButton];
 
 const documentListeners = new Map();
 globalThis.document = {
+  body,
   documentElement: { lang: "zh-CN" },
   createElement(tagName) { return new Element(tagName); },
   createDocumentFragment() { return new Element("fragment"); },
@@ -193,6 +195,14 @@ const stock = {
   summary: { close: 101, daily_return: 0.01, daily_return_unit: "fraction", stale: false, inactive: false },
   warnings: [], chart: [row],
   structures: {
+    strict_vcp: {
+      reject_reason: "历史不足", rejection_reason_code: "insufficient_history",
+      contractions: [], n_contractions: 0,
+    },
+    tight_platform: {
+      is_platform: false, reason: "历史不足",
+      rejection_reason_code: "insufficient_history",
+    },
     key_levels: { strict_vcp_pivot: 103 },
     annotations: [{ time: row.time, type: "strict_vcp", label: "Strict VCP" }],
   },
@@ -203,6 +213,18 @@ const stock = {
     description: "Close relative to the point-in-time 20-session EMA.",
     methodology: "Close divided by the 20-session exponential moving average, minus one, expressed in percent.",
     version: "builtin-v1",
+  }, {
+    key: "strict_vcp", label: "Strict VCP", group: "structure", overview: true,
+    raw_value: {
+      reject_reason: "历史不足", rejection_reason_code: "insufficient_history",
+      contractions: [], n_contractions: 0,
+    },
+    formatted: "Rejected: 历史不足", percentile: null, peer_count: null,
+    display_score: null, observation_date: "2026-07-22", missing: false,
+    missing_reason: null, description: "Precision-first VCP diagnostic, including its rejection reason.",
+    methodology: "Canonical strict VCP gates evaluate trend, base depth, contraction legs, volume dry-up, and extension.",
+    window: "Up to 250 sessions; candidate bases span 20 to 80 sessions",
+    direction: "neutral", version: "builtin-v1",
   }],
   scenarios: {
     provider: "historical_distribution", observation_date: "2026-07-22",
@@ -263,6 +285,9 @@ if (mode === "success") {
   const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersZh = markerControllers[0].markers.map((marker) => marker.text);
   const meterZh = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
+  const strictInfoZh = byClass(elements.get("factor-table-body"), "factor-info").at(-1);
+  strictInfoZh.dispatch("pointerenter");
+  const popoverZh = textTree(body);
   const datesZh = [priceChart, volumeChart].map((chart) => [
     chart.options.timeScale.tickMarkFormatter("2026-07-17"),
     chart.options.localization.timeFormatter("2026-07-17"),
@@ -283,14 +308,20 @@ if (mode === "success") {
     chart.options.localization.timeFormatter("2026-07-17"),
   ]);
   const meterEn = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
+  const strictInfoEn = byClass(elements.get("factor-table-body"), "factor-info").at(-1);
+  strictInfoEn.dispatch("pointerenter");
+  const popoverEn = textTree(body);
 
   assert.match(factorZh, /趋势/);
   assert.match(tableZh, /收盘价相对 EMA20/);
+  assert.match(tableZh, /已拒绝：历史数据不足/);
+  assert.match(popoverZh, /当前值 已拒绝：历史数据不足/);
   assert.match(tableZh, /第 75 百分位 · 8 个同日样本/);
   assert.match(tableZh, /收盘价相对时点一致的 20 日 EMA/);
   assert.match(scenarioZh, /基于观察日可用的非重叠周期收益/);
   assert.match(structureZh, /关键价位/);
   assert.match(structureZh, /严格 VCP 枢轴点/);
+  assert.match(structureZh, /拒绝原因 历史数据不足/);
   assert.match(chartZh, /开盘价/);
   assert.match(chartZh, /向上交叉/);
   assert.match(chartZh, /已锁定/);
@@ -304,9 +335,15 @@ if (mode === "success") {
   assert.equal(enButton.getAttribute("aria-pressed"), "true");
   assert.match(factorEn, /Trend/);
   assert.match(tableEn, /75th percentile · 8 same-date peers/);
+  assert.match(tableEn, /Rejected: Insufficient history/);
+  assert.doesNotMatch(tableEn, /历史不足/);
+  assert.match(popoverEn, /Current value Rejected: Insufficient history/);
+  assert.doesNotMatch(popoverEn, /历史不足/);
   assert.match(scenarioEn, /Descriptive historical scenarios/);
   assert.match(structureEn, /Key Levels/);
   assert.match(structureEn, /Strict VCP Pivot/);
+  assert.match(structureEn, /Reject Reason Insufficient history/);
+  assert.doesNotMatch(structureEn, /历史不足/);
   assert.match(chartEn, /Open/);
   assert.match(chartEn, /Crossed above/);
   assert.match(chartEn, /Locked/);
@@ -316,7 +353,7 @@ if (mode === "success") {
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
   assert.deepEqual(datesEn, datesZh);
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
-    factorEn, tableEn, scenarioEn, structureEn, chartEn }));
+    popoverZh, factorEn, tableEn, scenarioEn, structureEn, chartEn, popoverEn }));
 } else if (mode === "universe-error") {
   const zh = {
     universe: elements.get("universe-status").textContent,

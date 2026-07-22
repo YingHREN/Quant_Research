@@ -877,6 +877,38 @@ class WebApiTest(unittest.TestCase):
             all(item["time"] == response.json["observation_date"] for item in structures["annotations"])
         )
 
+    def test_stock_exposes_stable_codes_for_legacy_chinese_structure_rejections(self):
+        repository = FakeRepository()
+        repository.histories["AAA"] = price_history(periods=40)
+        response = create_app(
+            test_config(), repository, FakeManager()
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        factors = {factor["key"]: factor for factor in response.json["factors"]}
+        self.assertEqual(
+            factors["strict_vcp"]["raw_value"]["reject_reason"], "历史不足"
+        )
+        self.assertEqual(
+            factors["strict_vcp"]["raw_value"]["rejection_reason_code"],
+            "insufficient_history",
+        )
+        self.assertEqual(
+            factors["tight_platform"]["raw_value"]["reason"], "历史不足"
+        )
+        self.assertEqual(
+            factors["tight_platform"]["raw_value"]["rejection_reason_code"],
+            "insufficient_history",
+        )
+        self.assertEqual(
+            response.json["structures"]["strict_vcp"]["rejection_reason_code"],
+            "insufficient_history",
+        )
+        self.assertEqual(
+            response.json["structures"]["tight_platform"]["rejection_reason_code"],
+            "insufficient_history",
+        )
+
     def test_stale_stock_uses_peers_truncated_to_its_observation_date(self):
         repository = StaleSelectionRepository()
         client = create_app(

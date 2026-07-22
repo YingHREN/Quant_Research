@@ -194,6 +194,18 @@ const messages = {
     "factor.popover.dataDate": "数据日期",
     "factor.popover.version": "版本",
     "factor.popover.missingReason": "缺失原因",
+    "factor.rejectedValue": "已拒绝：{reason}",
+    "factor.rejection.insufficient_history": "历史数据不足",
+    "factor.rejection.below_ma50": "价格未站上 MA50",
+    "factor.rejection.ma50_below_ma200": "MA50 低于 MA200",
+    "factor.rejection.too_far_from_52_week_high": "距离 52 周高点过远",
+    "factor.rejection.accelerated_20_session_rise": "近 20 日上涨过快",
+    "factor.rejection.no_qualifying_base": "没有符合条件的基底",
+    "factor.rejection.insufficient_base_swings": "基底内峰谷不足",
+    "factor.rejection.insufficient_contraction_legs": "收缩阶段不足",
+    "factor.rejection.contractions_not_decreasing": "收缩幅度未递减",
+    "factor.rejection.platform_too_wide": "平台区间过宽",
+    "factor.rejection.not_sideways": "价格并非横盘整理",
     "factor.direction.higher": "数值越高通常越有利。",
     "factor.direction.lower": "数值越低通常越有利。",
     "factor.direction.neutral": "中性诊断；不按数值高低判定优劣。",
@@ -530,6 +542,18 @@ const messages = {
     "factor.popover.dataDate": "Data date",
     "factor.popover.version": "Version",
     "factor.popover.missingReason": "Missing reason",
+    "factor.rejectedValue": "Rejected: {reason}",
+    "factor.rejection.insufficient_history": "Insufficient history",
+    "factor.rejection.below_ma50": "Price is not above MA50",
+    "factor.rejection.ma50_below_ma200": "MA50 is below MA200",
+    "factor.rejection.too_far_from_52_week_high": "Too far below the 52-week high",
+    "factor.rejection.accelerated_20_session_rise": "20-session rise is too rapid",
+    "factor.rejection.no_qualifying_base": "No qualifying base",
+    "factor.rejection.insufficient_base_swings": "Insufficient swings within the base",
+    "factor.rejection.insufficient_contraction_legs": "Insufficient contraction legs",
+    "factor.rejection.contractions_not_decreasing": "Contraction legs are not decreasing",
+    "factor.rejection.platform_too_wide": "Platform range is too wide",
+    "factor.rejection.not_sideways": "Price action is not sideways",
     "factor.direction.higher": "Higher values are generally favorable.",
     "factor.direction.lower": "Lower values are generally favorable.",
     "factor.direction.neutral": "Neutral diagnostic; values are not ordered as favorable.",
@@ -733,8 +757,14 @@ function validDateParts(year, month, day) {
 
 function dateParts(value) {
   if (typeof value === "string") {
-    const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value);
-    return match ? validDateParts(...match.slice(1).map(Number)) : null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):(\d{2}))?)?$/.exec(value);
+    if (!match) return null;
+    const date = validDateParts(...match.slice(1, 4).map(Number));
+    if (!date || match[4] == null) return date;
+    const [, , , , hour, minute, second = "0", , offsetHour, offsetMinute] = match;
+    if (Number(hour) > 23 || Number(minute) > 59 || Number(second) > 59) return null;
+    if (offsetHour != null && (Number(offsetHour) > 23 || Number(offsetMinute) > 59)) return null;
+    return date;
   }
   if (value && typeof value === "object" && !(value instanceof Date)) {
     return validDateParts(value.year, value.month, value.day);

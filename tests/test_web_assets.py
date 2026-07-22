@@ -192,6 +192,20 @@ class WebAssetTest(unittest.TestCase):
             );
             assert.equal(i18n.formatChartTickDate("2026-07-17"), "07-17");
             assert.equal(
+              i18n.formatFullDate("2026-07-17T14:35:22.123+08:00"),
+              "2026-07-17",
+            );
+            for (const invalid of [
+              "2026-07-17Tgarbage",
+              "2026-07-17T25:00:00",
+              "2026-07-17T12:60:00",
+              "2026-07-17T12:30:60",
+              "2026-07-17T12:30:00+24:00",
+            ]) {{
+              assert.equal(i18n.formatFullDate(invalid), "—", invalid);
+              assert.equal(i18n.formatChartTickDate(invalid), "—", invalid);
+            }}
+            assert.equal(
               i18n.formatFullDate({{ year: 2026, month: 7, day: 17 }}),
               "2026-07-17",
             );

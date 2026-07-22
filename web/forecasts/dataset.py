@@ -109,6 +109,7 @@ def eligible_training_rows(
         raise ValueError("asof must be a valid timestamp")
     if cutoff.tz is not None:
         cutoff = cutoff.tz_localize(None)
+    cutoff = cutoff.normalize()
     if not _labels_validated:
         _validate_label_dates(frame, horizon)
     observation_dates = pd.Series(
