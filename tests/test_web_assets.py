@@ -150,6 +150,50 @@ class WebAssetTest(unittest.TestCase):
             json.loads(result.stdout), ["MSFT", "AAPL", "OLD", None]
         )
 
+    def test_linked_chart_contract(self):
+        source = (STATIC / "js/charts.js").read_text()
+
+        for marker in (
+            "export function createLinkedCharts",
+            "LightweightCharts.CandlestickSeries",
+            "LightweightCharts.HistogramSeries",
+            "LightweightCharts.LineSeries",
+            'title: "EMA20"',
+            'title: "SMA50"',
+            'title: "SMA200"',
+            "createPriceLine",
+            "subscribeCrosshairMove",
+            "subscribeClick",
+            "subscribeVisibleLogicalRangeChange",
+            "setVisibleLogicalRange",
+            "syncing",
+            "daily_return",
+            "true_range_pct",
+            "volume_change",
+            "volume_ratio",
+            "volume_ma20",
+            "atr20",
+            "pivot_distance_pct",
+        ):
+            self.assertIn(marker, source)
+
+        self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
+        self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 3)
+        for range_name, bars in (("3m", 63), ("6m", 126), ("1y", 252), ("2y", 504)):
+            self.assertIn(f'"{range_name}": {bars}', source)
+
+        app_source = (STATIC / "js/app.js").read_text()
+        self.assertIn('from "./charts.js"', app_source)
+        self.assertIn("chartController.setChartData(payload)", app_source)
+
+        html = HTML.read_text()
+        self.assertIn('data-range="3m"', html)
+        self.assertIn('data-range="6m"', html)
+        self.assertIn('data-range="1y"', html)
+        self.assertIn('data-range="2y"', html)
+        self.assertIn('data-range="all"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

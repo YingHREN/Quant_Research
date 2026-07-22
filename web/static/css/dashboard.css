@@ -210,6 +210,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 
 .range-controls { display: flex; gap: 5px; }
 .range-controls button { min-height: 30px; padding: 0 9px; font-size: 0.72rem; }
+.range-controls button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .chart-placeholder, .volume-placeholder, .scenario-placeholder {
   width: 100%;
   border: 1px dashed var(--line-strong);
@@ -220,6 +221,12 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .volume-placeholder { height: 130px; margin-top: 8px; }
 .scenario-placeholder { height: 260px; margin-top: 14px; }
 .detail-strip, .empty-state { margin-top: 10px; padding: 11px; border-radius: 8px; background: #0b141c; color: var(--muted); font-size: 0.78rem; }
+.detail-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }
+.detail-heading strong { color: var(--text); font-variant-numeric: tabular-nums; }
+.crosshair-values { display: grid; grid-template-columns: repeat(8, minmax(82px, 1fr)); gap: 7px; margin: 9px 0 0; }
+.crosshair-values div { min-width: 0; padding-top: 7px; border-top: 1px solid var(--line); }
+.crosshair-values dt { overflow: hidden; color: var(--muted); font-size: 0.65rem; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.crosshair-values dd { margin: 2px 0 0; overflow: hidden; color: var(--text); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 
 .analysis-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.7fr); gap: 16px; }
 .safety-copy { margin-top: 5px; font-size: 0.76rem; }
@@ -258,7 +265,9 @@ footer a:hover { color: var(--text); }
   .universe-list { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); max-height: 330px; overflow: auto; }
   .quote-grid { grid-template-columns: 1fr; }
   .chart-placeholder { height: 300px; }
+  .volume-placeholder { height: 110px; }
   .range-controls { flex-wrap: wrap; }
+  .crosshair-values { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
 }
 
 @media (prefers-reduced-motion: no-preference) {

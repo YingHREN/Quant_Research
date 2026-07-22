@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { createLinkedCharts } from "./charts.js";
 import {
   chooseInitialTicker,
   persistSelectedTicker,
@@ -9,6 +10,7 @@ import { filterTickers, renderUniverse, sortTickers } from "./universe.js";
 
 const elements = {};
 let stockRequestSequence = 0;
+let chartController = null;
 
 function byId(id) {
   return document.getElementById(id);
@@ -92,12 +94,14 @@ async function selectTicker(ticker) {
   setText(elements.researchStatus, `Loading ${ticker} from the local database…`);
   elements.researchStatus.removeAttribute("data-tone");
   renderWarnings([]);
+  chartController.setChartData({ chart: [] });
 
   try {
     const payload = await api.getStock(ticker);
     if (requestSequence !== stockRequestSequence) return;
     store.setState({ stockPayload: payload });
     renderStockHeader(payload);
+    chartController.setChartData(payload);
   } catch (error) {
     if (requestSequence !== stockRequestSequence) return;
     setText(elements.securityState, "Unavailable");
@@ -156,6 +160,14 @@ function bindControls() {
       paintUniverse();
     });
   });
+  elements.rangeControls.forEach((control) => {
+    control.addEventListener("click", () => {
+      elements.rangeControls.forEach((button) => {
+        button.setAttribute("aria-pressed", String(button === control));
+      });
+      chartController.setRange(control.dataset.range);
+    });
+  });
 }
 
 function captureElements() {
@@ -175,15 +187,25 @@ function captureElements() {
     securityState: byId("security-state"),
     researchStatus: byId("research-status"),
     dataWarnings: byId("data-warnings"),
+    priceChart: byId("price-chart"),
+    volumeChart: byId("volume-chart"),
+    crosshairDetail: byId("crosshair-detail"),
+    rangeControls: [...document.querySelectorAll("[data-range]")],
   });
 }
 
 export async function initializeDashboard() {
   captureElements();
+  chartController = createLinkedCharts(
+    elements.priceChart,
+    elements.volumeChart,
+    elements.crosshairDetail,
+  );
   bindControls();
   await loadUniverse();
 }
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", initializeDashboard, { once: true });
+  window.addEventListener("pagehide", () => chartController?.destroy(), { once: true });
 }
