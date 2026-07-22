@@ -108,7 +108,7 @@ def _legacy_score(context):
     result = evaluate(
         _legacy_inputs(context),
         market_ok=market_uptrend(benchmark),
-        price_only=not bool(context.metadata.get("fundamentals")),
+        price_only=False,
     )
     return result.total
 
@@ -234,6 +234,8 @@ def build_chart_rows(context: AnalysisContext):
         atr20 = true_range.rolling(20).mean()
         volume_ma20 = volume.rolling(20).mean()
         pivot = close.shift(1).rolling(20).max()
+        atr20.iloc[:20] = float("nan")
+        pivot.iloc[:21] = float("nan")
         above_ema20 = close >= ema20
         above_sma50 = close >= sma50
 

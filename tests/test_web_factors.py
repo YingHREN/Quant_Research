@@ -4,7 +4,13 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from web.factors.builtin import build_default_registry, build_chart_rows
+from factors.compute import _atr, pivot_breakout
+from scoring.engine import evaluate
+from web.factors.builtin import (
+    _legacy_inputs,
+    build_chart_rows,
+    build_default_registry,
+)
 from web.factors.registry import DuplicateFactorKey, FactorRegistry
 from web.services.analysis import AnalysisContext
 
@@ -186,6 +192,39 @@ class BuiltinFactorTest(unittest.TestCase):
 
         self.assertEqual(factor.label, "Traditional rules score")
         self.assertIn("Not validated for prediction", factor.description)
+
+    def test_legacy_score_preserves_canonical_non_price_only_evaluation(self):
+        registry = build_default_registry()
+        factor = next(factor for factor in registry.factors if factor.key == "legacy_score")
+        ctx = context_from_history(price_history())
+        inputs = _legacy_inputs(ctx)
+        expected = evaluate(inputs, market_ok=True, price_only=False).total
+
+        with patch("web.factors.builtin.market_uptrend", return_value=True):
+            actual = registry.evaluate_one(factor, ctx)
+
+        self.assertEqual(actual.raw_value, expected)
+
+    def test_chart_atr_matches_canonical_minimum_history_boundary(self):
+        history = price_history(25)
+        rows = build_chart_rows(context_from_history(history))
+
+        self.assertIsNone(rows[19]["atr20"])
+        for position in range(20, len(rows)):
+            self.assertEqual(
+                rows[position]["atr20"], _atr(history.iloc[: position + 1], 20)
+            )
+
+    def test_chart_pivot_matches_canonical_base_lookback_boundary(self):
+        history = price_history(25)
+        rows = build_chart_rows(context_from_history(history))
+
+        self.assertIsNone(rows[20]["pivot"])
+        for position in range(21, len(rows)):
+            self.assertEqual(
+                rows[position]["pivot"],
+                pivot_breakout(history.iloc[: position + 1])["pivot"],
+            )
 
     def test_shared_adapter_results_are_cached_on_context(self):
         registry = build_default_registry()
