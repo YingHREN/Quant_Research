@@ -270,7 +270,7 @@ function activeTriggerHasPresence() {
 function mostRecentPresentTrigger() {
   let candidate = null;
   triggerPresence.forEach((presence, trigger) => {
-    if (!presence.pointerOver && !presence.focused) return;
+    if (presence.suppressed || (!presence.pointerOver && !presence.focused)) return;
     if (!candidate || presence.lastInteraction > candidate.presence.lastInteraction) {
       candidate = { trigger, presence };
     }
@@ -290,9 +290,11 @@ function restorePresentFactorPopover() {
   return true;
 }
 
-function closeFactorPopover({ restoreFocus = false } = {}) {
+function closeFactorPopover({ restoreFocus = false, suppressTrigger = false } = {}) {
   cancelPopoverClose();
   const trigger = activeTrigger;
+  const presence = trigger && triggerPresence.get(trigger);
+  if (suppressTrigger && presence) presence.suppressed = true;
   if (trigger) trigger.setAttribute("aria-expanded", "false");
   activeTrigger = null;
   activePinned = false;
@@ -325,6 +327,7 @@ function documentKeydown(event) {
     event.preventDefault?.();
     closeFactorPopover({
       restoreFocus: activeOpenReason === "click" || activeOpenReason === "keyboard",
+      suppressTrigger: true,
     });
   }
 }
@@ -332,7 +335,7 @@ function documentKeydown(event) {
 function documentClick(event) {
   if (!activeTrigger) return;
   if (activeTrigger.contains?.(event.target) || factorPopover?.contains?.(event.target)) return;
-  closeFactorPopover();
+  closeFactorPopover({ suppressTrigger: true });
 }
 
 function ensureFactorPopover() {
@@ -381,8 +384,14 @@ function openFactorPopover(trigger, explanation, { pinned = false, reason = "hov
 }
 
 function activateFactorPopover(trigger, explanation, reason) {
+  const presence = triggerPresence.get(trigger);
+  if (presence) {
+    presence.suppressed = false;
+    presence.lastInteraction = ++triggerInteractionSequence;
+    presence.lastReason = reason;
+  }
   if (activeTrigger === trigger && activePinned) {
-    closeFactorPopover();
+    closeFactorPopover({ suppressTrigger: true });
     return;
   }
   openFactorPopover(trigger, explanation, { pinned: true, reason });
@@ -406,10 +415,12 @@ function appendFactorInfo(parent, explanation) {
     explanation,
     lastInteraction: 0,
     lastReason: "hover",
+    suppressed: false,
   };
   triggerPresence.set(button, presence);
   button.addEventListener?.("pointerenter", () => {
     presence.pointerOver = true;
+    presence.suppressed = false;
     presence.lastInteraction = ++triggerInteractionSequence;
     presence.lastReason = "hover";
     if (!activePinned) openFactorPopover(button, explanation, { reason: "hover" });
@@ -422,9 +433,10 @@ function appendFactorInfo(parent, explanation) {
   });
   button.addEventListener?.("focus", () => {
     presence.focused = true;
+    if (suppressFocusOpen) return;
+    presence.suppressed = false;
     presence.lastInteraction = ++triggerInteractionSequence;
     presence.lastReason = "focus";
-    if (suppressFocusOpen) return;
     if (!activePinned || activeTrigger !== button) {
       openFactorPopover(button, explanation, { reason: "focus" });
     }

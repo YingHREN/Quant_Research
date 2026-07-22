@@ -641,6 +641,39 @@ class WebAssetTest(unittest.TestCase):
             runTimers();
             assert.equal(popover.hidden, true);
 
+            buttons[0].dispatch('focus');
+            document.dispatch('keydown', body, 'Escape');
+            assert.equal(popover.hidden, true);
+            buttons[2].dispatch('pointerenter');
+            assert.match(treeText(popover), /缺失原因 缺少基准数据/);
+            buttons[2].dispatch('pointerleave');
+            runTimers();
+            assert.equal(popover.hidden, true);
+            assert.equal(buttons[0].getAttribute('aria-expanded'), 'false');
+            buttons[0].dispatch('blur');
+            buttons[0].dispatch('focus');
+            assert.equal(popover.hidden, false);
+            assert.match(treeText(popover), /未来因子 <img src=x>/);
+            buttons[0].dispatch('blur');
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('focus');
+            buttons[0].dispatch('click');
+            buttons[0].dispatch('click');
+            assert.equal(popover.hidden, true);
+            buttons[2].dispatch('pointerenter');
+            buttons[2].dispatch('pointerleave');
+            runTimers();
+            assert.equal(popover.hidden, true);
+            assert.equal(buttons[0].getAttribute('aria-expanded'), 'false');
+            buttons[0].dispatch('blur');
+            buttons[0].dispatch('pointerenter');
+            assert.equal(popover.hidden, false);
+            assert.match(treeText(popover), /未来因子 <img src=x>/);
+            buttons[0].dispatch('pointerleave');
+            runTimers();
+            assert.equal(popover.hidden, true);
+
             let keyEvent = buttons[0].dispatch('keydown', {{key: 'Enter'}});
             assert.equal(keyEvent.defaultPrevented, true);
             assert.equal(popover.hidden, false);

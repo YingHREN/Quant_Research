@@ -176,3 +176,44 @@ Fresh verification for this final pass:
 
 The independent final re-review found no Critical, Important, or Minor issues
 and assessed the cross-trigger fix ready.
+
+### Explicit-dismissal suppression fix
+
+The final cross-trigger review exposed a separate dismissal rule: a trigger
+that remains logically focused or hovered after explicit dismissal must not be
+selected again merely because another trigger temporarily becomes active.
+
+Two new assertions failed before the implementation changed:
+
+- focus A, press Escape, hover and leave B: A reopened without a new A
+  interaction;
+- focus/click A, activate A again to close it, then hover and leave B: A
+  reopened from its stale focus presence.
+
+Each registered trigger now carries explicit suppression state. Escape,
+outside-click, and activation-toggle closure suppress the dismissed trigger;
+last-interaction arbitration skips suppressed candidates. Suppression clears
+only on that trigger's next pointer-enter, unsuppressed focus event, or
+activation. Programmatic focus restoration during Escape remains guarded and
+does not count as a new opening interaction. The registry and all suppression
+state are cleared on rerender.
+
+The focused interaction test passed after the minimal state change and also
+proves that a subsequent real focus transition or pointer-enter on A clears
+suppression and opens A normally.
+
+Fresh verification for the dismissal-suppression pass:
+
+- `../../venv/bin/python -m unittest tests.test_web_factors tests.test_web_assets -v`
+  - PASS (48 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-dismissal-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (130 tests)
+- `node --check` for every file in `web/static/js/*.js`
+  - PASS (9 files)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-dismissal-pycache ../../venv/bin/python -m py_compile web/factors/*.py`
+  - PASS
+- `git diff --check`
+  - PASS
+
+The independent final re-review found no Critical, Important, or Minor issues
+and assessed the explicit-dismissal suppression fix ready.
