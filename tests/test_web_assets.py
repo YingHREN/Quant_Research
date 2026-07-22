@@ -655,17 +655,25 @@ class WebAssetTest(unittest.TestCase):
             }}
             globalThis.document = {{ createElement: () => node() }};
             function chart(name) {{
-              const scale = {{subscribeVisibleLogicalRangeChange() {{}},
-                unsubscribeVisibleLogicalRangeChange() {{}}, setVisibleLogicalRange() {{}}, fitContent() {{}}}};
-              const value = {{name, series: [], clickHandler: null, timeScale: () => scale,
+              const scale = {{rangeHandler: null,
+                subscribeVisibleLogicalRangeChange(handler) {{ this.rangeHandler = handler; }},
+                unsubscribeVisibleLogicalRangeChange() {{ this.rangeHandler = null; }},
+                setVisibleLogicalRange(range) {{
+                  this.visibleLogicalRange = range;
+                  this.rangeHandler?.(range);
+                }}, fitContent() {{}}}};
+              const value = {{name, series: [], clickHandler: null, crosshairHandler: null, crosshair: null,
+                timeScale: () => scale,
                 addSeries(type, options) {{
                   const series = {{type, options, applied: [], setData() {{}},
                     createPriceLine() {{ return {{}}; }}, removePriceLine() {{}},
                     applyOptions(next) {{ this.applied.push(next); }}}};
                   this.series.push(series); return series;
-                }}, subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
+                }}, subscribeCrosshairMove(handler) {{ this.crosshairHandler = handler; }}, unsubscribeCrosshairMove() {{}},
                 subscribeClick(handler) {{ this.clickHandler = handler; }}, unsubscribeClick() {{}},
-                applyOptions() {{}}, remove() {{}}, setCrosshairPosition() {{}}, clearCrosshairPosition() {{}}}};
+                applyOptions() {{}}, remove() {{}},
+                setCrosshairPosition(value, time, series) {{ this.crosshair = {{value, time, type: series.type}}; }},
+                clearCrosshairPosition() {{ this.crosshair = null; }}}};
               created.push(value); return value;
             }}
             globalThis.LightweightCharts = {{
@@ -685,12 +693,29 @@ class WebAssetTest(unittest.TestCase):
               volume: 1000, volume_ma20: 900, volume_ratio: 1.11}};
             const latestRow = {{time: '2026-07-18', open: 11, high: 13, low: 10, close: 12,
               volume: 1200, volume_ma20: 1000, volume_ratio: 1.2}};
-            controller.setChartData({{chart: [lockedRow, latestRow]}});
+            const chartRows = Array.from({{length: 65}}, (_, index) => ({{
+              ...latestRow,
+              time: new Date(Date.UTC(2026, 6, 17 + index)).toISOString().slice(0, 10),
+              close: latestRow.close + index,
+            }}));
+            chartRows[0] = lockedRow;
+            controller.setChartData({{chart: chartRows}});
+            controller.setRange('3m');
+            assert.ok(created[0].timeScale().visibleLogicalRange.from > 0);
+            created[0].crosshairHandler({{time: lockedRow.time}});
+            const visualState = {{
+              priceRange: structuredClone(created[0].timeScale().visibleLogicalRange),
+              volumeRange: structuredClone(created[1].timeScale().visibleLogicalRange),
+              volumeCrosshair: structuredClone(created[1].crosshair),
+            }};
             created[0].clickHandler({{time: lockedRow.time}});
             assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
             assert.equal(detail.children[0].children[1].textContent, 'Locked · click a chart to unlock');
 
             controller.setLocale('zh-CN');
+            assert.deepEqual(created[0].timeScale().visibleLogicalRange, visualState.priceRange);
+            assert.deepEqual(created[1].timeScale().visibleLogicalRange, visualState.volumeRange);
+            assert.deepEqual(created[1].crosshair, visualState.volumeCrosshair);
             assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
             assert.equal(detail.children[0].children[1].textContent, '已锁定 · 点击图表解锁');
             const zhLabels = detail.children[1].children.map(item => item.children[0].textContent);
@@ -701,6 +726,9 @@ class WebAssetTest(unittest.TestCase):
             assert.deepEqual(zhVolumeTitles, ['成交量 MA20', '成交量比率']);
 
             controller.setLocale('en');
+            assert.deepEqual(created[0].timeScale().visibleLogicalRange, visualState.priceRange);
+            assert.deepEqual(created[1].timeScale().visibleLogicalRange, visualState.volumeRange);
+            assert.deepEqual(created[1].crosshair, visualState.volumeCrosshair);
             assert.equal(detail.children[0].children[0].textContent, lockedRow.time);
             assert.equal(detail.children[0].children[1].textContent, 'Locked · click a chart to unlock');
             const enLabels = detail.children[1].children.map(item => item.children[0].textContent);

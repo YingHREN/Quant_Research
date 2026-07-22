@@ -30,6 +30,31 @@ and checks the detail heading is exactly `2026-07-17`.
 - `git diff --check`
   - PASS
 
+## Reviewer follow-up: preserve viewport and crosshair on locale updates
+
+Extended the locked-row runtime harness with stateful linked time scales and
+crosshair handlers. The test now loads 65 rows, selects the non-default `3m`
+range, records both linked visible logical ranges and the synchronized volume
+crosshair, then verifies those visual states remain unchanged across
+`en → zh-CN → en` locale updates. No production defect was exposed.
+
+### TDD evidence
+
+The first focused run failed because the new assertion assumed an exact
+logical-range start instead of recording the chart's active range. The harness
+now records the runtime range (while asserting the `3m` viewport differs from
+the default full range) and checks that captured state is preserved through
+each `applyOptions` locale update.
+
+### Follow-up verification
+
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest tests.test_web_assets.WebAssetTest.test_chart_locale_switch_preserves_locked_row_and_localizes_runtime_details -v`
+  - PASS (1 test)
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest tests.test_web_assets -v`
+  - PASS (30 tests)
+- `/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest discover -v`
+  - PASS (125 tests)
+
 ## Review notes
 
 The changed code is limited to the chart locale update path and its focused
