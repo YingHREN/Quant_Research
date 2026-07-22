@@ -144,6 +144,53 @@ class UpdateJobManagerTest(unittest.TestCase):
         provider.release.set()
         self.assertEqual(wait_until_terminal(manager).state, "completed")
 
+    def test_rejects_restart_until_terminal_worker_thread_has_exited(self):
+        provider = FakeProvider({"AAA": [history(10), history(11)]})
+        manager = UpdateJobManager(FakeRepository(("AAA",)), provider)
+        run_worker = manager._run
+        terminal_published = threading.Event()
+        allow_thread_exit = threading.Event()
+
+        def publish_terminal_then_wait():
+            run_worker()
+            terminal_published.set()
+            allow_thread_exit.wait(timeout=2)
+
+        manager._run = publish_terminal_then_wait
+        manager.start()
+        first_worker = manager._thread
+        self.assertTrue(terminal_published.wait(timeout=1))
+        self.assertEqual(manager.snapshot().state, "completed")
+        self.assertTrue(first_worker.is_alive())
+
+        try:
+            with self.assertRaises(UpdateAlreadyRunning):
+                manager.start()
+        finally:
+            allow_thread_exit.set()
+            first_worker.join(timeout=1)
+            if manager._thread is not first_worker:
+                manager._thread.join(timeout=1)
+
+        self.assertFalse(first_worker.is_alive())
+        manager.start()
+        self.assertEqual(wait_until_terminal(manager).state, "completed")
+
+    def test_thread_start_failure_is_failed_and_not_resumable(self):
+        manager = UpdateJobManager(FakeRepository(("AAA",)), FakeProvider({}))
+
+        with mock.patch.object(
+            threading.Thread, "start", side_effect=RuntimeError("cannot start")
+        ):
+            with self.assertLogs("web.services.update_jobs", level="ERROR"):
+                with self.assertRaisesRegex(RuntimeError, "cannot start"):
+                    manager.start()
+
+        snapshot = manager.snapshot().to_dict()
+        self.assertEqual(snapshot["state"], "failed")
+        self.assertEqual(snapshot["error"], "provider_error")
+        self.assertFalse(snapshot["resumable"])
+
     def test_rate_limit_preserves_committed_progress_and_is_resumable(self):
         with tempfile.TemporaryDirectory() as tmp:
             repository = SQLiteRecordingRepository(Path(tmp) / "prices.db")

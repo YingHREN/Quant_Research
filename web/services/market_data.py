@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import sqlite3
 
+import numpy as np
 import pandas as pd
 
 from web.contracts import iso_date
@@ -41,7 +42,7 @@ class TickerSummary:
 
 
 class MarketDataRepository:
-    """Repository for short-lived, read-only SQLite price queries."""
+    """Repository for read-only queries and explicit per-ticker price writes."""
 
     def __init__(self, db_path):
         self.db_path = Path(db_path)
@@ -54,6 +55,23 @@ class MarketDataRepository:
             )
             try:
                 yield connection
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            raise MarketDataUnavailable() from error
+
+    @contextmanager
+    def _connect_writable(self):
+        try:
+            connection = sqlite3.connect(
+                f"{self.db_path.resolve().as_uri()}?mode=rw", uri=True
+            )
+            try:
+                yield connection
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
             finally:
                 connection.close()
         except sqlite3.Error as error:
@@ -142,3 +160,45 @@ class MarketDataRepository:
         frame.index = pd.to_datetime(frame.pop("Date"))
         frame.index.name = "Date"
         return frame
+
+    def upsert_history(self, ticker, frame):
+        """Validate and commit one ticker's OHLCV frame in one transaction."""
+        self._validate_ticker(ticker)
+        columns = ("Open", "High", "Low", "Close", "Volume")
+        if not isinstance(frame, pd.DataFrame):
+            raise ValueError("History must be a pandas DataFrame")
+        missing = [column for column in columns if column not in frame.columns]
+        if missing:
+            raise ValueError("History must contain OHLCV columns")
+        if not isinstance(frame.index, pd.DatetimeIndex) or frame.index.hasnans:
+            raise ValueError("History must have a valid DatetimeIndex")
+        if frame.index.has_duplicates:
+            raise ValueError("History dates must be unique")
+        for column in columns:
+            values = frame[column]
+            if not pd.api.types.is_numeric_dtype(values):
+                raise ValueError("History OHLCV values must be numeric")
+            if not np.isfinite(values.to_numpy(dtype=float)).all():
+                raise ValueError("History OHLCV values must be finite")
+
+        rows = [
+            (
+                ticker,
+                index.date().isoformat(),
+                float(row.Open),
+                float(row.High),
+                float(row.Low),
+                float(row.Close),
+                float(row.Volume),
+            )
+            for index, row in frame.loc[:, columns].iterrows()
+        ]
+        with self._connect_writable() as connection:
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO prices
+                    (ticker, date, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )

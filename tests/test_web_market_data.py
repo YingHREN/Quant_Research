@@ -24,7 +24,8 @@ def create_price_db(path, rows_by_ticker):
                 high REAL NOT NULL,
                 low REAL NOT NULL,
                 close REAL NOT NULL,
-                volume REAL NOT NULL
+                volume REAL NOT NULL,
+                PRIMARY KEY (ticker, date)
             )
             """
         )
@@ -101,3 +102,41 @@ class MarketDataRepositoryTest(unittest.TestCase):
             MarketDataRepository(malformed_db).freshness()
         self.assertEqual(str(context.exception), "Market data is unavailable")
         self.assertNotIn("file is not a database", str(context.exception).lower())
+
+    def test_upsert_history_commits_replaced_and_new_rows_for_read_paths(self):
+        frame = pd.DataFrame(
+            {
+                "Open": [11.5, 12.5],
+                "High": [13.0, 14.0],
+                "Low": [11.0, 12.0],
+                "Close": [12.5, 13.5],
+                "Volume": [175.0, 225.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-21", "2026-07-22"], name="Date"),
+        )
+
+        self.repo.upsert_history("AAA", frame)
+        persisted = self.repo.load_history("AAA")
+
+        self.assertEqual(len(persisted), 3)
+        self.assertEqual(persisted.loc["2026-07-21", "Close"], 12.5)
+        self.assertEqual(persisted.loc["2026-07-22", "Volume"], 225.0)
+
+    def test_upsert_history_validates_ticker_and_frame_before_writing(self):
+        valid = pd.DataFrame(
+            {
+                "Open": [10.0],
+                "High": [11.0],
+                "Low": [9.0],
+                "Close": [10.5],
+                "Volume": [100.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-22"], name="Date"),
+        )
+
+        with self.assertRaises(InvalidTicker):
+            self.repo.upsert_history("AAA; DROP TABLE prices", valid)
+        with self.assertRaises(ValueError):
+            self.repo.upsert_history("AAA", valid.drop(columns="Volume"))
+
+        self.assertNotIn(pd.Timestamp("2026-07-22"), self.repo.load_history("AAA").index)

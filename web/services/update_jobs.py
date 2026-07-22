@@ -109,7 +109,7 @@ class UpdateJobManager:
         except Exception:
             logger.exception("Unable to start dashboard price-update worker")
             with self._lock:
-                self._finish_locked("failed", "provider_error", resumable=True)
+                self._finish_locked("failed", "provider_error", resumable=False)
             raise
         return snapshot
 
@@ -125,7 +125,9 @@ class UpdateJobManager:
         return self.snapshot()
 
     def _begin_locked(self):
-        if self._state == "running":
+        if self._state == "running" or (
+            self._thread is not None and self._thread.is_alive()
+        ):
             raise UpdateAlreadyRunning("An update is already running")
 
         resume = self._resumable and bool(self._remaining_tickers)
