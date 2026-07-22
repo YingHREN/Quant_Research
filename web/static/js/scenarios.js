@@ -1,17 +1,22 @@
+import { getLocale, t } from "./i18n.js";
+
 const PATHS = Object.freeze([
-  ["pessimistic", "Pessimistic historical scenario", "#ff9b78"],
-  ["median", "Median historical scenario", "#edf4f8"],
-  ["optimistic", "Optimistic historical scenario", "#35c6a5"],
+  ["pessimistic", "scenario.path.pessimistic", "#ff9b78"],
+  ["median", "scenario.path.median", "#edf4f8"],
+  ["optimistic", "scenario.path.optimistic", "#35c6a5"],
 ]);
 
 let activeChart = null;
 
-function humanize(value) {
-  if (value == null || value === "") return "Unavailable";
+function humanize(value, locale) {
+  if (value == null || value === "") return t("security.state.unavailable", {}, locale);
+  const key = `scenario.missing.${value}`;
+  const localized = t(key, {}, locale);
+  if (localized !== key) return localized;
   return String(value).replaceAll("_", " ");
 }
 
-export function scenarioView(payload) {
+export function scenarioView(payload, locale = getLocale()) {
   const horizons = payload && payload.horizons && typeof payload.horizons === "object"
     ? Object.values(payload.horizons)
     : [];
@@ -21,13 +26,17 @@ export function scenarioView(payload) {
   const horizonViews = horizons.map((horizon) => {
     const sessions = Number(horizon.horizon_sessions);
     if (horizon.available) {
-      PATHS.forEach(([key, label, color]) => {
+      PATHS.forEach(([key, labelKey, color]) => {
         const points = horizon.paths && Array.isArray(horizon.paths[key]) ? horizon.paths[key] : [];
         if (!points.length) return;
         series.push({
           key,
           color,
-          title: `${sessions} sessions · ${label}`,
+          title: t(
+            "scenario.seriesTitle",
+            { sessions, label: t(labelKey, {}, locale) },
+            locale,
+          ),
           data: points
             .filter((point) => Number.isFinite(point.session) && Number.isFinite(point.price))
             .map((point) => ({ time: point.session + 1, value: point.price })),
@@ -36,15 +45,26 @@ export function scenarioView(payload) {
     }
     const sampleCount = Number.isFinite(horizon.sample_count) ? horizon.sample_count : 0;
     return {
-      label: `${sessions} sessions`,
+      label: t("scenario.sessions", { sessions }, locale),
       available: Boolean(horizon.available),
-      sampleText: `${sampleCount} ${horizon.non_overlapping === false ? "historical" : "non-overlapping"} sample${sampleCount === 1 ? "" : "s"}`,
-      detail: horizon.available ? (horizon.methodology || "Methodology unavailable") : humanize(horizon.missing_reason),
+      sampleText: t(
+        horizon.non_overlapping === false
+          ? "scenario.samples.historical"
+          : "scenario.samples.nonOverlapping",
+        { count: sampleCount, suffix: sampleCount === 1 ? "" : "s" },
+        locale,
+      ),
+      detail: horizon.available
+        ? (horizon.methodology || t("scenario.methodologyUnavailable", {}, locale))
+        : humanize(horizon.missing_reason, locale),
     };
   });
 
   return {
-    methodology: payload && payload.methodology ? String(payload.methodology) : "Methodology unavailable",
+    locale,
+    methodology: payload && payload.methodology
+      ? String(payload.methodology)
+      : t("scenario.methodologyUnavailable", {}, locale),
     observationDate: payload && payload.observation_date ? String(payload.observation_date) : "—",
     horizons: horizonViews,
     series,
@@ -62,7 +82,12 @@ function appendText(parent, tagName, className, value) {
 function renderMetadata(container, view) {
   container.replaceChildren();
   appendText(container, "p", "scenario-methodology", view.methodology);
-  appendText(container, "p", "scenario-observation", `Observation date: ${view.observationDate}`);
+  appendText(
+    container,
+    "p",
+    "scenario-observation",
+    t("scenario.observationDate", { date: view.observationDate }, view.locale),
+  );
   const list = document.createElement("ul");
   list.className = "scenario-meta-list";
   view.horizons.forEach((horizon) => {
@@ -94,8 +119,8 @@ function createScenarioChart(container, view) {
     const message = document.createElement("p");
     message.className = "scenario-empty";
     message.textContent = view.series.length
-      ? "The local chart library is unavailable."
-      : "No historical scenario horizon has enough samples.";
+      ? t("scenario.libraryUnavailable", {}, view.locale)
+      : t("scenario.insufficientHorizons", {}, view.locale);
     container.append(message);
     return { destroy() {} };
   }
@@ -111,9 +136,19 @@ function createScenarioChart(container, view) {
     rightPriceScale: { borderColor: "#273745" },
     timeScale: {
       borderColor: "#273745",
-      tickMarkFormatter: (time) => `S${Number(time) - 1}`,
+      tickMarkFormatter: (time) => t(
+        "scenario.sessionTick",
+        { session: Number(time) - 1 },
+        view.locale,
+      ),
     },
-    localization: { timeFormatter: (time) => `Session ${Number(time) - 1}` },
+    localization: {
+      timeFormatter: (time) => t(
+        "scenario.sessionFull",
+        { session: Number(time) - 1 },
+        view.locale,
+      ),
+    },
   });
   view.series.forEach((series) => {
     const line = chart.addSeries(library.LineSeries, {
@@ -153,7 +188,7 @@ export function renderScenarios(payload, options = {}) {
   const metadataContainer = options.metadata || document.getElementById("scenario-meta");
   if (activeChart) activeChart.destroy();
   activeChart = null;
-  const view = scenarioView(payload);
+  const view = scenarioView(payload, options.locale || getLocale());
   if (chartContainer) {
     chartContainer.replaceChildren();
     activeChart = createScenarioChart(chartContainer, view);

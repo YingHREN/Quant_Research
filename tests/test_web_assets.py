@@ -163,9 +163,18 @@ class WebAssetTest(unittest.TestCase):
             globalThis.localStorage = storage;
             const i18n = await import({json.dumps(module_uri)});
             assert.equal(i18n.getLocale(), "zh-CN");
+            const notifications = [];
+            const unsubscribe = i18n.subscribeLocale((locale) => notifications.push(locale));
             assert.equal(i18n.setLocale("en"), "en");
+            assert.deepEqual(notifications, ["en"]);
             assert.equal(storage.getItem("quant-dashboard-locale"), "en");
+            unsubscribe();
             assert.equal(i18n.setLocale("fr"), "zh-CN");
+            assert.deepEqual(notifications, ["en"]);
+            assert.equal(
+              i18n.t("debug.englishFallback", {{}}, "zh-CN"),
+              "English fallback",
+            );
             assert.equal(i18n.formatChartTickDate("2026-07-17"), "07-17");
             assert.equal(
               i18n.formatFullDate({{ year: 2026, month: 7, day: 17 }}),
@@ -175,6 +184,98 @@ class WebAssetTest(unittest.TestCase):
               i18n.t("universe.shown", {{ shown: 2, total: 3 }}, "zh-CN"),
               "显示 2/3 只股票",
             );
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_bilingual_dashboard(self):
+        html = HTML.read_text()
+        self.assertEqual(len(re.findall(r'data-locale="(?:zh-CN|en)"', html)), 2)
+        self.assertIn('data-locale="zh-CN" aria-pressed="true"', html)
+        self.assertIn('data-locale="en" aria-pressed="false"', html)
+        for key in (
+            "header.latestDate",
+            "universe.filters.strictVcp",
+            "security.state.stale",
+            "chart.range.3m",
+            "factor.title",
+            "scenario.disclaimer",
+            "update.state.rateLimited",
+        ):
+            self.assertIn(key, (STATIC / "js/i18n.js").read_text())
+        for marker in (
+            'data-i18n="header.latestDate"',
+            'data-i18n="universe.filters.strictVcp"',
+            'data-i18n="factor.title"',
+            'data-i18n="scenario.disclaimer"',
+            'data-i18n-aria-label="chart.priceAria"',
+            'data-i18n-aria-label="chart.volumeAria"',
+        ):
+            self.assertIn(marker, html)
+        css = (STATIC / "css/dashboard.css").read_text()
+        for marker in (
+            ".locale-control",
+            '.locale-control button[aria-pressed="true"]',
+            "button:focus-visible",
+            "@media (max-width: 390px)",
+        ):
+            self.assertIn(marker, css)
+
+        module_uri = (STATIC / "js/i18n.js").as_uri()
+        update_uri = (STATIC / "js/update.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            const i18n = await import({json.dumps(module_uri)});
+            const update = await import({json.dumps(update_uri)});
+
+            function element(dataset = {{}}) {{
+              return {{dataset: {{...dataset}}, textContent: '', attributes: {{}},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }},
+                getAttribute(name) {{ return this.attributes[name]; }}}};
+            }}
+            const title = element({{i18n: 'factor.title'}});
+            const range = element({{i18n: 'chart.range.3m'}});
+            const priceChart = element({{i18nAriaLabel: 'chart.priceAria'}});
+            const zhButton = element({{locale: 'zh-CN'}});
+            const enButton = element({{locale: 'en'}});
+            const selectors = new Map([
+              ['[data-i18n]', [title, range]],
+              ['[data-i18n-placeholder]', []],
+              ['[data-i18n-aria-label]', [priceChart]],
+              ['[data-locale]', [zhButton, enButton]],
+            ]);
+            const root = {{documentElement: {{lang: 'en'}},
+              querySelectorAll(selector) {{ return selectors.get(selector) || []; }}}};
+
+            i18n.applyDocumentLocale(root, 'zh-CN');
+            assert.equal(root.documentElement.lang, 'zh-CN');
+            assert.equal(title.textContent, '因子概览');
+            assert.equal(range.textContent, '3个月');
+            assert.equal(priceChart.getAttribute('aria-label'), 'K线价格图');
+            assert.equal(zhButton.getAttribute('aria-pressed'), 'true');
+            assert.equal(enButton.getAttribute('aria-pressed'), 'false');
+
+            const button = {{disabled: false, textContent: '', dataset: {{}},
+              addEventListener() {{}}, removeEventListener() {{}}}};
+            const status = {{textContent: '', dataset: {{}}}};
+            const controller = update.createUpdateController({{button, status,
+              apiClient: {{}}, schedule() {{}}, cancel() {{}}}});
+            assert.equal(status.textContent, '仅价格更新状态：空闲');
+
+            i18n.applyDocumentLocale(root, i18n.setLocale('en'));
+            assert.equal(root.documentElement.lang, 'en');
+            assert.equal(title.textContent, 'Factor overview');
+            assert.equal(range.textContent, '3M');
+            assert.equal(priceChart.getAttribute('aria-label'), 'Candlestick price chart');
+            assert.equal(zhButton.getAttribute('aria-pressed'), 'false');
+            assert.equal(enButton.getAttribute('aria-pressed'), 'true');
+            assert.equal(status.textContent, 'Price-only update status: idle');
+            controller.destroy();
         """
         subprocess.run(
             ["node", "--input-type=module", "-e", script],
@@ -224,9 +325,9 @@ class WebAssetTest(unittest.TestCase):
             import * as universeModule from {json.dumps(module_uri)};
             const describe = universeModule.describeTickerState || (() => null);
             console.log(JSON.stringify([
-              describe({{stale: false, inactive: false, shape_state: 'strict_vcp'}}),
-              describe({{stale: true, inactive: false, shape_state: 'tight_platform'}}),
-              describe({{stale: false, inactive: true, shape_state: 'near_pivot'}}),
+              describe({{stale: false, inactive: false, shape_state: 'strict_vcp'}}, 'en'),
+              describe({{stale: true, inactive: false, shape_state: 'tight_platform'}}, 'en'),
+              describe({{stale: false, inactive: true, shape_state: 'near_pivot'}}, 'en'),
             ]));
         """
         result = subprocess.run(
@@ -548,7 +649,7 @@ class WebAssetTest(unittest.TestCase):
                   missing_reason: 'insufficient_samples', methodology: 'Needs more samples.', paths: {{}}}}
               }}
             }};
-            const view = scenarioView(payload);
+            const view = scenarioView(payload, 'en');
             console.log(JSON.stringify({{
               titles: view.series.map(series => series.title),
               points: view.series.map(series => series.data.length),
@@ -582,10 +683,13 @@ class WebAssetTest(unittest.TestCase):
 
     def test_update_controller_polls_running_jobs_and_exposes_429_resume(self):
         module_uri = (STATIC / "js/update.js").as_uri()
+        i18n_uri = (STATIC / "js/i18n.js").as_uri()
         script = f"""
+            import {{ setLocale }} from {json.dumps(i18n_uri)};
             import {{
               createUpdateController, shouldReloadSelectedTicker, updateRetryDelay
             }} from {json.dumps(module_uri)};
+            setLocale('en');
             const button = {{disabled: false, textContent: '', dataset: {{}},
               addEventListener(_name, handler) {{ this.handler = handler; }}}};
             const status = {{textContent: '', dataset: {{}}}};
@@ -682,8 +786,11 @@ class WebAssetTest(unittest.TestCase):
 
     def test_update_controller_recovers_running_status_during_initialization(self):
         module_uri = (STATIC / "js/update.js").as_uri()
+        i18n_uri = (STATIC / "js/i18n.js").as_uri()
         script = f"""
+            import {{ setLocale }} from {json.dumps(i18n_uri)};
             import {{ createUpdateController }} from {json.dumps(module_uri)};
+            setLocale('en');
             const button = {{disabled: false, textContent: '', dataset: {{}},
               addEventListener() {{}}, removeEventListener() {{}}}};
             const status = {{textContent: '', dataset: {{}}}};
@@ -743,7 +850,10 @@ class WebAssetTest(unittest.TestCase):
 
         html = HTML.read_text()
         self.assertIn("<details", html)
-        self.assertIn("<summary>Factor detail table</summary>", html)
+        self.assertIn(
+            '<summary data-i18n="factor.details">Factor detail table</summary>',
+            html,
+        )
         for heading in (
             "Formatted value",
             "Raw value",

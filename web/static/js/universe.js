@@ -1,3 +1,5 @@
+import { getLocale, t } from "./i18n.js";
+
 const FIELD_ALIASES = {
   strictVcp: ["strict_vcp", "strictVcp"],
   tightPlatform: ["tight_platform", "tightPlatform"],
@@ -60,34 +62,41 @@ function appendText(parent, className, value) {
   return node;
 }
 
-function describeShape(row) {
-  const labels = {
-    strict_vcp: "Strict VCP",
-    tight_platform: "Tight platform",
-    near_pivot: "Near pivot",
-    none: "No shape",
+function describeShape(row, locale) {
+  const keys = {
+    strict_vcp: "universe.shape.strictVcp",
+    tight_platform: "universe.shape.tightPlatform",
+    near_pivot: "universe.shape.nearPivot",
+    none: "universe.shape.none",
   };
   const state = row.shape_state || row.shapeState;
-  if (state) return labels[state] || String(state);
-  return "No shape";
+  if (state) return keys[state] ? t(keys[state], {}, locale) : String(state);
+  return t("universe.shape.none", {}, locale);
 }
 
-export function describeTickerState(row = {}) {
+export function describeTickerState(row = {}, locale = getLocale()) {
   return {
-    status: row.inactive ? "Inactive" : row.stale ? "Stale" : "Current",
-    shape: describeShape(row),
+    status: t(
+      row.inactive
+        ? "security.state.inactive"
+        : row.stale ? "security.state.stale" : "security.state.current",
+      {},
+      locale,
+    ),
+    shape: describeShape(row, locale),
   };
 }
 
 export function renderUniverse(container, rows, options = {}) {
   const selectedTicker = options.selectedTicker || null;
   const onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
+  const locale = options.locale || getLocale();
   container.replaceChildren();
 
   if (!rows.length) {
     const empty = document.createElement("li");
     empty.className = "empty-list";
-    empty.textContent = "No tickers match the current view.";
+    empty.textContent = t("universe.noMatch", {}, locale);
     container.append(empty);
     return;
   }
@@ -105,7 +114,7 @@ export function renderUniverse(container, rows, options = {}) {
     const headline = document.createElement("span");
     headline.className = "ticker-line";
     appendText(headline, "ticker-symbol", ticker);
-    const description = describeTickerState(row);
+    const description = describeTickerState(row, locale);
     const state = appendText(headline, "ticker-state", description.status);
     state.dataset.state = row.inactive ? "inactive" : row.stale ? "stale" : "current";
     appendText(headline, "ticker-shape", description.shape);
@@ -113,8 +122,14 @@ export function renderUniverse(container, rows, options = {}) {
     const metadata = document.createElement("span");
     metadata.className = "ticker-meta";
     const percentile = row.momentum_percentile ?? row.momentumPercentile;
-    appendText(metadata, "ticker-factor", percentile == null ? "Momentum —" : `Momentum P${percentile}`);
-    appendText(metadata, "ticker-date", row.latest_date || "No date");
+    appendText(
+      metadata,
+      "ticker-factor",
+      percentile == null
+        ? t("universe.momentumMissing", {}, locale)
+        : t("universe.momentum", { percentile }, locale),
+    );
+    appendText(metadata, "ticker-date", row.latest_date || t("universe.noDate", {}, locale));
 
     button.append(headline, metadata);
     item.append(button);

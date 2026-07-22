@@ -1,32 +1,39 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Quant Research Workstation</title>
+  <title data-i18n="document.title">Quant Research Workstation</title>
   <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
-  <a class="skip-link" href="#research-panel">Skip to research</a>
+  <a class="skip-link" href="#research-panel" data-i18n="skip.research">Skip to research</a>
   <header class="app-header">
     <div class="brand-block">
-      <p class="eyebrow">Local market research</p>
-      <h1>Quant Workstation</h1>
-      <p class="research-note">Descriptive diagnostics only · Not validated for prediction</p>
+      <p class="eyebrow" data-i18n="brand.eyebrow">Local market research</p>
+      <h1 data-i18n="brand.title">Quant Workstation</h1>
+      <p class="research-note" data-i18n="brand.note">Descriptive diagnostics only · Not validated for prediction</p>
     </div>
-    <div class="market-status">
-      <div>
-        <span class="status-label">Latest common date</span>
-        <strong id="market-date">—</strong>
+    <div class="header-actions">
+      <div class="locale-control" role="group" aria-label="Interface language"
+           data-i18n-aria-label="locale.label">
+        <button type="button" data-locale="zh-CN" aria-pressed="true" data-i18n="locale.zh">中文</button>
+        <button type="button" data-locale="en" aria-pressed="false" data-i18n="locale.en">EN</button>
       </div>
-      <div>
-        <span class="status-label">Coverage</span>
-        <strong id="market-coverage">—</strong>
+      <div class="market-status">
+        <div>
+          <span class="status-label" data-i18n="header.latestDate">Latest common date</span>
+          <strong id="market-date">—</strong>
+        </div>
+        <div>
+          <span class="status-label" data-i18n="header.coverage">Coverage</span>
+          <strong id="market-coverage">—</strong>
+        </div>
+        <button id="update-data" type="button" disabled data-i18n="update.button.start">Update market data</button>
       </div>
-      <button id="update-data" type="button" disabled>Update market data</button>
     </div>
-    <p id="update-status" class="global-status" role="status" aria-live="polite">
+    <p id="update-status" class="global-status" role="status" aria-live="polite" data-i18n="update.state.idle">
       Price-only update status: idle
     </p>
   </header>
@@ -35,44 +42,46 @@
     <aside id="universe-panel" class="panel universe-panel" aria-labelledby="universe-title">
       <div class="panel-heading">
         <div>
-          <p class="eyebrow">Local database</p>
-          <h2 id="universe-title">Stock pool</h2>
+          <p class="eyebrow" data-i18n="universe.eyebrow">Local database</p>
+          <h2 id="universe-title" data-i18n="universe.title">Stock pool</h2>
         </div>
         <span id="universe-count" class="count-badge">0</span>
       </div>
 
-      <label class="field-label" for="universe-search">Search ticker</label>
-      <input id="universe-search" type="search" autocomplete="off" placeholder="e.g. AAPL">
+      <label class="field-label" for="universe-search" data-i18n="universe.search">Search ticker</label>
+      <input id="universe-search" type="search" autocomplete="off" placeholder="e.g. AAPL"
+             data-i18n-placeholder="universe.searchPlaceholder">
 
       <div class="sort-controls">
         <div>
-          <label class="field-label" for="sort-key">Sort by</label>
+          <label class="field-label" for="sort-key" data-i18n="universe.sort.label">Sort by</label>
           <select id="sort-key">
-            <option value="ticker">Ticker</option>
-            <option value="latest_date">Data freshness</option>
-            <option value="momentum_percentile">Momentum percentile</option>
-            <option value="shape_state">Shape state</option>
-            <option value="volatility">Volatility</option>
+            <option value="ticker" data-i18n="universe.sort.ticker">Ticker</option>
+            <option value="latest_date" data-i18n="universe.sort.freshness">Data freshness</option>
+            <option value="momentum_percentile" data-i18n="universe.sort.momentum">Momentum percentile</option>
+            <option value="shape_state" data-i18n="universe.sort.shape">Shape state</option>
+            <option value="volatility" data-i18n="universe.sort.volatility">Volatility</option>
           </select>
         </div>
-        <button id="sort-direction" class="quiet-button" type="button" aria-label="Sort ascending">
+        <button id="sort-direction" class="quiet-button" type="button" aria-label="Sort ascending"
+                data-i18n="universe.sort.ascending" data-i18n-aria-label="universe.sort.ascendingAria">
           Ascending
         </button>
       </div>
 
       <fieldset class="filter-set">
-        <legend>Filters</legend>
-        <label><input type="checkbox" data-filter="strictVcp"> Strict VCP</label>
-        <label><input type="checkbox" data-filter="tightPlatform"> Tight platform</label>
-        <label><input type="checkbox" data-filter="nearPivot"> Near pivot</label>
-        <label><input type="checkbox" data-filter="fresh"> Fresh data</label>
-        <label><input type="checkbox" data-filter="inactive"> Inactive / stale only</label>
+        <legend data-i18n="universe.filters.legend">Filters</legend>
+        <label><input type="checkbox" data-filter="strictVcp"> <span data-i18n="universe.filters.strictVcp">Strict VCP</span></label>
+        <label><input type="checkbox" data-filter="tightPlatform"> <span data-i18n="universe.filters.tightPlatform">Tight platform</span></label>
+        <label><input type="checkbox" data-filter="nearPivot"> <span data-i18n="universe.filters.nearPivot">Near pivot</span></label>
+        <label><input type="checkbox" data-filter="fresh"> <span data-i18n="universe.filters.fresh">Fresh data</span></label>
+        <label><input type="checkbox" data-filter="inactive"> <span data-i18n="universe.filters.inactive">Inactive / stale only</span></label>
       </fieldset>
 
-      <p id="universe-status" class="inline-status" role="status" aria-live="polite">
+      <p id="universe-status" class="inline-status" role="status" aria-live="polite" data-i18n="universe.loading">
         Loading local universe…
       </p>
-      <nav aria-label="Stock pool">
+      <nav aria-label="Stock pool" data-i18n-aria-label="universe.navAria">
         <ul id="universe-list" class="universe-list"></ul>
       </nav>
     </aside>
@@ -80,41 +89,42 @@
     <main id="research-panel" class="research-panel" tabindex="-1">
       <section class="panel security-header" aria-labelledby="selected-ticker">
         <div>
-          <p class="eyebrow">Selected security</p>
+          <p class="eyebrow" data-i18n="security.eyebrow">Selected security</p>
           <div class="security-title-row">
-            <h2 id="selected-ticker">Select a ticker</h2>
-            <span id="security-state" class="state-badge">Waiting</span>
+            <h2 id="selected-ticker" data-i18n="security.selectTicker">Select a ticker</h2>
+            <span id="security-state" class="state-badge" data-i18n="security.state.waiting">Waiting</span>
           </div>
-          <p id="company-label" class="secondary-copy">Local price history</p>
+          <p id="company-label" class="secondary-copy" data-i18n="security.localHistory">Local price history</p>
         </div>
         <dl class="quote-grid">
-          <div><dt>Close</dt><dd id="selected-close">—</dd></div>
-          <div><dt>Daily change</dt><dd id="selected-change">—</dd></div>
-          <div><dt>Observation date</dt><dd id="observation-date">—</dd></div>
+          <div><dt data-i18n="security.close">Close</dt><dd id="selected-close">—</dd></div>
+          <div><dt data-i18n="security.dailyChange">Daily change</dt><dd id="selected-change">—</dd></div>
+          <div><dt data-i18n="security.observationDate">Observation date</dt><dd id="observation-date">—</dd></div>
         </dl>
-        <p id="research-status" class="inline-status span-full" role="status" aria-live="polite">
+        <p id="research-status" class="inline-status span-full" role="status" aria-live="polite" data-i18n="security.choose">
           Choose a ticker from the stock pool.
         </p>
-        <ul id="data-warnings" class="warning-list span-full" aria-label="Data quality warnings"></ul>
+        <ul id="data-warnings" class="warning-list span-full" aria-label="Data quality warnings"
+            data-i18n-aria-label="security.warningAria"></ul>
       </section>
 
       <section class="panel chart-panel" aria-labelledby="chart-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Price and volume</p>
-            <h2 id="chart-title">Market history</h2>
+            <p class="eyebrow" data-i18n="chart.eyebrow">Price and volume</p>
+            <h2 id="chart-title" data-i18n="chart.title">Market history</h2>
           </div>
-          <div class="range-controls" aria-label="Chart date range">
-            <button type="button" data-range="3m" aria-pressed="false">3M</button>
-            <button type="button" data-range="6m" aria-pressed="false">6M</button>
-            <button type="button" data-range="1y" aria-pressed="true">1Y</button>
-            <button type="button" data-range="2y" aria-pressed="false">2Y</button>
-            <button type="button" data-range="all" aria-pressed="false">All</button>
+          <div class="range-controls" aria-label="Chart date range" data-i18n-aria-label="chart.rangeAria">
+            <button type="button" data-range="3m" aria-pressed="false" data-i18n="chart.range.3m">3M</button>
+            <button type="button" data-range="6m" aria-pressed="false" data-i18n="chart.range.6m">6M</button>
+            <button type="button" data-range="1y" aria-pressed="true" data-i18n="chart.range.1y">1Y</button>
+            <button type="button" data-range="2y" aria-pressed="false" data-i18n="chart.range.2y">2Y</button>
+            <button type="button" data-range="all" aria-pressed="false" data-i18n="chart.range.all">All</button>
           </div>
         </div>
-        <div id="price-chart" class="chart-placeholder" aria-label="Candlestick price chart"></div>
-        <div id="volume-chart" class="volume-placeholder" aria-label="Volume chart"></div>
-        <div id="crosshair-detail" class="detail-strip" role="status" aria-live="polite">
+        <div id="price-chart" class="chart-placeholder" aria-label="Candlestick price chart" data-i18n-aria-label="chart.priceAria"></div>
+        <div id="volume-chart" class="volume-placeholder" aria-label="Volume chart" data-i18n-aria-label="chart.volumeAria"></div>
+        <div id="crosshair-detail" class="detail-strip" role="status" aria-live="polite" data-i18n="chart.selectHint">
           Select a ticker to inspect OHLCV and indicator values.
         </div>
       </section>
@@ -123,28 +133,28 @@
         <section class="panel" aria-labelledby="factor-title">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Normalized diagnostics</p>
-              <h2 id="factor-title">Factor overview</h2>
+              <p class="eyebrow" data-i18n="factor.eyebrow">Normalized diagnostics</p>
+              <h2 id="factor-title" data-i18n="factor.title">Factor overview</h2>
             </div>
           </div>
-          <p class="safety-copy">Display scores organize observations; they are not probabilities.</p>
-          <div id="factor-overview" class="empty-state">Factor diagnostics load with a selected ticker.</div>
+          <p class="safety-copy" data-i18n="factor.disclaimer">Display scores organize observations; they are not probabilities.</p>
+          <div id="factor-overview" class="empty-state" data-i18n="factor.empty">Factor diagnostics load with a selected ticker.</div>
           <details class="factor-detail">
-            <summary>Factor detail table</summary>
+            <summary data-i18n="factor.details">Factor detail table</summary>
             <div class="table-scroll">
               <table id="factor-table">
-              <caption>Raw factor observations and methodology</caption>
+              <caption data-i18n="factor.caption">Raw factor observations and methodology</caption>
               <thead>
                 <tr>
-                  <th>Factor</th>
-                  <th>Formatted value</th>
-                  <th>Raw value</th>
-                  <th>Percentile / peers</th>
-                  <th>Display score</th>
-                  <th>Date</th>
-                  <th>Description / version</th>
-                  <th>Methodology</th>
-                  <th>Missing reason</th>
+                  <th data-i18n="factor.column.factor">Factor</th>
+                  <th data-i18n="factor.column.formatted">Formatted value</th>
+                  <th data-i18n="factor.column.raw">Raw value</th>
+                  <th data-i18n="factor.column.percentile">Percentile / peers</th>
+                  <th data-i18n="factor.column.score">Display score</th>
+                  <th data-i18n="factor.column.date">Date</th>
+                  <th data-i18n="factor.column.description">Description / version</th>
+                  <th data-i18n="factor.column.methodology">Methodology</th>
+                  <th data-i18n="factor.column.missing">Missing reason</th>
                 </tr>
               </thead>
               <tbody id="factor-table-body"></tbody>
@@ -154,31 +164,32 @@
         </section>
 
         <section class="panel" aria-labelledby="structure-title">
-          <p class="eyebrow">Descriptive setup</p>
-          <h2 id="structure-title">Structure</h2>
-          <div id="structure-content" class="empty-state">Structure diagnostics load with a selected ticker.</div>
+          <p class="eyebrow" data-i18n="structure.eyebrow">Descriptive setup</p>
+          <h2 id="structure-title" data-i18n="structure.title">Structure</h2>
+          <div id="structure-content" class="empty-state" data-i18n="structure.empty">Structure diagnostics load with a selected ticker.</div>
         </section>
       </div>
 
       <section class="panel" aria-labelledby="scenario-title">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">Historical conditional ranges</p>
-            <h2 id="scenario-title">Scenarios</h2>
+            <p class="eyebrow" data-i18n="scenario.eyebrow">Historical conditional ranges</p>
+            <h2 id="scenario-title" data-i18n="scenario.title">Scenarios</h2>
           </div>
         </div>
-        <p class="safety-copy">Historical scenarios describe ranges; they are not predicted probabilities.</p>
+        <p class="safety-copy" data-i18n="scenario.disclaimer">Historical scenarios describe ranges; they are not predicted probabilities.</p>
         <div class="scenario-layout">
-          <div id="scenario-chart" class="scenario-placeholder" aria-label="Historical scenario chart"></div>
-          <div id="scenario-meta" class="detail-strip">Scenario methodology loads with a selected ticker.</div>
+          <div id="scenario-chart" class="scenario-placeholder" aria-label="Historical scenario chart"
+               data-i18n-aria-label="scenario.chartAria"></div>
+          <div id="scenario-meta" class="detail-strip" data-i18n="scenario.empty">Scenario methodology loads with a selected ticker.</div>
         </div>
       </section>
     </main>
   </div>
 
   <footer>
-    <span>Research and education only. This workstation does not provide investment advice.</span>
-    <a href="https://www.tradingview.com/" rel="noopener noreferrer">Charts by TradingView</a>
+    <span data-i18n="footer.disclaimer">Research and education only. This workstation does not provide investment advice.</span>
+    <a href="https://www.tradingview.com/" rel="noopener noreferrer" data-i18n="footer.attribution">Charts by TradingView</a>
   </footer>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>

@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { getLocale, subscribeLocale, t } from "./i18n.js";
 
 const TERMINAL_STATES = new Set(["idle", "completed", "partial", "rate_limited", "failed"]);
 const POLL_INTERVAL_MS = 1000;
@@ -23,25 +24,39 @@ function progress(snapshot) {
   return { completed, total, updated };
 }
 
-export function describeUpdateSnapshot(snapshot = {}) {
+function updateMessage(snapshot = {}, locale = getLocale()) {
   const { completed, total, updated } = progress(snapshot);
   if (snapshot.state === "running") {
-    const ticker = snapshot.current_ticker ? ` · checking ${snapshot.current_ticker}` : "";
-    return `Price-only update running: ${completed}/${total} checked · ${updated} updated${ticker}`;
+    return {
+      key: "update.state.running",
+      params: {
+        completed,
+        total,
+        updated,
+        ticker: snapshot.current_ticker
+          ? t("update.state.runningTicker", { ticker: snapshot.current_ticker }, locale)
+          : "",
+      },
+    };
   }
   if (snapshot.state === "completed") {
-    return `Price-only update finished: ${updated}/${total} updated.`;
+    return { key: "update.state.completed", params: { updated, total } };
   }
   if (snapshot.state === "partial") {
-    return `Price-only update stopped with partial results: ${completed}/${total} checked · ${updated} updated.`;
+    return { key: "update.state.partial", params: { completed, total, updated } };
   }
   if (snapshot.state === "rate_limited") {
-    return `Rate limited after ${completed}/${total} checked; ${updated} updated. Resume preserves remaining work.`;
+    return { key: "update.state.rateLimited", params: { completed, total, updated } };
   }
   if (snapshot.state === "failed") {
-    return `Price-only update failed after ${completed}/${total} checked; ${updated} updated.`;
+    return { key: "update.state.failed", params: { completed, total, updated } };
   }
-  return "Price-only update status: idle";
+  return { key: "update.state.idle", params: {} };
+}
+
+export function describeUpdateSnapshot(snapshot = {}, locale = getLocale()) {
+  const message = updateMessage(snapshot, locale);
+  return t(message.key, message.params, locale);
 }
 
 export function shouldReloadSelectedTicker(selectedTicker, observationDate, rows) {
@@ -59,10 +74,14 @@ function setTone(element, tone) {
   else delete element.dataset.tone;
 }
 
-function buttonLabel(snapshot) {
-  if (snapshot.state === "rate_limited" && snapshot.resumable) return "Resume price update";
-  if (snapshot.state === "failed" && snapshot.resumable) return "Resume price update";
-  return "Update market data";
+function buttonLabel(snapshot, locale) {
+  if (snapshot.state === "rate_limited" && snapshot.resumable) {
+    return t("update.button.resume", {}, locale);
+  }
+  if (snapshot.state === "failed" && snapshot.resumable) {
+    return t("update.button.resume", {}, locale);
+  }
+  return t("update.button.start", {}, locale);
 }
 
 export function createUpdateController(options = {}) {
@@ -76,11 +95,21 @@ export function createUpdateController(options = {}) {
   let generation = 0;
   let destroyed = false;
   let statusFailureCount = 0;
+  let locale = getLocale();
+  let lastSnapshot = { state: "idle" };
+  let lastStatus = { key: "update.state.idle", params: {} };
+
+  function localizedStatus(key, params = {}) {
+    lastStatus = { key, params };
+    if (status) status.textContent = t(key, params, locale);
+  }
 
   function render(snapshot) {
-    if (status) status.textContent = describeUpdateSnapshot(snapshot);
+    lastSnapshot = snapshot;
+    const message = updateMessage(snapshot, locale);
+    localizedStatus(message.key, message.params);
     if (button) {
-      button.textContent = buttonLabel(snapshot);
+      button.textContent = buttonLabel(snapshot, locale);
       button.disabled = snapshot.state === "running";
     }
     const errorTone = snapshot.state === "failed" ? "error" : null;
@@ -117,7 +146,7 @@ export function createUpdateController(options = {}) {
       await accept(snapshot, currentGeneration, false);
     } catch (_error) {
       if (destroyed || currentGeneration !== generation) return;
-      if (status) status.textContent = "Update status is temporarily unavailable.";
+      localizedStatus("update.statusUnavailable");
       setTone(status, "warning");
       if (button) button.disabled = false;
     }
@@ -131,9 +160,7 @@ export function createUpdateController(options = {}) {
     } catch (error) {
       if (destroyed || currentGeneration !== generation) return;
       statusFailureCount += 1;
-      if (status) {
-        status.textContent = "Update status is temporarily unavailable; still running and retrying.";
-      }
+      localizedStatus("update.statusRetrying");
       setTone(status, "warning");
       if (button) button.disabled = true;
       const retryDelay = updateRetryDelay(statusFailureCount);
@@ -157,7 +184,15 @@ export function createUpdateController(options = {}) {
         await poll(currentGeneration);
         return;
       }
-      if (status) status.textContent = error && error.message ? error.message : "Unable to start price update";
+      if (error && error.message) {
+        lastStatus = null;
+        if (status) {
+          status.removeAttribute?.("data-i18n");
+          status.textContent = error.message;
+        }
+      } else {
+        localizedStatus("update.startFailed");
+      }
       setTone(status, "error");
       if (button) button.disabled = false;
     }
@@ -169,6 +204,17 @@ export function createUpdateController(options = {}) {
     render({ state: "idle" });
   }
 
+  const unsubscribeLocale = subscribeLocale((nextLocale) => {
+    locale = nextLocale;
+    if (lastStatus && status) {
+      if (lastStatus.key === "update.state.running") {
+        lastStatus = updateMessage(lastSnapshot, locale);
+      }
+      status.textContent = t(lastStatus.key, lastStatus.params, locale);
+    }
+    if (button) button.textContent = buttonLabel(lastSnapshot, locale);
+  });
+
   return Object.freeze({
     initialize,
     start,
@@ -177,6 +223,7 @@ export function createUpdateController(options = {}) {
       destroyed = true;
       generation += 1;
       clearPoll();
+      unsubscribeLocale();
       if (button && typeof button.removeEventListener === "function") {
         button.removeEventListener("click", clickHandler);
       }

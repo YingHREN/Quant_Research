@@ -1,6 +1,13 @@
 import { api } from "./api.js";
 import { createLinkedCharts } from "./charts.js";
 import { renderFactors, renderStructures } from "./factors.js";
+import {
+  applyDocumentLocale,
+  getLocale,
+  setLocale,
+  subscribeLocale,
+  t,
+} from "./i18n.js";
 import { renderScenarios } from "./scenarios.js";
 import {
   chooseInitialTicker,
@@ -15,6 +22,9 @@ const elements = {};
 let stockRequestSequence = 0;
 let chartController = null;
 let updateController = null;
+let unsubscribeLocale = null;
+let universeError = null;
+let researchError = null;
 
 function byId(id) {
   return document.getElementById(id);
@@ -43,9 +53,14 @@ export function clearStockQuote(fields) {
   }
 }
 
-function describeError(error) {
-  if (error && typeof error.message === "string") return error.message;
-  return "The local dashboard could not complete the request";
+function errorState(error) {
+  return error && typeof error.message === "string"
+    ? { original: error.message }
+    : { key: "request.failed" };
+}
+
+function errorText(error, locale = getLocale()) {
+  return error.original || t(error.key, {}, locale);
 }
 
 function currentRows() {
@@ -63,11 +78,14 @@ function paintUniverse() {
   renderUniverse(elements.universeList, rows, {
     selectedTicker: state.selectedTicker,
     onSelect: selectTicker,
+    locale: state.locale,
   });
   setText(elements.universeCount, `${rows.length}/${state.universe.length}`);
   setText(
     elements.universeStatus,
-    state.universe.length ? `${rows.length} ticker${rows.length === 1 ? "" : "s"} shown` : "No local tickers available",
+    (universeError && errorText(universeError, state.locale)) || (state.universe.length
+      ? t("universe.shown", { shown: rows.length, total: state.universe.length }, state.locale)
+      : t("universe.none", {}, state.locale)),
   );
   elements.universeStatus.removeAttribute("data-tone");
 }
@@ -77,7 +95,9 @@ function renderWarnings(warnings) {
   const fragment = document.createDocumentFragment();
   warnings.forEach((warning) => {
     const item = document.createElement("li");
-    item.textContent = String(warning).replaceAll("_", " ");
+    const key = `warning.${warning}`;
+    const localized = t(key, {}, store.getState().locale);
+    item.textContent = localized === key ? String(warning).replaceAll("_", " ") : localized;
     fragment.append(item);
   });
   elements.dataWarnings.append(fragment);
@@ -85,6 +105,7 @@ function renderWarnings(warnings) {
 
 function renderStockHeader(payload) {
   const summary = payload.summary || {};
+  const locale = store.getState().locale;
   setText(elements.selectedTicker, payload.ticker);
   setText(elements.selectedClose, formatNumber(summary.close));
   setText(
@@ -94,9 +115,22 @@ function renderStockHeader(payload) {
   setText(elements.observationDate, payload.observation_date);
   setText(
     elements.securityState,
-    summary.inactive ? "Inactive" : summary.stale ? "Stale" : "Current",
+    t(
+      summary.inactive
+        ? "security.state.inactive"
+        : summary.stale ? "security.state.stale" : "security.state.current",
+      {},
+      locale,
+    ),
   );
-  setText(elements.researchStatus, `Loaded observations through ${payload.observation_date || "an unknown date"}.`);
+  setText(
+    elements.researchStatus,
+    t(
+      "security.loaded",
+      { date: payload.observation_date || t("security.unknownDate", {}, locale) },
+      locale,
+    ),
+  );
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
 
@@ -115,19 +149,22 @@ function clearResearchPanels() {
   renderScenarios(null, {
     chart: elements.scenarioChart,
     metadata: elements.scenarioMeta,
+    locale: store.getState().locale,
   });
 }
 
 async function selectTicker(ticker) {
   if (!ticker) return;
   const requestSequence = ++stockRequestSequence;
+  researchError = null;
   store.setState({ selectedTicker: ticker, stockPayload: null });
   persistSelectedTicker(ticker);
   paintUniverse();
   setText(elements.selectedTicker, ticker);
-  setText(elements.securityState, "Loading");
+  const locale = store.getState().locale;
+  setText(elements.securityState, t("security.state.loading", {}, locale));
   clearStockQuote(elements);
-  setText(elements.researchStatus, `Loading ${ticker} from the local database…`);
+  setText(elements.researchStatus, t("security.loading", { ticker }, locale));
   elements.researchStatus.removeAttribute("data-tone");
   renderWarnings([]);
   clearResearchPanels();
@@ -136,6 +173,7 @@ async function selectTicker(ticker) {
     const payload = await api.getStock(ticker);
     if (requestSequence !== stockRequestSequence) return;
     store.setState({ stockPayload: payload });
+    researchError = null;
     renderStockHeader(payload);
     chartController.setChartData(payload);
     renderFactors(payload.factors, factorRenderOptions());
@@ -143,11 +181,13 @@ async function selectTicker(ticker) {
     renderScenarios(payload.scenarios, {
       chart: elements.scenarioChart,
       metadata: elements.scenarioMeta,
+      locale: store.getState().locale,
     });
   } catch (error) {
     if (requestSequence !== stockRequestSequence) return;
-    setText(elements.securityState, "Unavailable");
-    setText(elements.researchStatus, describeError(error));
+    researchError = errorState(error);
+    setText(elements.securityState, t("security.state.unavailable", {}, store.getState().locale));
+    setText(elements.researchStatus, errorText(researchError, store.getState().locale));
     elements.researchStatus.dataset.tone = "error";
   }
 }
@@ -156,26 +196,30 @@ function coverageText(payload) {
   const buckets = payload && payload.freshness && payload.freshness.by_date;
   const current = Array.isArray(buckets) && buckets.length ? buckets[0].tickers : 0;
   const total = Array.isArray(payload.tickers) ? payload.tickers.length : 0;
-  return `${current}/${total} current`;
+  return t("header.coverageValue", { current, total }, store.getState().locale);
 }
 
 async function loadUniverse() {
-  setText(elements.universeStatus, "Loading local universe…");
+  setText(elements.universeStatus, t("universe.loading", {}, store.getState().locale));
   try {
     const payload = await api.getUniverse();
+    universeError = null;
     const rows = Array.isArray(payload.tickers) ? payload.tickers : [];
     const selectedTicker = chooseInitialTicker(rows, readStoredTicker());
     store.setState({ universePayload: payload, universe: rows, selectedTicker });
-    setText(elements.marketDate, payload.asof || "No data");
+    setText(elements.marketDate, payload.asof || t("header.noData", {}, store.getState().locale));
     setText(elements.marketCoverage, coverageText(payload));
     paintUniverse();
     if (selectedTicker) await selectTicker(selectedTicker);
   } catch (error) {
+    universeError = errorState(error);
     store.setState({ universe: [], universePayload: null, selectedTicker: null });
     paintUniverse();
-    setText(elements.universeStatus, describeError(error));
     elements.universeStatus.dataset.tone = "error";
-    setText(elements.researchStatus, "Stock research is unavailable until the local universe loads.");
+    setText(
+      elements.researchStatus,
+      t("security.unavailableUntilUniverse", {}, store.getState().locale),
+    );
   }
 }
 
@@ -185,10 +229,11 @@ async function refreshUniverseAfterUpdate() {
   const previousObservationDate = previous.stockPayload?.observation_date || null;
   try {
     const payload = await api.getUniverse();
+    universeError = null;
     const rows = Array.isArray(payload.tickers) ? payload.tickers : [];
     const selectedTicker = chooseInitialTicker(rows, previousTicker);
     store.setState({ universePayload: payload, universe: rows, selectedTicker });
-    setText(elements.marketDate, payload.asof || "No data");
+    setText(elements.marketDate, payload.asof || t("header.noData", {}, store.getState().locale));
     setText(elements.marketCoverage, coverageText(payload));
     paintUniverse();
 
@@ -202,7 +247,8 @@ async function refreshUniverseAfterUpdate() {
       await selectTicker(selectedTicker);
     }
   } catch (error) {
-    setText(elements.universeStatus, describeError(error));
+    universeError = errorState(error);
+    setText(elements.universeStatus, errorText(universeError, store.getState().locale));
     elements.universeStatus.dataset.tone = "error";
   }
 }
@@ -219,8 +265,15 @@ function bindControls() {
   elements.sortDirection.addEventListener("click", () => {
     const direction = store.getState().sortDirection === "asc" ? "desc" : "asc";
     store.setState({ sortDirection: direction });
-    setText(elements.sortDirection, direction === "asc" ? "Ascending" : "Descending");
-    elements.sortDirection.setAttribute("aria-label", `Sort ${direction === "asc" ? "ascending" : "descending"}`);
+    const locale = store.getState().locale;
+    setText(
+      elements.sortDirection,
+      t(`universe.sort.${direction === "asc" ? "ascending" : "descending"}`, {}, locale),
+    );
+    elements.sortDirection.setAttribute(
+      "aria-label",
+      t(`universe.sort.${direction === "asc" ? "ascendingAria" : "descendingAria"}`, {}, locale),
+    );
     paintUniverse();
   });
   document.querySelectorAll("[data-filter]").forEach((control) => {
@@ -238,6 +291,41 @@ function bindControls() {
       chartController.setRange(control.dataset.range);
     });
   });
+  elements.localeControls.forEach((control) => {
+    control.addEventListener("click", () => setLocale(control.dataset.locale));
+  });
+}
+
+function applyLocale(locale) {
+  applyDocumentLocale(document, locale);
+  store.setState({ locale });
+  const state = store.getState();
+  const direction = state.sortDirection;
+  setText(
+    elements.sortDirection,
+    t(`universe.sort.${direction === "asc" ? "ascending" : "descending"}`, {}, locale),
+  );
+  elements.sortDirection.setAttribute(
+    "aria-label",
+    t(`universe.sort.${direction === "asc" ? "ascendingAria" : "descendingAria"}`, {}, locale),
+  );
+  paintUniverse();
+  if (state.stockPayload) {
+    renderStockHeader(state.stockPayload);
+    renderFactors(state.stockPayload.factors, factorRenderOptions());
+    renderStructures(state.stockPayload.structures, elements.structureContent);
+    renderScenarios(state.stockPayload.scenarios, {
+      chart: elements.scenarioChart,
+      metadata: elements.scenarioMeta,
+      locale,
+    });
+  } else if (researchError) {
+    setText(elements.securityState, t("security.state.unavailable", {}, locale));
+    setText(elements.researchStatus, errorText(researchError, locale));
+  } else if (state.selectedTicker) {
+    setText(elements.securityState, t("security.state.loading", {}, locale));
+    setText(elements.researchStatus, t("security.loading", { ticker: state.selectedTicker }, locale));
+  }
 }
 
 function captureElements() {
@@ -268,11 +356,14 @@ function captureElements() {
     updateData: byId("update-data"),
     updateStatus: byId("update-status"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
+    localeControls: [...document.querySelectorAll("[data-locale]")],
   });
 }
 
 export async function initializeDashboard() {
   captureElements();
+  applyDocumentLocale(document, getLocale());
+  unsubscribeLocale = subscribeLocale(applyLocale);
   chartController = createLinkedCharts(
     elements.priceChart,
     elements.volumeChart,
@@ -293,5 +384,6 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", () => {
     chartController?.destroy();
     updateController?.destroy();
+    unsubscribeLocale?.();
   }, { once: true });
 }
