@@ -584,6 +584,65 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-range="2y"', html)
         self.assertIn('data-range="all"', html)
 
+    def test_chart_dates_are_deterministic(self):
+        module_uri = (STATIC / "js/charts.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            const created = [];
+            function node() {{
+              return {{textContent: '', className: '', children: [],
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }}}};
+            }}
+            globalThis.document = {{ createElement: () => node() }};
+            function chart(options) {{
+              const scale = {{subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}}, setVisibleLogicalRange() {{}}, fitContent() {{}}}};
+              const value = {{options, applied: [], timeScale: () => scale,
+                addSeries(_type, seriesOptions) {{
+                  return {{options: seriesOptions, setData() {{}}, createPriceLine() {{ return {{}}; }},
+                    removePriceLine() {{}}, applyOptions() {{}}}};
+                }}, subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
+                subscribeClick() {{}}, unsubscribeClick() {{}},
+                applyOptions(next) {{ this.applied.push(next); }}, remove() {{}},
+                setCrosshairPosition() {{}}, clearCrosshairPosition() {{}}}};
+              created.push(value); return value;
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
+              createChart(_element, options) {{ return chart(options); }},
+              createSeriesMarkers() {{ return {{setMarkers() {{}}}}; }},
+            }};
+            const {{ createLinkedCharts }} = await import({json.dumps(module_uri)});
+            const detail = node();
+            const controller = createLinkedCharts(
+              {{clientWidth: 800, clientHeight: 400}},
+              {{clientWidth: 800, clientHeight: 180}}, detail,
+              {{locale: 'en'}},
+            );
+            controller.setChartData({{chart: [{{time: '2026-07-17', open: 1, high: 2, low: 0,
+              close: 1.5, volume: 10}}]}});
+            controller.setLocale('zh-CN');
+            for (const value of created) {{
+              assert.equal(value.options.timeScale.tickMarkFormatter('2026-07-17'), '07-17');
+              assert.equal(value.options.localization.timeFormatter({{year: 2026, month: 7, day: 17}}),
+                '2026-07-17');
+              assert.deepEqual(value.applied.at(-1), {{
+                timeScale: {{tickMarkFormatter: value.options.timeScale.tickMarkFormatter}},
+                localization: {{timeFormatter: value.options.localization.timeFormatter}},
+              }});
+            }}
+            assert.equal(detail.children[0].children[0].textContent, '2026-07-17');
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_chart_adapter_plots_shape_levels_annotations_and_volume_diagnostics(self):
         module_uri = (STATIC / "js/charts.js").as_uri()
         script = f"""

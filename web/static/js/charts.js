@@ -403,6 +403,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   function setLocale(nextLocale) {
     if (destroyed) return;
     locale = nextLocale || getLocale();
+    const dateOptions = {
+      timeScale: { tickMarkFormatter: formatChartTickDate },
+      localization: { timeFormatter: formatFullDate },
+    };
+    priceChart.applyOptions(dateOptions);
+    volumeChart.applyOptions(dateOptions);
     volumeMa20Series.applyOptions?.({ title: t("chart.series.volumeMa20", {}, locale) });
     volumeRatioSeries.applyOptions?.({ title: t("chart.series.volumeRatio", {}, locale) });
     renderDecorations(lastPayload);
