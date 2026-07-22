@@ -16,7 +16,15 @@ function humanize(value, locale) {
   return String(value).replaceAll("_", " ");
 }
 
+function methodologyText(provider, methodology, locale, params = {}, suffix = "") {
+  const key = `scenario.methodology.${provider}${suffix}`;
+  const localized = t(key, params, locale);
+  if (localized !== key) return localized;
+  return methodology ? String(methodology) : t("scenario.methodologyUnavailable", {}, locale);
+}
+
 export function scenarioView(payload, locale = getLocale()) {
+  const provider = payload && payload.provider ? String(payload.provider) : "";
   const horizons = payload && payload.horizons && typeof payload.horizons === "object"
     ? Object.values(payload.horizons)
     : [];
@@ -55,16 +63,20 @@ export function scenarioView(payload, locale = getLocale()) {
         locale,
       ),
       detail: horizon.available
-        ? (horizon.methodology || t("scenario.methodologyUnavailable", {}, locale))
+        ? methodologyText(
+          provider,
+          horizon.methodology,
+          locale,
+          { count: sampleCount, sessions },
+          ".horizon",
+        )
         : humanize(horizon.missing_reason, locale),
     };
   });
 
   return {
     locale,
-    methodology: payload && payload.methodology
-      ? String(payload.methodology)
-      : t("scenario.methodologyUnavailable", {}, locale),
+    methodology: methodologyText(provider, payload && payload.methodology, locale),
     observationDate: payload && payload.observation_date ? String(payload.observation_date) : "—",
     horizons: horizonViews,
     series,

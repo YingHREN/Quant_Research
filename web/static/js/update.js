@@ -1,5 +1,5 @@
 import { api } from "./api.js";
-import { getLocale, subscribeLocale, t } from "./i18n.js";
+import { getLocale, subscribeLocale, t, translateError } from "./i18n.js";
 
 const TERMINAL_STATES = new Set(["idle", "completed", "partial", "rate_limited", "failed"]);
 const POLL_INTERVAL_MS = 1000;
@@ -104,6 +104,11 @@ export function createUpdateController(options = {}) {
     if (status) status.textContent = t(key, params, locale);
   }
 
+  function localizedErrorStatus(error, fallbackKey) {
+    lastStatus = { error, fallbackKey };
+    if (status) status.textContent = translateError(error, fallbackKey, locale);
+  }
+
   function render(snapshot) {
     lastSnapshot = snapshot;
     const message = updateMessage(snapshot, locale);
@@ -184,15 +189,7 @@ export function createUpdateController(options = {}) {
         await poll(currentGeneration);
         return;
       }
-      if (error && error.message) {
-        lastStatus = null;
-        if (status) {
-          status.removeAttribute?.("data-i18n");
-          status.textContent = error.message;
-        }
-      } else {
-        localizedStatus("update.startFailed");
-      }
+      localizedErrorStatus(error, "update.startFailed");
       setTone(status, "error");
       if (button) button.disabled = false;
     }
@@ -207,10 +204,14 @@ export function createUpdateController(options = {}) {
   const unsubscribeLocale = subscribeLocale((nextLocale) => {
     locale = nextLocale;
     if (lastStatus && status) {
-      if (lastStatus.key === "update.state.running") {
+      if (lastStatus.error) {
+        status.textContent = translateError(lastStatus.error, lastStatus.fallbackKey, locale);
+      } else if (lastStatus.key === "update.state.running") {
         lastStatus = updateMessage(lastSnapshot, locale);
+        status.textContent = t(lastStatus.key, lastStatus.params, locale);
+      } else {
+        status.textContent = t(lastStatus.key, lastStatus.params, locale);
       }
-      status.textContent = t(lastStatus.key, lastStatus.params, locale);
     }
     if (button) button.textContent = buttonLabel(lastSnapshot, locale);
   });

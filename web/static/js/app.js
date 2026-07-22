@@ -7,6 +7,7 @@ import {
   setLocale,
   subscribeLocale,
   t,
+  translateError,
 } from "./i18n.js";
 import { renderScenarios } from "./scenarios.js";
 import {
@@ -54,13 +55,14 @@ export function clearStockQuote(fields) {
 }
 
 function errorState(error) {
-  return error && typeof error.message === "string"
-    ? { original: error.message }
-    : { key: "request.failed" };
+  return {
+    code: error && typeof error.code === "string" ? error.code : "",
+    message: error && typeof error.message === "string" ? error.message : "",
+  };
 }
 
 function errorText(error, locale = getLocale()) {
-  return error.original || t(error.key, {}, locale);
+  return translateError(error, "request.failed", locale);
 }
 
 function currentRows() {
@@ -87,7 +89,8 @@ function paintUniverse() {
       ? t("universe.shown", { shown: rows.length, total: state.universe.length }, state.locale)
       : t("universe.none", {}, state.locale)),
   );
-  elements.universeStatus.removeAttribute("data-tone");
+  if (universeError) elements.universeStatus.dataset.tone = "error";
+  else elements.universeStatus.removeAttribute("data-tone");
 }
 
 function renderWarnings(warnings) {
@@ -139,13 +142,14 @@ function factorRenderOptions() {
     overview: elements.factorOverview,
     tableBody: elements.factorTableBody,
     groupMetadata: store.getState().universePayload?.factor_groups,
+    locale: store.getState().locale,
   };
 }
 
 function clearResearchPanels() {
   chartController.setChartData({ chart: [] });
   renderFactors([], factorRenderOptions());
-  renderStructures(null, elements.structureContent);
+  renderStructures(null, elements.structureContent, store.getState().locale);
   renderScenarios(null, {
     chart: elements.scenarioChart,
     metadata: elements.scenarioMeta,
@@ -177,7 +181,7 @@ async function selectTicker(ticker) {
     renderStockHeader(payload);
     chartController.setChartData(payload);
     renderFactors(payload.factors, factorRenderOptions());
-    renderStructures(payload.structures, elements.structureContent);
+    renderStructures(payload.structures, elements.structureContent, store.getState().locale);
     renderScenarios(payload.scenarios, {
       chart: elements.scenarioChart,
       metadata: elements.scenarioMeta,
@@ -217,9 +221,14 @@ async function loadUniverse() {
     paintUniverse();
     elements.universeStatus.dataset.tone = "error";
     setText(
+      elements.securityState,
+      t("security.state.unavailable", {}, store.getState().locale),
+    );
+    setText(
       elements.researchStatus,
       t("security.unavailableUntilUniverse", {}, store.getState().locale),
     );
+    elements.researchStatus.dataset.tone = "error";
   }
 }
 
@@ -310,15 +319,24 @@ function applyLocale(locale) {
     t(`universe.sort.${direction === "asc" ? "ascendingAria" : "descendingAria"}`, {}, locale),
   );
   paintUniverse();
+  chartController?.setLocale(locale);
+  if (state.universePayload) {
+    setText(elements.marketDate, state.universePayload.asof || t("header.noData", {}, locale));
+    setText(elements.marketCoverage, coverageText(state.universePayload));
+  }
   if (state.stockPayload) {
     renderStockHeader(state.stockPayload);
     renderFactors(state.stockPayload.factors, factorRenderOptions());
-    renderStructures(state.stockPayload.structures, elements.structureContent);
+    renderStructures(state.stockPayload.structures, elements.structureContent, locale);
     renderScenarios(state.stockPayload.scenarios, {
       chart: elements.scenarioChart,
       metadata: elements.scenarioMeta,
       locale,
     });
+  } else if (universeError) {
+    setText(elements.securityState, t("security.state.unavailable", {}, locale));
+    setText(elements.researchStatus, t("security.unavailableUntilUniverse", {}, locale));
+    elements.researchStatus.dataset.tone = "error";
   } else if (researchError) {
     setText(elements.securityState, t("security.state.unavailable", {}, locale));
     setText(elements.researchStatus, errorText(researchError, locale));
@@ -368,6 +386,7 @@ export async function initializeDashboard() {
     elements.priceChart,
     elements.volumeChart,
     elements.crosshairDetail,
+    { locale: getLocale() },
   );
   updateController = createUpdateController({
     button: elements.updateData,

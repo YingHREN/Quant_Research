@@ -1,3 +1,5 @@
+import { getLocale, t } from "./i18n.js";
+
 function humanize(value) {
   if (value == null || value === "") return "—";
   return String(value)
@@ -32,18 +34,28 @@ function ordinal(value) {
   return `${rounded}th`;
 }
 
-function percentileText(factor) {
+function localizedMetadata(entity, namespace, field, fallback, locale) {
+  const key = `${namespace}.${entity && entity.key}.${field}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? fallback : localized;
+}
+
+function percentileText(factor, locale) {
   const count = factor.peer_count ?? factor.percentile_peer_count;
   const peers = Number.isInteger(count) && count >= 0
-    ? `${count} same-date peer${count === 1 ? "" : "s"}`
-    : "peer count unavailable";
+    ? t("factor.peers.sameDate", { count, suffix: count === 1 ? "" : "s" }, locale)
+    : t("factor.peers.unavailable", {}, locale);
   const percentile = finite(factor.percentile)
-    ? `${ordinal(factor.percentile * 100)} percentile`
-    : "Unavailable";
+    ? t(
+      "factor.percentile.value",
+      { percentile: locale === "en" ? ordinal(factor.percentile * 100) : Math.round(factor.percentile * 100) },
+      locale,
+    )
+    : t("factor.percentile.unavailable", {}, locale);
   return `${percentile} · ${peers}`;
 }
 
-function normalizeGroupMetadata(groupMetadata) {
+function normalizeGroupMetadata(groupMetadata, locale) {
   const seen = new Set();
   return (Array.isArray(groupMetadata) ? groupMetadata : []).flatMap((metadata) => {
     const key = typeof metadata === "string"
@@ -57,22 +69,34 @@ function normalizeGroupMetadata(groupMetadata) {
     const overview = typeof metadata === "string" ? true : Boolean(metadata && metadata.overview);
     return [{
       key: normalizedKey,
-      label: suppliedLabel || humanize(normalizedKey),
-      methodology: suppliedMethodology || "—",
+      label: localizedMetadata(
+        { key: normalizedKey },
+        "factor.group",
+        "label",
+        suppliedLabel || humanize(normalizedKey),
+        locale,
+      ),
+      methodology: localizedMetadata(
+        { key: normalizedKey },
+        "factor.group",
+        "methodology",
+        suppliedMethodology || "—",
+        locale,
+      ),
       overview,
       factors: [],
     }];
   });
 }
 
-export function groupFactorResults(results, groupMetadata = []) {
+export function groupFactorResults(results, groupMetadata = [], locale = getLocale()) {
   const factors = Array.isArray(results) ? results : [];
-  const configuredGroups = normalizeGroupMetadata(groupMetadata);
+  const configuredGroups = normalizeGroupMetadata(groupMetadata, locale);
   const known = new Map(configuredGroups.map((group) => [group.key, group]));
   const other = {
     key: "other",
-    label: "Other",
-    methodology: "Unconfigured factor groups remain visible in the detail table.",
+    label: t("factor.group.other.label", {}, locale),
+    methodology: t("factor.group.other.methodology", {}, locale),
     overview: false,
     factors: [],
   };
@@ -87,25 +111,42 @@ export function groupFactorResults(results, groupMetadata = []) {
   return groups;
 }
 
-export function factorDetailRows(results) {
+function localizedMissingReason(reason, locale) {
+  if (!reason) return "—";
+  const key = `factor.missing.${reason}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? humanize(reason).toLowerCase() : localized;
+}
+
+export function factorDetailRows(results, locale = getLocale()) {
   return (Array.isArray(results) ? results : []).map((factor) => ({
     key: factor.key == null ? "" : String(factor.key),
-    label: factor.label || humanize(factor.key),
+    label: localizedMetadata(
+      factor,
+      "factor.item",
+      "label",
+      factor.label || humanize(factor.key),
+      locale,
+    ),
     formattedValue: factor.formatted == null ? "—" : String(factor.formatted),
     rawValue: rawValueText(factor.raw_value),
-    percentile: percentileText(factor),
+    percentile: percentileText(factor, locale),
     displayScore: finite(factor.display_score) ? factor.display_score.toFixed(1) : "—",
     observationDate: factor.observation_date || "—",
-    description: factor.description || "—",
-    methodology: factor.methodology || "—",
+    description: localizedMetadata(
+      factor, "factor.item", "description", factor.description || "—", locale,
+    ),
+    methodology: localizedMetadata(
+      factor, "factor.item", "methodology", factor.methodology || "—", locale,
+    ),
     version: factor.version || "—",
-    missingReason: factor.missing_reason ? humanize(factor.missing_reason).toLowerCase() : "—",
+    missingReason: localizedMissingReason(factor.missing_reason, locale),
     missing: Boolean(factor.missing),
   }));
 }
 
-export function overviewFactorGroups(results, groupMetadata = []) {
-  return groupFactorResults(results, groupMetadata)
+export function overviewFactorGroups(results, groupMetadata = [], locale = getLocale()) {
+  return groupFactorResults(results, groupMetadata, locale)
     .filter((group) => group.overview)
     .map((group) => ({
       ...group,
@@ -124,13 +165,13 @@ function appendText(parent, tagName, className, value) {
   return node;
 }
 
-function renderOverview(container, results, groupMetadata) {
+function renderOverview(container, results, groupMetadata, locale) {
   container.replaceChildren();
-  const groups = overviewFactorGroups(results, groupMetadata);
+  const groups = overviewFactorGroups(results, groupMetadata, locale);
 
   if (!groups.length) {
     container.className = "empty-state";
-    container.textContent = "No numeric display scores are available for this observation.";
+    container.textContent = t("factor.overviewEmpty", {}, locale);
     return;
   }
 
@@ -147,12 +188,19 @@ function renderOverview(container, results, groupMetadata) {
       const item = document.createElement("li");
       const heading = document.createElement("div");
       heading.className = "factor-bar-heading";
-      appendText(heading, "span", "", factor.label || humanize(factor.key));
+      const label = localizedMetadata(
+        factor,
+        "factor.item",
+        "label",
+        factor.label || humanize(factor.key),
+        locale,
+      );
+      appendText(heading, "span", "", label);
       appendText(heading, "strong", "", factor.display_score.toFixed(1));
       const track = document.createElement("div");
       track.className = "factor-bar-track";
       track.setAttribute("role", "meter");
-      track.setAttribute("aria-label", `${factor.label || humanize(factor.key)} display score`);
+      track.setAttribute("aria-label", t("factor.displayScoreAria", { label }, locale));
       track.setAttribute("aria-valuemin", "0");
       track.setAttribute("aria-valuemax", "100");
       track.setAttribute("aria-valuenow", String(factor.display_score));
@@ -169,15 +217,15 @@ function renderOverview(container, results, groupMetadata) {
   container.append(fragment);
 }
 
-function renderDetailTable(tableBody, results) {
+function renderDetailTable(tableBody, results, locale) {
   tableBody.replaceChildren();
-  const rows = factorDetailRows(results);
+  const rows = factorDetailRows(results, locale);
   if (!rows.length) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 9;
     cell.className = "empty-table-cell";
-    cell.textContent = "No factor diagnostics are available.";
+    cell.textContent = t("factor.tableEmpty", {}, locale);
     row.append(cell);
     tableBody.append(row);
     return;
@@ -207,20 +255,29 @@ function renderDetailTable(tableBody, results) {
 export function renderFactors(results, options = {}) {
   const overview = options.overview || document.getElementById("factor-overview");
   const tableBody = options.tableBody || document.getElementById("factor-table-body");
-  if (overview) renderOverview(overview, results, options.groupMetadata);
-  if (tableBody) renderDetailTable(tableBody, results);
+  const locale = options.locale || getLocale();
+  if (overview) renderOverview(overview, results, options.groupMetadata, locale);
+  if (tableBody) renderDetailTable(tableBody, results, locale);
 }
 
-function appendStructure(parent, key, value) {
+function structureLabel(key, locale) {
+  const translationKey = `structure.field.${key}`;
+  const localized = t(translationKey, {}, locale);
+  return localized === translationKey ? humanize(key) : localized;
+}
+
+function appendStructure(parent, key, value, locale) {
   const item = document.createElement("div");
   item.className = "structure-item";
-  appendText(item, "dt", "", humanize(key));
+  appendText(item, "dt", "", structureLabel(key, locale));
   const detail = document.createElement("dd");
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const nested = document.createElement("dl");
     nested.className = "structure-nested";
     const entries = Object.entries(value);
-    if (entries.length) entries.forEach(([nestedKey, nestedValue]) => appendStructure(nested, nestedKey, nestedValue));
+    if (entries.length) entries.forEach(
+      ([nestedKey, nestedValue]) => appendStructure(nested, nestedKey, nestedValue, locale),
+    );
     else appendText(nested, "span", "", "—");
     detail.append(nested);
   } else {
@@ -230,17 +287,21 @@ function appendStructure(parent, key, value) {
   parent.append(item);
 }
 
-export function renderStructures(structures, container = document.getElementById("structure-content")) {
+export function renderStructures(
+  structures,
+  container = document.getElementById("structure-content"),
+  locale = getLocale(),
+) {
   if (!container) return;
   container.replaceChildren();
   const entries = structures && typeof structures === "object" ? Object.entries(structures) : [];
   if (!entries.length) {
     container.className = "empty-state";
-    container.textContent = "No structure diagnostics are available.";
+    container.textContent = t("structure.noDiagnostics", {}, locale);
     return;
   }
   container.className = "structure-grid";
   const list = document.createElement("dl");
-  entries.forEach(([key, value]) => appendStructure(list, key, value));
+  entries.forEach(([key, value]) => appendStructure(list, key, value, locale));
   container.append(list);
 }

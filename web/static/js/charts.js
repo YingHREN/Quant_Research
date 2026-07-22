@@ -1,3 +1,5 @@
+import { getLocale, t } from "./i18n.js";
+
 const RANGE_BARS = Object.freeze({
   "3m": 63,
   "6m": 126,
@@ -60,32 +62,34 @@ function pointDeltaText(value) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)} pp`;
 }
 
-function crossText(value) {
-  return value === "above" ? "Crossed above" : value === "below" ? "Crossed below" : "—";
+function crossText(value, locale) {
+  return value === "above"
+    ? t("chart.cross.above", {}, locale)
+    : value === "below" ? t("chart.cross.below", {}, locale) : "—";
 }
 
-export function detailItems(row) {
+export function detailItems(row, locale = getLocale()) {
   return [
-    { label: "Open", value: numberText(row.open) },
-    { label: "High", value: numberText(row.high) },
-    { label: "Low", value: numberText(row.low) },
-    { label: "Close", value: numberText(row.close) },
-    { label: "Return", value: percentText(row.daily_return, true) },
-    { label: "True range", value: percentText(row.true_range_pct) },
-    { label: "Volume", value: numberText(row.volume, 0) },
-    { label: "Volume change", value: percentText(row.volume_change, true) },
-    { label: "Volume / MA20", value: finite(row.volume_ratio) ? `${row.volume_ratio.toFixed(2)}×` : "—" },
-    { label: "Volume ratio change", value: ratioDeltaText(row.volume_ratio_change) },
-    { label: "Volume MA20", value: numberText(row.volume_ma20, 0) },
-    { label: "EMA20", value: numberText(row.ema20) },
-    { label: "SMA50", value: numberText(row.sma50) },
-    { label: "SMA200", value: numberText(row.sma200) },
-    { label: "ATR20", value: numberText(row.atr20) },
-    { label: "Pivot", value: numberText(row.pivot) },
-    { label: "Pivot distance", value: percentText(row.pivot_distance_pct) },
-    { label: "Pivot-distance change", value: pointDeltaText(row.pivot_distance_change_pct) },
-    { label: "EMA20 cross", value: crossText(row.ema20_cross) },
-    { label: "SMA50 cross", value: crossText(row.sma50_cross) },
+    { label: t("chart.field.open", {}, locale), value: numberText(row.open) },
+    { label: t("chart.field.high", {}, locale), value: numberText(row.high) },
+    { label: t("chart.field.low", {}, locale), value: numberText(row.low) },
+    { label: t("chart.field.close", {}, locale), value: numberText(row.close) },
+    { label: t("chart.field.return", {}, locale), value: percentText(row.daily_return, true) },
+    { label: t("chart.field.trueRange", {}, locale), value: percentText(row.true_range_pct) },
+    { label: t("chart.field.volume", {}, locale), value: numberText(row.volume, 0) },
+    { label: t("chart.field.volumeChange", {}, locale), value: percentText(row.volume_change, true) },
+    { label: t("chart.field.volumeVsMa20", {}, locale), value: finite(row.volume_ratio) ? `${row.volume_ratio.toFixed(2)}×` : "—" },
+    { label: t("chart.field.volumeRatioChange", {}, locale), value: ratioDeltaText(row.volume_ratio_change) },
+    { label: t("chart.field.volumeMa20", {}, locale), value: numberText(row.volume_ma20, 0) },
+    { label: t("chart.field.ema20", {}, locale), value: numberText(row.ema20) },
+    { label: t("chart.field.sma50", {}, locale), value: numberText(row.sma50) },
+    { label: t("chart.field.sma200", {}, locale), value: numberText(row.sma200) },
+    { label: t("chart.field.atr20", {}, locale), value: numberText(row.atr20) },
+    { label: t("chart.field.pivot", {}, locale), value: numberText(row.pivot) },
+    { label: t("chart.field.pivotDistance", {}, locale), value: percentText(row.pivot_distance_pct) },
+    { label: t("chart.field.pivotDistanceChange", {}, locale), value: pointDeltaText(row.pivot_distance_change_pct) },
+    { label: t("chart.field.ema20Cross", {}, locale), value: crossText(row.ema20_cross, locale) },
+    { label: t("chart.field.sma50Cross", {}, locale), value: crossText(row.sma50_cross, locale) },
   ];
 }
 
@@ -99,10 +103,10 @@ function appendDetail(detailEl, label, value) {
   detailEl.append(item);
 }
 
-function renderDetail(detailEl, row, locked) {
+function renderDetail(detailEl, row, locked, locale) {
   detailEl.replaceChildren();
   if (!row) {
-    detailEl.textContent = "No chart observations are available.";
+    detailEl.textContent = t("chart.empty", {}, locale);
     return;
   }
 
@@ -111,12 +115,12 @@ function renderDetail(detailEl, row, locked) {
   const date = document.createElement("strong");
   const state = document.createElement("span");
   date.textContent = row.time;
-  state.textContent = locked ? "Locked · click a chart to unlock" : "Hover or click to lock";
+  state.textContent = t(locked ? "chart.locked" : "chart.hoverHint", {}, locale);
   heading.append(date, state);
 
   const values = document.createElement("dl");
   values.className = "crosshair-values";
-  detailItems(row).forEach((item) => appendDetail(values, item.label, item.value));
+  detailItems(row, locale).forEach((item) => appendDetail(values, item.label, item.value));
 
   detailEl.append(heading, values);
 }
@@ -140,7 +144,7 @@ function chartOptions(element) {
   };
 }
 
-export function createLinkedCharts(priceEl, volumeEl, detailEl) {
+export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   if (!priceEl || !volumeEl || !detailEl) {
     throw new TypeError("Chart containers and detail element are required");
   }
@@ -148,6 +152,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     throw new Error("Lightweight Charts is not available");
   }
 
+  let locale = options.locale || getLocale();
   const priceChart = LightweightCharts.createChart(priceEl, chartOptions(priceEl));
   const volumeChart = LightweightCharts.createChart(volumeEl, chartOptions(volumeEl));
   const candleSeries = priceChart.addSeries(LightweightCharts.CandlestickSeries, {
@@ -183,7 +188,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     lastValueVisible: false,
   });
   const volumeMa20Series = volumeChart.addSeries(LightweightCharts.LineSeries, {
-    title: "Volume MA20",
+    title: t("chart.series.volumeMa20", {}, locale),
     color: COLORS.volumeMa20,
     lineWidth: 1,
     priceScaleId: "right",
@@ -191,7 +196,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     lastValueVisible: false,
   });
   const volumeRatioSeries = volumeChart.addSeries(LightweightCharts.LineSeries, {
-    title: "Volume ratio",
+    title: t("chart.series.volumeRatio", {}, locale),
     color: COLORS.volumeRatio,
     lineWidth: 2,
     priceScaleId: "volume-ratio",
@@ -216,6 +221,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
   let syncing = false;
   let syncingCrosshair = false;
   let destroyed = false;
+  let lastPayload = null;
+  let displayedRow = null;
+
+  function paintDetail(row, locked) {
+    displayedRow = row;
+    renderDetail(detailEl, row, locked, locale);
+  }
 
   function synchronizeRange(targetScale) {
     return (range) => {
@@ -262,7 +274,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
       const row = rowForParam(param);
       synchronizeCrosshair(source, row);
       if (lockedTime !== null) return;
-      renderDetail(detailEl, row || rows.at(-1) || null, false);
+      paintDetail(row || rows.at(-1) || null, false);
     };
   }
 
@@ -271,12 +283,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     const row = rowForParam(param);
     if (lockedTime !== null) {
       lockedTime = null;
-      renderDetail(detailEl, row || rows.at(-1) || null, false);
+      paintDetail(row || rows.at(-1) || null, false);
       return;
     }
     if (!row) return;
     lockedTime = timeKey(row.time);
-    renderDetail(detailEl, row, true);
+    paintDetail(row, true);
   }
 
   const priceCrosshairHandler = handleCrosshair(priceChart);
@@ -315,8 +327,46 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     priceScale.setVisibleLogicalRange({ from: first, to: last });
   }
 
+  function renderDecorations(payload) {
+    pivotPriceLines.forEach((line) => candleSeries.removePriceLine(line));
+    pivotPriceLines = [];
+    const levels = payload && payload.structures && payload.structures.key_levels;
+    const configuredLevels = [
+      [levels && levels.strict_vcp_pivot, "chart.pivot.strictVcp", COLORS.strictPivot],
+      [levels && levels.tight_platform_pivot, "chart.pivot.tightPlatform", COLORS.platformPivot],
+    ].filter(([price]) => finite(price));
+    const fallbackPivot = [...rows].reverse().find((row) => finite(row.pivot));
+    const visibleLevels = configuredLevels.length
+      ? configuredLevels
+      : fallbackPivot ? [[fallbackPivot.pivot, "chart.pivot.twentySession", COLORS.pivot]] : [];
+    pivotPriceLines = visibleLevels.map(([price, titleKey, color]) => (
+      candleSeries.createPriceLine({
+        price,
+        color,
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: t(titleKey, {}, locale),
+      })
+    ));
+
+    const annotations = payload && payload.structures && payload.structures.annotations;
+    shapeMarkers.setMarkers((Array.isArray(annotations) ? annotations : []).map((annotation) => ({
+      time: annotation.time,
+      position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
+      color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
+      shape: annotation.type === "tight_platform" ? "arrowUp" : "arrowDown",
+      text: (() => {
+        const key = `chart.shape.${annotation.type}`;
+        const localized = t(key, {}, locale);
+        return localized === key ? annotation.label || t("chart.shape.default", {}, locale) : localized;
+      })(),
+    })));
+  }
+
   function setChartData(payload) {
     if (destroyed) return;
+    lastPayload = payload;
     rows = Array.isArray(payload && payload.chart) ? payload.chart : [];
     rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
     lockedTime = null;
@@ -339,39 +389,19 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
     volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
-    pivotPriceLines.forEach((line) => candleSeries.removePriceLine(line));
-    pivotPriceLines = [];
-    const levels = payload && payload.structures && payload.structures.key_levels;
-    const configuredLevels = [
-      [levels && levels.strict_vcp_pivot, "Strict VCP pivot", COLORS.strictPivot],
-      [levels && levels.tight_platform_pivot, "Tight-platform pivot", COLORS.platformPivot],
-    ].filter(([price]) => finite(price));
-    const fallbackPivot = [...rows].reverse().find((row) => finite(row.pivot));
-    const visibleLevels = configuredLevels.length
-      ? configuredLevels
-      : fallbackPivot ? [[fallbackPivot.pivot, "20-session pivot", COLORS.pivot]] : [];
-    pivotPriceLines = visibleLevels.map(([price, title, color]) => (
-      candleSeries.createPriceLine({
-        price,
-        color,
-        lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title,
-      })
-    ));
+    renderDecorations(payload);
 
-    const annotations = payload && payload.structures && payload.structures.annotations;
-    shapeMarkers.setMarkers((Array.isArray(annotations) ? annotations : []).map((annotation) => ({
-      time: annotation.time,
-      position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
-      color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
-      shape: annotation.type === "tight_platform" ? "arrowUp" : "arrowDown",
-      text: annotation.label || "Shape",
-    })));
-
-    renderDetail(detailEl, rows.at(-1) || null, false);
+    paintDetail(rows.at(-1) || null, false);
     setRange(selectedRange);
+  }
+
+  function setLocale(nextLocale) {
+    if (destroyed) return;
+    locale = nextLocale || getLocale();
+    volumeMa20Series.applyOptions?.({ title: t("chart.series.volumeMa20", {}, locale) });
+    volumeRatioSeries.applyOptions?.({ title: t("chart.series.volumeRatio", {}, locale) });
+    renderDecorations(lastPayload);
+    paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
   }
 
   function destroy() {
@@ -389,5 +419,5 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl) {
     volumeChart.remove();
   }
 
-  return { setChartData, setRange, destroy };
+  return { setChartData, setRange, setLocale, destroy };
 }

@@ -14,6 +14,21 @@ STATIC = ROOT / "web/static"
 
 
 class WebAssetTest(unittest.TestCase):
+    def run_dashboard_runtime(self, mode):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/dashboard_runtime.mjs"),
+                (STATIC / "js/app.js").as_uri(),
+                mode,
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
@@ -285,6 +300,159 @@ class WebAssetTest(unittest.TestCase):
             text=True,
         )
 
+    def test_actual_dashboard_locale_switch_refreshes_dynamic_renderers(self):
+        actual = self.run_dashboard_runtime("success")
+        self.assertIn("收盘价相对 EMA20", actual["tableZh"])
+        self.assertIn("Close vs EMA20", actual["tableEn"])
+        self.assertIn("开盘价", actual["chartZh"])
+        self.assertIn("Open", actual["chartEn"])
+
+    def test_actual_dashboard_locale_switch_preserves_safe_error_states(self):
+        universe = self.run_dashboard_runtime("universe-error")
+        self.assertEqual(universe["zh"]["universeTone"], "error")
+        self.assertEqual(universe["en"]["researchTone"], "error")
+        stock = self.run_dashboard_runtime("stock-error")
+        self.assertNotIn("An internal error occurred", stock.values())
+
+    def test_known_update_errors_are_localized_and_unknown_errors_remain_safe_fallbacks(self):
+        module_uri = (STATIC / "js/update.js").as_uri()
+        i18n_uri = (STATIC / "js/i18n.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{ setLocale }} from {json.dumps(i18n_uri)};
+            import {{ createUpdateController }} from {json.dumps(module_uri)};
+
+            function element() {{
+              return {{disabled: false, textContent: '', dataset: {{}}, listeners: {{}},
+                addEventListener(name, handler) {{ this.listeners[name] = handler; }},
+                removeEventListener() {{}}, removeAttribute() {{}}}};
+            }}
+            async function exercise(error) {{
+              const button = element();
+              const status = element();
+              const controller = createUpdateController({{button, status, apiClient: {{
+                async startUpdate() {{ throw error; }}
+              }}, schedule() {{}}, cancel() {{}}}});
+              await controller.start();
+              const zh = status.textContent;
+              setLocale('en');
+              const en = status.textContent;
+              controller.destroy();
+              setLocale('zh-CN');
+              return {{zh, en}};
+            }}
+            const known = await exercise({{
+              code: 'internal_error', message: 'An internal error occurred'
+            }});
+            const unknown = await exercise({{
+              code: 'future_safe_error', message: 'A safe future-facing explanation'
+            }});
+            const collision = await exercise({{
+              code: 'constructor', message: 'A safe constructor explanation'
+            }});
+            assert.deepEqual(known, {{
+              zh: '本地仪表板遇到内部错误。',
+              en: 'The local dashboard encountered an internal error.',
+            }});
+            assert.deepEqual(unknown, {{
+              zh: 'A safe future-facing explanation',
+              en: 'A safe future-facing explanation',
+            }});
+            assert.deepEqual(collision, {{
+              zh: 'A safe constructor explanation',
+              en: 'A safe constructor explanation',
+            }});
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_factor_localization_uses_stable_keys_with_safe_unknown_fallbacks(self):
+        module_uri = (STATIC / "js/factors.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{ factorDetailRows, groupFactorResults, renderFactors, renderStructures }}
+              from {json.dumps(module_uri)};
+            function node(tagName = 'div') {{
+              return {{tagName, textContent: '', className: '', children: [], dataset: {{}},
+                attributes: {{}}, style: {{}}, append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }},
+                getAttribute(name) {{ return this.attributes[name]; }}}};
+            }}
+            globalThis.document = {{createElement: node, createDocumentFragment: () => node('fragment')}};
+            const known = {{key: 'close_vs_ema20_pct', label: 'Close vs EMA20', group: 'trend',
+              overview: true, raw_value: null, formatted: null, percentile: null, peer_count: 3,
+              display_score: null, observation_date: '2026-07-22', missing: true,
+              missing_reason: 'missing_value', description: 'Close relative to the point-in-time 20-session EMA.',
+              methodology: 'Close divided by the 20-session exponential moving average, minus one, expressed in percent.',
+              version: 'builtin-v1'}};
+            const unknown = {{...known, key: 'future_factor', label: 'Future factor', group: 'future',
+              description: 'Safe future description.', methodology: 'Safe future methodology.',
+              missing_reason: 'future_reason'}};
+            const metadata = [{{key: 'trend', label: 'Trend',
+              methodology: 'Moving-average position diagnostics.', overview: true}},
+              {{key: 'future', label: 'Future group', methodology: 'Future group methodology.', overview: true}}];
+            const zhRows = factorDetailRows([known, unknown], 'zh-CN');
+            const zhGroups = groupFactorResults([known, unknown], metadata, 'zh-CN');
+            assert.equal(zhRows[0].label, '收盘价相对 EMA20');
+            assert.equal(zhRows[0].percentile, '百分位不可用 · 3 个同日样本');
+            assert.equal(zhRows[0].missingReason, '缺少因子值');
+            assert.equal(zhRows[1].label, 'Future factor');
+            assert.equal(zhRows[1].description, 'Safe future description.');
+            assert.equal(zhRows[1].methodology, 'Safe future methodology.');
+            assert.equal(zhRows[1].missingReason, 'future reason');
+            assert.deepEqual(zhGroups.map(group => [group.label, group.methodology]), [
+              ['趋势', '均线位置诊断。'], ['Future group', 'Future group methodology.'],
+            ]);
+            const overview = node();
+            const tableBody = node('tbody');
+            renderFactors([], {{overview, tableBody, locale: 'zh-CN'}});
+            assert.equal(overview.textContent, '当前观察没有可用的数值展示分数。');
+            assert.equal(tableBody.children[0].children[0].textContent, '没有可用的因子诊断。');
+            const structure = node();
+            renderStructures(null, structure, 'zh-CN');
+            assert.equal(structure.textContent, '没有可用的结构诊断。');
+            renderStructures({{future_metric: 42}}, structure, 'zh-CN');
+            assert.equal(structure.children[0].children[0].children[0].textContent, 'Future Metric');
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_scenario_methodology_localizes_known_provider_and_preserves_unknown(self):
+        module_uri = (STATIC / "js/scenarios.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{ scenarioView }} from {json.dumps(module_uri)};
+            const known = scenarioView({{
+              provider: 'historical_distribution',
+              methodology: 'English known methodology from the server.',
+              horizons: {{'20': {{available: true, horizon_sessions: 20, sample_count: 12,
+                methodology: 'English horizon methodology.', paths: {{}}}}}},
+            }}, 'zh-CN');
+            const unknown = scenarioView({{
+              provider: 'future_provider', methodology: 'Safe future methodology.', horizons: {{}}
+            }}, 'zh-CN');
+            assert.equal(known.methodology,
+              '基于观察日可用的非重叠周期收益构建描述性历史情景；并非预测或概率。');
+            assert.equal(known.horizons[0].detail,
+              '12 个非重叠的 20 日历史收益样本；绝对分位数上限为当前 63 日已实现波动率缩放值的三倍。');
+            assert.equal(unknown.methodology, 'Safe future methodology.');
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        )
+
     def test_daily_return_formatting_uses_fraction_units_and_quote_clear_is_explicit(self):
         module_uri = (STATIC / "js/app.js").as_uri()
         script = f"""
@@ -376,13 +544,13 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.LineSeries"), 5)
-        for title in (
-            "Strict VCP pivot",
-            "Tight-platform pivot",
-            "Volume MA20",
-            "Volume ratio",
+        for title_key in (
+            "chart.pivot.strictVcp",
+            "chart.pivot.tightPlatform",
+            "chart.series.volumeMa20",
+            "chart.series.volumeRatio",
         ):
-            self.assertIn(title, source)
+            self.assertIn(title_key, source)
         for field in (
             "volume_ratio_change",
             "pivot_distance_change_pct",
@@ -397,6 +565,7 @@ class WebAssetTest(unittest.TestCase):
         app_source = (STATIC / "js/app.js").read_text()
         self.assertIn('from "./charts.js"', app_source)
         self.assertIn("chartController.setChartData(payload)", app_source)
+        self.assertIn("chartController?.setLocale(locale)", app_source)
 
         html = HTML.read_text()
         self.assertIn('data-range="3m"', html)
@@ -446,7 +615,10 @@ class WebAssetTest(unittest.TestCase):
             const controller = createLinkedCharts(
               {{name: 'price', clientWidth: 800, clientHeight: 400}},
               {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
+              {{locale: 'en'}},
             );
+            controller.setChartData({{chart: []}});
+            const emptyDetail = detail.textContent;
             const row = {{time: '2026-07-22', open: 99, high: 102, low: 98, close: 101,
               volume: 1200, volume_ma20: 1000, volume_ratio: 1.2, volume_ratio_change: 0.15,
               ema20: 100, sma50: 95, sma200: 90, daily_return: 0.01, true_range_pct: 4,
@@ -460,8 +632,9 @@ class WebAssetTest(unittest.TestCase):
               volumeLines: created[1].series.filter(series => series.type === 'line')
                 .map(series => [series.options.title, series.data]),
               markers: markerSets.at(-1),
+              emptyDetail,
               detail: chartModule.detailItems
-                ? chartModule.detailItems(row).map(item => [item.label, item.value]) : [],
+                ? chartModule.detailItems(row, 'en').map(item => [item.label, item.value]) : [],
             }}));
         """
         result = subprocess.run(
@@ -472,6 +645,7 @@ class WebAssetTest(unittest.TestCase):
             text=True,
         )
         actual = json.loads(result.stdout)
+        self.assertEqual(actual["emptyDetail"], "No chart observations are available.")
         self.assertEqual(actual["priceLines"], ["Strict VCP pivot", "Tight-platform pivot"])
         self.assertEqual(
             [line[0] for line in actual["volumeLines"]],
@@ -553,10 +727,10 @@ class WebAssetTest(unittest.TestCase):
               {{key: 'future_lab', label: 'Future lab', methodology: 'Hidden method.', overview: false}},
               {{key: 'future_visible', label: 'Future visible', methodology: 'Visible method.', overview: true}},
             ];
-            const groups = groupFactorResults(factors, metadata);
-            const rows = factorDetailRows(factors);
+            const groups = groupFactorResults(factors, metadata, 'en');
+            const rows = factorDetailRows(factors, 'en');
             const overview = factorModule.overviewFactorGroups
-              ? factorModule.overviewFactorGroups(factors, metadata) : [];
+              ? factorModule.overviewFactorGroups(factors, metadata, 'en') : [];
             console.log(JSON.stringify({{
               groups: groups.map(group => [group.label, group.factors.map(row => row.key)]),
               overview: overview.map(group => [group.label, group.factors.map(row => row.key)]),
@@ -674,10 +848,14 @@ class WebAssetTest(unittest.TestCase):
                 ],
                 "points": [2, 2, 2],
                 "meta": [
-                    ["20 sessions", "12 non-overlapping samples", "Twelve samples."],
+                    [
+                        "20 sessions",
+                        "12 non-overlapping samples",
+                        "12 non-overlapping 20-session historical returns, with absolute quantiles capped at three times current 63-session realized-volatility scaling.",
+                    ],
                     ["40 sessions", "4 non-overlapping samples", "insufficient samples"],
                 ],
-                "methodology": "Point-in-time non-overlapping samples.",
+                "methodology": "Descriptive historical scenarios from non-overlapping horizon returns available at the observation date; not predictions or probabilities.",
             },
         )
 

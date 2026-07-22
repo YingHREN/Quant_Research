@@ -1,0 +1,341 @@
+import assert from "node:assert/strict";
+
+const [appUri, mode = "success"] = process.argv.slice(2);
+
+class Element {
+  constructor(tagName = "div", id = "") {
+    this.tagName = tagName.toUpperCase();
+    this.id = id;
+    this.dataset = {};
+    this.attributes = {};
+    this.children = [];
+    this.listeners = new Map();
+    this.className = "";
+    this.disabled = false;
+    this.checked = false;
+    this.value = "";
+    this.clientWidth = 800;
+    this.clientHeight = 240;
+    this.style = { setProperty(name, value) { this[name] = value; } };
+    this._textContent = "";
+  }
+
+  get textContent() {
+    return this._textContent;
+  }
+
+  set textContent(value) {
+    this._textContent = value == null ? "" : String(value);
+    this.children = [];
+  }
+
+  append(...items) {
+    this.children.push(...items);
+  }
+
+  replaceChildren(...items) {
+    this._textContent = "";
+    this.children = [...items];
+  }
+
+  setAttribute(name, value) {
+    this.attributes[name] = String(value);
+  }
+
+  getAttribute(name) {
+    return this.attributes[name];
+  }
+
+  removeAttribute(name) {
+    delete this.attributes[name];
+    if (name.startsWith("data-")) {
+      const key = name.slice(5).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+      delete this.dataset[key];
+    }
+  }
+
+  addEventListener(name, handler) {
+    if (!this.listeners.has(name)) this.listeners.set(name, []);
+    this.listeners.get(name).push(handler);
+  }
+
+  removeEventListener(name, handler) {
+    const handlers = this.listeners.get(name) || [];
+    this.listeners.set(name, handlers.filter((candidate) => candidate !== handler));
+  }
+
+  dispatch(name) {
+    for (const handler of this.listeners.get(name) || []) {
+      handler({ currentTarget: this, target: this });
+    }
+  }
+}
+
+function textTree(node) {
+  return [node.textContent, ...node.children.map(textTree)].join(" ").replace(/\s+/g, " ").trim();
+}
+
+function descendants(node) {
+  return node.children.flatMap((child) => [child, ...descendants(child)]);
+}
+
+function byClass(node, className) {
+  return descendants(node).filter((child) => child.className === className);
+}
+
+const ids = [
+  "universe-list", "universe-count", "universe-status", "universe-search", "sort-key",
+  "sort-direction", "market-date", "market-coverage", "selected-ticker", "selected-close",
+  "selected-change", "observation-date", "security-state", "research-status", "data-warnings",
+  "price-chart", "volume-chart", "crosshair-detail", "factor-overview", "factor-table-body",
+  "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
+];
+const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+elements.get("price-chart").clientHeight = 400;
+elements.get("volume-chart").clientHeight = 180;
+
+const zhButton = new Element("button");
+zhButton.dataset.locale = "zh-CN";
+zhButton.dataset.i18n = "locale.zh";
+const enButton = new Element("button");
+enButton.dataset.locale = "en";
+enButton.dataset.i18n = "locale.en";
+const rangeButton = new Element("button");
+rangeButton.dataset.range = "1y";
+rangeButton.dataset.i18n = "chart.range.1y";
+const staticNodes = [zhButton, enButton, rangeButton];
+
+const documentListeners = new Map();
+globalThis.document = {
+  documentElement: { lang: "zh-CN" },
+  createElement(tagName) { return new Element(tagName); },
+  createDocumentFragment() { return new Element("fragment"); },
+  getElementById(id) { return elements.get(id) || null; },
+  querySelectorAll(selector) {
+    if (selector === "[data-locale]") return [zhButton, enButton];
+    if (selector === "[data-range]") return [rangeButton];
+    if (selector === "[data-filter]") return [];
+    if (selector === "[data-i18n]") return staticNodes;
+    if (selector === "[data-i18n-placeholder]" || selector === "[data-i18n-aria-label]") return [];
+    return [];
+  },
+  addEventListener(name, handler) { documentListeners.set(name, handler); },
+};
+globalThis.window = { addEventListener() {}, removeEventListener() {} };
+globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+
+const charts = [];
+const markerControllers = [];
+function createChart(element, options) {
+  const scale = {
+    subscribeVisibleLogicalRangeChange() {}, unsubscribeVisibleLogicalRangeChange() {},
+    setVisibleLogicalRange() {}, fitContent() {},
+  };
+  const chart = {
+    element, options, series: [], priceLines: [], removed: false,
+    timeScale() { return scale; },
+    priceScale() { return { applyOptions() {} }; },
+    addSeries(type, seriesOptions) {
+      const series = {
+        type, options: { ...seriesOptions }, data: [],
+        setData(data) { this.data = data; },
+        applyOptions(next) { Object.assign(this.options, next); },
+        createPriceLine(line) { chart.priceLines.push(line); return line; },
+        removePriceLine(line) {
+          const index = chart.priceLines.indexOf(line);
+          if (index >= 0) chart.priceLines.splice(index, 1);
+        },
+      };
+      chart.series.push(series);
+      return series;
+    },
+    subscribeCrosshairMove() {}, unsubscribeCrosshairMove() {},
+    subscribeClick(handler) { this.clickHandler = handler; }, unsubscribeClick() {},
+    setCrosshairPosition() {}, clearCrosshairPosition() {}, applyOptions(next) {
+      this.options = { ...this.options, ...next };
+    },
+    remove() { this.removed = true; },
+  };
+  charts.push(chart);
+  return chart;
+}
+globalThis.LightweightCharts = {
+  CandlestickSeries: "candles", HistogramSeries: "histogram", LineSeries: "line",
+  CrosshairMode: { Normal: 0 }, LineStyle: { Dashed: 2 },
+  createChart,
+  createSeriesMarkers(_series, markers) {
+    const controller = { markers, setMarkers(next) { this.markers = next; } };
+    markerControllers.push(controller);
+    return controller;
+  },
+};
+
+const universe = {
+  asof: "2026-07-22",
+  freshness: { by_date: [{ date: "2026-07-22", tickers: 1 }] },
+  tickers: [{
+    ticker: "AAA", latest_date: "2026-07-22", lag_days: 0, inactive: false,
+    stale: false, shape_state: "strict_vcp", momentum_percentile: 80,
+  }],
+  factor_groups: [{
+    key: "trend", label: "Trend", methodology: "Moving-average position diagnostics.", overview: true,
+  }],
+};
+const row = {
+  time: "2026-07-22", open: 99, high: 102, low: 98, close: 101, volume: 1200,
+  volume_ma20: 1000, volume_ratio: 1.2, volume_ratio_change: 0.15, ema20: 100,
+  sma50: 95, sma200: 90, daily_return: 0.01, true_range_pct: 4, volume_change: 0.1,
+  atr20: 3, pivot: 100, pivot_distance_pct: 1, pivot_distance_change_pct: 0.75,
+  ema20_cross: "above", sma50_cross: null,
+};
+const stock = {
+  ticker: "AAA", observation_date: "2026-07-22",
+  summary: { close: 101, daily_return: 0.01, daily_return_unit: "fraction", stale: false, inactive: false },
+  warnings: [], chart: [row],
+  structures: {
+    key_levels: { strict_vcp_pivot: 103 },
+    annotations: [{ time: row.time, type: "strict_vcp", label: "Strict VCP" }],
+  },
+  factors: [{
+    key: "close_vs_ema20_pct", label: "Close vs EMA20", group: "trend", overview: true,
+    raw_value: 1, formatted: "1.00%", percentile: 0.75, peer_count: 8, display_score: 75,
+    observation_date: "2026-07-22", missing: false, missing_reason: null,
+    description: "Close relative to the point-in-time 20-session EMA.",
+    methodology: "Close divided by the 20-session exponential moving average, minus one, expressed in percent.",
+    version: "builtin-v1",
+  }],
+  scenarios: {
+    provider: "historical_distribution", observation_date: "2026-07-22",
+    methodology: "Descriptive historical scenarios from non-overlapping horizon returns available at the observation date; not predictions or probabilities.",
+    horizons: {
+      "20": {
+        available: true, horizon_sessions: 20, sample_count: 12, non_overlapping: true,
+        methodology: "12 non-overlapping 20-session historical returns, with absolute quantiles capped at three times current 63-session realized-volatility scaling.",
+        paths: {
+          pessimistic: [{ session: 0, price: 101 }, { session: 20, price: 90 }],
+          median: [{ session: 0, price: 101 }, { session: 20, price: 103 }],
+          optimistic: [{ session: 0, price: 101 }, { session: 20, price: 111 }],
+        },
+      },
+    },
+  },
+};
+
+function jsonResponse(payload, status = 200) {
+  return { ok: status >= 200 && status < 300, status, async json() { return payload; } };
+}
+
+globalThis.fetch = async (path) => {
+  if (path === "/api/update/status") return jsonResponse({ state: "idle" });
+  if (path === "/api/universe") {
+    if (mode === "universe-error") {
+      return jsonResponse({ error: { code: "market_data_unavailable", message: "Market data is unavailable" } }, 503);
+    }
+    return jsonResponse(universe);
+  }
+  if (path === "/api/stocks/AAA") {
+    if (mode === "stock-error") {
+      return jsonResponse({ error: { code: "internal_error", message: "An internal error occurred" } }, 500);
+    }
+    return jsonResponse(stock);
+  }
+  throw new Error(`Unexpected fetch: ${path}`);
+};
+
+const app = await import(appUri);
+await app.initializeDashboard();
+
+if (mode === "success") {
+  const priceChart = charts[0];
+  const volumeChart = charts[1];
+  priceChart.clickHandler({ time: row.time });
+  const factorZh = textTree(elements.get("factor-overview"));
+  const tableZh = textTree(elements.get("factor-table-body"));
+  const scenarioZh = textTree(elements.get("scenario-meta"));
+  const structureZh = textTree(elements.get("structure-content"));
+  const chartZh = textTree(elements.get("crosshair-detail"));
+  const priceLinesZh = priceChart.priceLines.map((line) => line.title);
+  const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
+  const markersZh = markerControllers[0].markers.map((marker) => marker.text);
+  const meterZh = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
+
+  enButton.dispatch("click");
+
+  const factorEn = textTree(elements.get("factor-overview"));
+  const tableEn = textTree(elements.get("factor-table-body"));
+  const scenarioEn = textTree(elements.get("scenario-meta"));
+  const structureEn = textTree(elements.get("structure-content"));
+  const chartEn = textTree(elements.get("crosshair-detail"));
+  const priceLinesEn = priceChart.priceLines.map((line) => line.title);
+  const volumeTitlesEn = volumeChart.series.map((series) => series.options.title).filter(Boolean);
+  const markersEn = markerControllers[0].markers.map((marker) => marker.text);
+  const meterEn = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
+
+  assert.match(factorZh, /趋势/);
+  assert.match(tableZh, /收盘价相对 EMA20/);
+  assert.match(tableZh, /第 75 百分位 · 8 个同日样本/);
+  assert.match(tableZh, /收盘价相对时点一致的 20 日 EMA/);
+  assert.match(scenarioZh, /基于观察日可用的非重叠周期收益/);
+  assert.match(structureZh, /关键价位/);
+  assert.match(structureZh, /严格 VCP 枢轴点/);
+  assert.match(chartZh, /开盘价/);
+  assert.match(chartZh, /向上交叉/);
+  assert.match(chartZh, /已锁定/);
+  assert.deepEqual(priceLinesZh, ["严格 VCP 枢轴点"]);
+  assert.deepEqual(markersZh, ["严格 VCP"]);
+  assert.ok(volumeTitlesZh.includes("成交量 MA20"));
+  assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
+
+  assert.equal(document.documentElement.lang, "en");
+  assert.equal(enButton.getAttribute("aria-pressed"), "true");
+  assert.match(factorEn, /Trend/);
+  assert.match(tableEn, /75th percentile · 8 same-date peers/);
+  assert.match(scenarioEn, /Descriptive historical scenarios/);
+  assert.match(structureEn, /Key Levels/);
+  assert.match(structureEn, /Strict VCP Pivot/);
+  assert.match(chartEn, /Open/);
+  assert.match(chartEn, /Crossed above/);
+  assert.match(chartEn, /Locked/);
+  assert.deepEqual(priceLinesEn, ["Strict VCP pivot"]);
+  assert.deepEqual(markersEn, ["Strict VCP"]);
+  assert.ok(volumeTitlesEn.includes("Volume MA20"));
+  assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
+  console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
+    factorEn, tableEn, scenarioEn, structureEn, chartEn }));
+} else if (mode === "universe-error") {
+  const zh = {
+    universe: elements.get("universe-status").textContent,
+    universeTone: elements.get("universe-status").dataset.tone,
+    research: elements.get("research-status").textContent,
+    researchTone: elements.get("research-status").dataset.tone,
+    security: elements.get("security-state").textContent,
+  };
+  enButton.dispatch("click");
+  const en = {
+    universe: elements.get("universe-status").textContent,
+    universeTone: elements.get("universe-status").dataset.tone,
+    research: elements.get("research-status").textContent,
+    researchTone: elements.get("research-status").dataset.tone,
+    security: elements.get("security-state").textContent,
+  };
+  assert.deepEqual(zh, {
+    universe: "市场数据不可用。", universeTone: "error",
+    research: "本地股票池加载完成前无法查看股票研究。", researchTone: "error",
+    security: "不可用",
+  });
+  assert.deepEqual(en, {
+    universe: "Market data is unavailable.", universeTone: "error",
+    research: "Stock research is unavailable until the local universe loads.", researchTone: "error",
+    security: "Unavailable",
+  });
+  console.log(JSON.stringify({ zh, en }));
+} else if (mode === "stock-error") {
+  const zh = elements.get("research-status").textContent;
+  enButton.dispatch("click");
+  const en = elements.get("research-status").textContent;
+  assert.equal(zh, "本地仪表板遇到内部错误。");
+  assert.equal(en, "The local dashboard encountered an internal error.");
+  assert.notEqual(zh, "An internal error occurred");
+  assert.equal(elements.get("research-status").dataset.tone, "error");
+  console.log(JSON.stringify({ zh, en }));
+}
