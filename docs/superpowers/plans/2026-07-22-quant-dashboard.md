@@ -234,8 +234,11 @@ class FactorRegistryTest(unittest.TestCase):
         self.assertEqual(result.missing_reason, "factor_error")
 
     def test_percentile_uses_same_observation_date_only(self):
-        rows = registry.evaluate_universe([context("AAA", 1), context("BBB", 2)])
-        self.assertEqual(rows["BBB"][0].percentile, 1.0)
+        rows = registry.evaluate_universe([
+            context("AAA", 1), context("BBB", 2), context("CCC", 3),
+            context("DDD", 4), context("EEE", 5),
+        ])
+        self.assertEqual(rows["EEE"][0].percentile, 1.0)
 ```
 
 - [ ] **Step 2: Run and verify RED**
