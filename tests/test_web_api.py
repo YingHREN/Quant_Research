@@ -337,7 +337,11 @@ class WebApiTest(unittest.TestCase):
         self.assertTrue(response.json["factor_groups"])
         self.assertEqual(
             set(response.json["factor_groups"][0]),
-            {"key", "label", "methodology", "overview"},
+            {"key", "label", "methodology", "overview", "i18n"},
+        )
+        self.assertEqual(
+            set(response.json["factor_groups"][0]["i18n"]["zh-CN"]),
+            {"label", "description", "methodology", "window", "direction"},
         )
         self.assertEqual(
             set(response.json["tickers"][0]),

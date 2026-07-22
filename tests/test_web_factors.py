@@ -143,6 +143,40 @@ class FactorRegistryTest(unittest.TestCase):
 
 
 class BuiltinFactorTest(unittest.TestCase):
+    def test_builtin_result_preserves_english_fields_and_adds_chinese_explanation(self):
+        registry = build_default_registry()
+        factor = next(
+            factor for factor in registry.factors if factor.key == "close_vs_ema20_pct"
+        )
+
+        result = registry.evaluate_one(factor, context_from_history(price_history()))
+        payload = result.to_dict()
+
+        self.assertEqual(payload["label"], "Close vs EMA20")
+        self.assertEqual(
+            payload["description"],
+            "Close relative to the point-in-time 20-session EMA.",
+        )
+        self.assertEqual(payload["direction"], "higher")
+        self.assertEqual(
+            set(payload["i18n"]["zh-CN"]),
+            {"label", "description", "methodology", "window", "direction"},
+        )
+        self.assertEqual(payload["i18n"]["zh-CN"]["label"], "收盘价相对 EMA20")
+        with self.assertRaises(TypeError):
+            factor.i18n["zh-CN"]["label"] = "不可变"
+
+    def test_every_builtin_factor_and_group_has_complete_chinese_metadata(self):
+        registry = build_default_registry()
+        required = {"label", "description", "methodology", "window", "direction"}
+
+        for entity in (*registry.factors, *registry.groups):
+            with self.subTest(entity=entity.key):
+                self.assertEqual(set(entity.i18n["zh-CN"]), required)
+                self.assertTrue(all(entity.i18n["zh-CN"].values()))
+                if hasattr(entity, "to_dict"):
+                    self.assertEqual(set(entity.to_dict()["i18n"]["zh-CN"]), required)
+
     def test_chart_rows_include_ohlcv_indicators_and_prior_changes(self):
         rows = build_chart_rows(context_from_history(price_history(260)))
 

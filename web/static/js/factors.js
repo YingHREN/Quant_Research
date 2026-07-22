@@ -1,4 +1,11 @@
-import { getLocale, t } from "./i18n.js";
+import { formatFullDate, getLocale, t } from "./i18n.js";
+
+const POPOVER_ID = "factor-popover";
+const POPOVER_MARGIN = 8;
+let factorPopover = null;
+let popoverDocument = null;
+let activeTrigger = null;
+let activePinned = false;
 
 function humanize(value) {
   if (value == null || value === "") return "—";
@@ -35,9 +42,19 @@ function ordinal(value) {
 }
 
 function localizedMetadata(entity, namespace, field, fallback, locale) {
+  const supplied = entity?.i18n?.[locale]?.[field];
+  if (supplied != null && supplied !== "") return String(supplied);
   const key = `${namespace}.${entity && entity.key}.${field}`;
   const localized = t(key, {}, locale);
   return localized === key ? fallback : localized;
+}
+
+function localizedDirection(factor, locale) {
+  const supplied = factor?.i18n?.[locale]?.direction;
+  if (supplied != null && supplied !== "") return String(supplied);
+  const key = `factor.direction.${factor?.direction}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? humanize(factor?.direction) : localized;
 }
 
 function percentileText(factor, locale) {
@@ -66,18 +83,21 @@ function normalizeGroupMetadata(groupMetadata, locale) {
     seen.add(normalizedKey);
     const suppliedLabel = typeof metadata === "object" && metadata ? metadata.label : null;
     const suppliedMethodology = typeof metadata === "object" && metadata ? metadata.methodology : null;
+    const metadataEntity = typeof metadata === "object" && metadata
+      ? metadata
+      : { key: normalizedKey };
     const overview = typeof metadata === "string" ? true : Boolean(metadata && metadata.overview);
     return [{
       key: normalizedKey,
       label: localizedMetadata(
-        { key: normalizedKey },
+        metadataEntity,
         "factor.group",
         "label",
         suppliedLabel || humanize(normalizedKey),
         locale,
       ),
       methodology: localizedMetadata(
-        { key: normalizedKey },
+        metadataEntity,
         "factor.group",
         "methodology",
         suppliedMethodology || "—",
@@ -140,6 +160,13 @@ export function factorDetailRows(results, locale = getLocale()) {
       factor, "factor.item", "methodology", factor.methodology || "—", locale,
     ),
     version: factor.version || "—",
+    window: localizedMetadata(
+      factor, "factor.item", "window", factor.window || "—", locale,
+    ),
+    direction: localizedDirection(factor, locale),
+    currentValue: factor.formatted == null
+      ? (factor.missing ? "—" : rawValueText(factor.raw_value))
+      : String(factor.formatted),
     missingReason: localizedMissingReason(factor.missing_reason, locale),
     missing: Boolean(factor.missing),
   }));
@@ -163,6 +190,179 @@ function appendText(parent, tagName, className, value) {
   node.textContent = value;
   parent.append(node);
   return node;
+}
+
+function appendPopoverField(list, label, value) {
+  const item = document.createElement("div");
+  item.className = "factor-popover-field";
+  appendText(item, "dt", "", label);
+  appendText(item, "dd", "", value);
+  list.append(item);
+}
+
+function renderPopoverContent(explanation) {
+  if (!factorPopover) return;
+  factorPopover.replaceChildren();
+  appendText(
+    factorPopover, "h3", "factor-popover-title", explanation.label,
+  );
+  appendText(factorPopover, "p", "factor-popover-description", explanation.description);
+  const details = document.createElement("dl");
+  details.className = "factor-popover-details";
+  appendPopoverField(details, t("factor.popover.methodology", {}, explanation.locale), explanation.methodology);
+  appendPopoverField(details, t("factor.popover.window", {}, explanation.locale), explanation.window);
+  appendPopoverField(details, t("factor.popover.direction", {}, explanation.locale), explanation.direction);
+  appendPopoverField(details, t("factor.popover.currentValue", {}, explanation.locale), explanation.currentValue);
+  appendPopoverField(
+    details,
+    t("factor.popover.dataDate", {}, explanation.locale),
+    formatFullDate(explanation.observationDate),
+  );
+  appendPopoverField(details, t("factor.popover.version", {}, explanation.locale), explanation.version);
+  if (explanation.missing) {
+    appendPopoverField(
+      details,
+      t("factor.popover.missingReason", {}, explanation.locale),
+      explanation.missingReason,
+    );
+  }
+  factorPopover.append(details);
+}
+
+function positionFactorPopover() {
+  if (!factorPopover || !activeTrigger || factorPopover.hidden) return;
+  const triggerRect = activeTrigger.getBoundingClientRect?.();
+  const popoverRect = factorPopover.getBoundingClientRect?.();
+  if (!triggerRect || !popoverRect) return;
+  const viewportWidth = globalThis.window?.innerWidth || 0;
+  const viewportHeight = globalThis.window?.innerHeight || 0;
+  const maxLeft = Math.max(POPOVER_MARGIN, viewportWidth - popoverRect.width - POPOVER_MARGIN);
+  const left = Math.max(POPOVER_MARGIN, Math.min(triggerRect.left, maxLeft));
+  const below = triggerRect.bottom + POPOVER_MARGIN;
+  const above = triggerRect.top - popoverRect.height - POPOVER_MARGIN;
+  const preferredTop = below + popoverRect.height <= viewportHeight - POPOVER_MARGIN
+    ? below
+    : above;
+  const maxTop = Math.max(POPOVER_MARGIN, viewportHeight - popoverRect.height - POPOVER_MARGIN);
+  const top = Math.max(POPOVER_MARGIN, Math.min(preferredTop, maxTop));
+  factorPopover.style.left = `${Math.round(left)}px`;
+  factorPopover.style.top = `${Math.round(top)}px`;
+}
+
+function closeFactorPopover({ restoreFocus = false } = {}) {
+  const trigger = activeTrigger;
+  if (trigger) trigger.setAttribute("aria-expanded", "false");
+  activeTrigger = null;
+  activePinned = false;
+  if (factorPopover) factorPopover.hidden = true;
+  if (restoreFocus) trigger?.focus?.();
+}
+
+function documentKeydown(event) {
+  if (event.key === "Escape" && activeTrigger) {
+    event.preventDefault?.();
+    closeFactorPopover({ restoreFocus: true });
+  }
+}
+
+function documentClick(event) {
+  if (!activeTrigger) return;
+  if (activeTrigger.contains?.(event.target) || factorPopover?.contains?.(event.target)) return;
+  closeFactorPopover();
+}
+
+function ensureFactorPopover() {
+  if (!globalThis.document?.body) return null;
+  if (factorPopover && popoverDocument === document) return factorPopover;
+  if (popoverDocument && popoverDocument !== document) {
+    popoverDocument.removeEventListener?.("keydown", documentKeydown);
+    popoverDocument.removeEventListener?.("click", documentClick);
+  }
+  factorPopover = document.createElement("aside");
+  factorPopover.id = POPOVER_ID;
+  factorPopover.className = "factor-popover";
+  factorPopover.hidden = true;
+  factorPopover.setAttribute("role", "tooltip");
+  document.body.append(factorPopover);
+  popoverDocument = document;
+  document.addEventListener?.("keydown", documentKeydown);
+  document.addEventListener?.("click", documentClick);
+  globalThis.window?.addEventListener?.("resize", positionFactorPopover);
+  globalThis.window?.addEventListener?.("scroll", positionFactorPopover, true);
+  return factorPopover;
+}
+
+function openFactorPopover(trigger, explanation, pinned) {
+  if (!ensureFactorPopover()) return;
+  if (activeTrigger && activeTrigger !== trigger) {
+    activeTrigger.setAttribute("aria-expanded", "false");
+  }
+  activeTrigger = trigger;
+  activePinned = pinned;
+  trigger.setAttribute("aria-expanded", "true");
+  renderPopoverContent(explanation);
+  factorPopover.hidden = false;
+  positionFactorPopover();
+}
+
+function activateFactorPopover(trigger, explanation) {
+  if (activeTrigger === trigger && activePinned) {
+    closeFactorPopover();
+    return;
+  }
+  openFactorPopover(trigger, explanation, true);
+}
+
+function appendFactorInfo(parent, explanation) {
+  ensureFactorPopover();
+  const button = document.createElement("button");
+  button.className = "factor-info";
+  button.setAttribute("type", "button");
+  button.setAttribute("aria-controls", POPOVER_ID);
+  button.setAttribute("aria-describedby", POPOVER_ID);
+  button.setAttribute("aria-expanded", "false");
+  button.setAttribute(
+    "aria-label", t("factor.popover.explainAria", { label: explanation.label }, explanation.locale),
+  );
+  button.textContent = "ⓘ";
+  button.addEventListener?.("pointerenter", () => {
+    if (!activePinned || activeTrigger !== button) openFactorPopover(button, explanation, false);
+  });
+  button.addEventListener?.("pointerleave", () => {
+    if (activeTrigger === button && !activePinned) closeFactorPopover();
+  });
+  button.addEventListener?.("focus", () => {
+    if (!activePinned || activeTrigger !== button) openFactorPopover(button, explanation, false);
+  });
+  button.addEventListener?.("blur", () => {
+    if (activeTrigger === button && !activePinned) closeFactorPopover();
+  });
+  button.addEventListener?.("click", () => activateFactorPopover(button, explanation));
+  button.addEventListener?.("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    activateFactorPopover(button, explanation);
+  });
+  parent.append(button);
+  return button;
+}
+
+function appendFactorLabel(parent, tagName, className, explanation) {
+  const container = document.createElement(tagName);
+  if (className) container.className = className;
+  appendText(container, "span", "factor-label-text", explanation.label);
+  appendFactorInfo(container, explanation);
+  parent.append(container);
+  return container;
+}
+
+function factorExplanation(factor, locale) {
+  const row = factorDetailRows([factor], locale)[0];
+  return {
+    ...row,
+    locale,
+    observationDate: factor.observation_date,
+  };
 }
 
 function renderOverview(container, results, groupMetadata, locale) {
@@ -195,7 +395,9 @@ function renderOverview(container, results, groupMetadata, locale) {
         factor.label || humanize(factor.key),
         locale,
       );
-      appendText(heading, "span", "", label);
+      appendFactorLabel(heading, "span", "factor-heading-label", {
+        ...factorExplanation(factor, locale), label,
+      });
       appendText(heading, "strong", "", factor.display_score.toFixed(1));
       const track = document.createElement("div");
       track.className = "factor-bar-track";
@@ -235,7 +437,7 @@ function renderDetailTable(tableBody, results, locale) {
   rows.forEach((factor) => {
     const row = document.createElement("tr");
     if (factor.missing) row.dataset.state = "missing";
-    appendText(row, "td", "factor-label", factor.label);
+    appendFactorLabel(row, "td", "factor-label", { ...factor, locale });
     appendText(row, "td", "factor-formatted", factor.formattedValue);
     appendText(row, "td", "factor-raw", factor.rawValue);
     appendText(row, "td", "", factor.percentile);
@@ -256,6 +458,7 @@ export function renderFactors(results, options = {}) {
   const overview = options.overview || document.getElementById("factor-overview");
   const tableBody = options.tableBody || document.getElementById("factor-table-body");
   const locale = options.locale || getLocale();
+  closeFactorPopover();
   if (overview) renderOverview(overview, results, options.groupMetadata, locale);
   if (tableBody) renderDetailTable(tableBody, results, locale);
 }

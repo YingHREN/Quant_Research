@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Callable
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Mapping
 
 import pandas as pd
 
@@ -25,7 +25,7 @@ from research.momentum import momentum_features
 from run import market_uptrend
 from scoring.engine import evaluate
 from web.contracts import iso_date
-from web.factors.base import FactorGroup
+from web.factors.base import FactorGroup, freeze_i18n
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
 
@@ -43,6 +43,11 @@ class BuiltinFactor:
     methodology: str = "Computed point in time from local OHLCV history through the observation date."
     overview: bool = True
     percentile_eligible: bool = True
+    window: str | None = None
+    i18n: Mapping[str, Mapping[str, str]] | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "i18n", freeze_i18n(self.i18n))
 
     def compute(self, context: AnalysisContext):
         return self._compute(context)
@@ -145,6 +150,118 @@ def _ratio(value):
     return f"{value:.2f}x"
 
 
+def _zh(label, description, methodology, window, direction):
+    return {
+        "label": label,
+        "description": description,
+        "methodology": methodology,
+        "window": window,
+        "direction": direction,
+    }
+
+
+FACTOR_ZH = {
+    "close_vs_ema20_pct": _zh(
+        "收盘价相对 EMA20", "收盘价相对时点一致的 20 日 EMA。",
+        "收盘价除以 20 日指数移动平均线再减一，以百分比表示。",
+        "20 个交易日", "数值越高表示收盘价高于 EMA20 的幅度越大。",
+    ),
+    "close_vs_sma50_pct": _zh(
+        "收盘价相对 SMA50", "收盘价相对时点一致的 50 日均线。",
+        "收盘价除以过去 50 日简单移动平均线再减一，以百分比表示。",
+        "50 个交易日", "数值越高表示收盘价高于 SMA50 的幅度越大。",
+    ),
+    "close_vs_sma200_pct": _zh(
+        "收盘价相对 SMA200", "收盘价相对时点一致的 200 日均线。",
+        "收盘价除以过去 200 日简单移动平均线再减一，以百分比表示。",
+        "200 个交易日", "数值越高表示收盘价高于 SMA200 的幅度越大。",
+    ),
+    "mom_3_1": _zh(
+        "3-1 个月动量", "剔除最近一个月的三个月收益。",
+        "截至观察日前 21 个交易日的时点一致 63 日收益。",
+        "63 个交易日，跳过最近 21 个交易日", "数值越高表示历史动量越强。",
+    ),
+    "mom_6_1": _zh(
+        "6-1 个月动量", "剔除最近一个月的六个月收益。",
+        "截至观察日前 21 个交易日的时点一致 126 日收益。",
+        "126 个交易日，跳过最近 21 个交易日", "数值越高表示历史动量越强。",
+    ),
+    "mom_12_1": _zh(
+        "12-1 个月动量", "剔除最近一个月的十二个月收益。",
+        "截至观察日前 21 个交易日的时点一致 252 日收益。",
+        "252 个交易日，跳过最近 21 个交易日", "数值越高表示历史动量越强。",
+    ),
+    "strict_vcp": _zh(
+        "严格 VCP", "高精度优先的 VCP 诊断，包括拒绝原因。",
+        "标准严格 VCP 条件评估趋势、基底深度、收缩阶段、成交量萎缩和延伸度。",
+        "最多 250 个交易日；候选基底为 20 至 80 日", "中性诊断；不按数值高低判定优劣。",
+    ),
+    "tight_platform": _zh(
+        "紧密平台", "高层紧密平台诊断，包括拒绝原因。",
+        "标准紧密平台条件评估趋势、高点接近度、20 日宽度、效率和成交量萎缩。",
+        "20 个交易日", "中性诊断；不按数值高低判定优劣。",
+    ),
+    "pivot_distance_pct": _zh(
+        "距枢轴点", "收盘价相对前 20 日枢轴点的距离。",
+        "收盘价除以前 20 个交易日的最高收盘价再减一，以百分比表示。",
+        "前 20 个交易日", "中性诊断；正值表示高于枢轴点，负值表示低于枢轴点。",
+    ),
+    "volume_ratio": _zh(
+        "成交量比率", "当前成交量除以时点一致的 20 日平均成交量。",
+        "当日成交量除以过去 20 日简单平均成交量。",
+        "20 个交易日", "数值越高表示当前成交量参与度越高。",
+    ),
+    "atr20_pct": _zh(
+        "ATR20", "20 日平均真实波幅占收盘价的百分比。",
+        "标准 20 日平均真实波幅除以观察日收盘价，以百分比表示。",
+        "20 个交易日", "数值越低表示历史价格波幅越小。",
+    ),
+    "realized_vol_63": _zh(
+        "63 日已实现波动率", "最多使用 63 个时点一致日收益计算的年化波动率。",
+        "最多 63 个日收盘收益的标准差乘以 252 的平方根进行年化。",
+        "最多 63 个交易日", "数值越低表示历史已实现波动率越小。",
+    ),
+    "overheat_score": _zh(
+        "过热", "现有的非单调延伸度和波动率诊断。",
+        "由 ATR 标准化短期收益、均线延伸、连续走势和近期波幅构成的标准描述性综合指标。",
+        "最多 200 个交易日，重点观察近期 3 至 20 日", "数值越低表示过热程度越低。",
+    ),
+    "legacy_score": _zh(
+        "传统规则分数", "未经预测能力验证；仅保留为传统规则诊断。",
+        "使用价格和基准输入按时点运行现有传统规则引擎；未经预测能力验证。",
+        "由传统规则的多个历史窗口共同决定", "中性诊断；不用于预测性排序。",
+    ),
+}
+
+
+FACTOR_WINDOWS = {
+    "close_vs_ema20_pct": "20 sessions",
+    "close_vs_sma50_pct": "50 sessions",
+    "close_vs_sma200_pct": "200 sessions",
+    "mom_3_1": "63 sessions, skipping the latest 21",
+    "mom_6_1": "126 sessions, skipping the latest 21",
+    "mom_12_1": "252 sessions, skipping the latest 21",
+    "strict_vcp": "Up to 250 sessions; candidate bases span 20 to 80 sessions",
+    "tight_platform": "20 sessions",
+    "pivot_distance_pct": "Prior 20 sessions",
+    "volume_ratio": "20 sessions",
+    "atr20_pct": "20 sessions",
+    "realized_vol_63": "Up to 63 sessions",
+    "overheat_score": "Up to 200 sessions, emphasizing the latest 3 to 20",
+    "legacy_score": "Multiple historical windows from the traditional rule set",
+}
+
+
+GROUP_ZH = {
+    "trend": _zh("趋势", "价格相对移动平均线的位置诊断。", "均线位置诊断。", "20 至 200 个交易日", "通常数值越高表示趋势越强。"),
+    "momentum": _zh("动量", "剔除最近一个月的历史收益诊断。", "剔除最近一个月的时点一致历史收益。", "63 至 252 个交易日", "数值越高表示历史动量越强。"),
+    "structure": _zh("VCP / 结构", "价格收缩、平台和枢轴点结构诊断。", "标准严格 VCP、平台和枢轴点诊断。", "20 至 250 个交易日", "诊断方向因具体因子而异。"),
+    "volume": _zh("成交量 / 价格", "当前成交量相对本地历史的参与度诊断。", "成交量参与度相对本地历史的诊断。", "20 个交易日", "通常数值越高表示成交量参与度越高。"),
+    "risk": _zh("风险", "历史波幅、波动率和价格延伸诊断。", "波幅、波动率和延伸度诊断。", "20 至 200 个交易日", "通常数值越低表示历史风险或过热程度越低。"),
+    "legacy": _zh("传统规则", "仅供比较的传统描述性规则输出。", "保留传统描述性规则输出，仅供比较。", "多个传统规则窗口", "中性诊断；不用于预测性排序。"),
+}
+
+
 def build_default_registry():
     """Return the ordered first-party factor collection used by the dashboard."""
     factors = [
@@ -206,6 +323,14 @@ def build_default_registry():
                       methodology="Existing traditional rule engine evaluated point in time with price and benchmark inputs; not validated for prediction.",
                       overview=False, percentile_eligible=False),
     ]
+    factors = [
+        replace(
+            factor,
+            window=FACTOR_WINDOWS[factor.key],
+            i18n={"zh-CN": FACTOR_ZH[factor.key]},
+        )
+        for factor in factors
+    ]
     groups = [
         FactorGroup("trend", "Trend", "Moving-average position diagnostics.", True),
         FactorGroup("momentum", "Momentum", "Point-in-time trailing returns excluding the latest month.", True),
@@ -213,6 +338,9 @@ def build_default_registry():
         FactorGroup("volume", "Volume / price", "Volume participation relative to trailing local history.", True),
         FactorGroup("risk", "Risk", "Range, volatility, and extension diagnostics.", True),
         FactorGroup("legacy", "Traditional rules", "Legacy descriptive rule output retained for comparison only.", False),
+    ]
+    groups = [
+        replace(group, i18n={"zh-CN": GROUP_ZH[group.key]}) for group in groups
     ]
     return FactorRegistry(factors, group_metadata=groups)
 

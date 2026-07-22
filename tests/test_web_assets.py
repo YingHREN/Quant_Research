@@ -406,7 +406,8 @@ class WebAssetTest(unittest.TestCase):
               missing_reason: 'future_reason'}};
             const metadata = [{{key: 'trend', label: 'Trend',
               methodology: 'Moving-average position diagnostics.', overview: true}},
-              {{key: 'future', label: 'Future group', methodology: 'Future group methodology.', overview: true}}];
+              {{key: 'future', label: 'Future group', methodology: 'Future group methodology.', overview: true,
+                i18n: {{'zh-CN': {{label: '未来分组', methodology: '未来分组方法。'}}}}}}];
             const zhRows = factorDetailRows([known, unknown], 'zh-CN');
             const zhGroups = groupFactorResults([known, unknown], metadata, 'zh-CN');
             assert.equal(zhRows[0].label, '收盘价相对 EMA20');
@@ -417,7 +418,7 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(zhRows[1].methodology, 'Safe future methodology.');
             assert.equal(zhRows[1].missingReason, 'future reason');
             assert.deepEqual(zhGroups.map(group => [group.label, group.methodology]), [
-              ['趋势', '均线位置诊断。'], ['Future group', 'Future group methodology.'],
+              ['趋势', '均线位置诊断。'], ['未来分组', '未来分组方法。'],
             ]);
             const overview = node();
             const tableBody = node('tbody');
@@ -462,6 +463,160 @@ class WebAssetTest(unittest.TestCase):
             ["node", "--input-type=module", "-e", script], cwd=ROOT,
             check=True, capture_output=True, text=True,
         )
+
+    def test_factor_popover_supports_pointer_keyboard_aria_and_cleanup(self):
+        module_uri = (STATIC / "js/factors.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+
+            class Node {{
+              constructor(tagName = 'div') {{
+                this.tagName = tagName.toUpperCase(); this.id = ''; this.className = '';
+                this.children = []; this.parentNode = null; this.attributes = {{}};
+                this.dataset = {{}}; this.style = {{}}; this.hidden = false;
+                this.listeners = new Map(); this._textContent = ''; this.focused = false;
+                this.rect = {{left: 380, right: 400, top: 560, bottom: 580, width: 20, height: 20}};
+              }}
+              get textContent() {{ return this._textContent; }}
+              set textContent(value) {{ this._textContent = value == null ? '' : String(value); this.children = []; }}
+              append(...items) {{ items.forEach(item => {{ item.parentNode = this; this.children.push(item); }}); }}
+              replaceChildren(...items) {{ this._textContent = ''; this.children = []; this.append(...items); }}
+              setAttribute(name, value) {{ this.attributes[name] = String(value); if (name === 'id') this.id = String(value); }}
+              getAttribute(name) {{ return this.attributes[name]; }}
+              removeAttribute(name) {{ delete this.attributes[name]; }}
+              addEventListener(name, handler) {{
+                if (!this.listeners.has(name)) this.listeners.set(name, []);
+                this.listeners.get(name).push(handler);
+              }}
+              dispatch(name, extra = {{}}) {{
+                const event = {{currentTarget: this, target: this, key: extra.key,
+                  relatedTarget: extra.relatedTarget || null, defaultPrevented: false,
+                  preventDefault() {{ this.defaultPrevented = true; }}}};
+                for (const handler of this.listeners.get(name) || []) handler(event);
+                return event;
+              }}
+              contains(target) {{ return target === this || this.children.some(child => child.contains(target)); }}
+              getBoundingClientRect() {{ return this.rect; }}
+              focus() {{ this.focused = true; }}
+            }}
+            function descendants(node) {{ return node.children.flatMap(child => [child, ...descendants(child)]); }}
+            function byClass(node, name) {{ return descendants(node).filter(child => child.className === name); }}
+            function treeText(node) {{ return [node.textContent, ...node.children.map(treeText)].join(' ').replace(/\\s+/g, ' ').trim(); }}
+
+            const body = new Node('body');
+            const documentListeners = new Map();
+            globalThis.document = {{body, createElement: tag => new Node(tag),
+              createDocumentFragment: () => new Node('fragment'), getElementById: () => null,
+              addEventListener(name, handler) {{ documentListeners.set(name, handler); }},
+              removeEventListener(name, handler) {{ if (documentListeners.get(name) === handler) documentListeners.delete(name); }},
+              dispatch(name, target, key = null) {{
+                const event = {{target, key, preventDefault() {{ this.defaultPrevented = true; }}}};
+                documentListeners.get(name)?.(event); return event;
+              }}}};
+            globalThis.window = {{innerWidth: 400, innerHeight: 600,
+              addEventListener() {{}}, removeEventListener() {{}}}};
+
+            const {{renderFactors}} = await import({json.dumps(module_uri)});
+            const overview = new Node('div');
+            const tableBody = new Node('tbody');
+            const base = {{group: 'future', overview: true, percentile: 0.75, peer_count: 2,
+              display_score: 75, raw_value: 1.25, formatted: '1.25x',
+              observation_date: '2026-07-22', missing: false, missing_reason: null,
+              description: 'English meaning.', methodology: 'English method.',
+              window: '20 sessions', direction: 'higher', version: 'v2'}};
+            const translated = {{...base, key: 'future_factor', label: 'Future factor',
+              i18n: {{'zh-CN': {{label: '未来因子 <img src=x>', description: '中文含义 <script>',
+                methodology: '中文方法', window: '20 个交易日', direction: '数值越高越强'}}}}}};
+            const missing = {{...base, key: 'missing_factor', label: 'Missing factor',
+              raw_value: null, formatted: null, display_score: null,
+              missing: true, missing_reason: 'missing_benchmark',
+              version: 'v3'}};
+            const groupMetadata = [{{key: 'future', label: 'Future',
+              methodology: 'Future methodology.', overview: true}}];
+            renderFactors([translated, missing], {{overview, tableBody, groupMetadata, locale: 'zh-CN'}});
+
+            const buttons = [...byClass(overview, 'factor-info'), ...byClass(tableBody, 'factor-info')];
+            assert.equal(buttons.length, 3);
+            assert.ok(buttons.every(button => button.tagName === 'BUTTON'));
+            assert.ok(buttons.every(button => button.getAttribute('type') === 'button'));
+            assert.ok(buttons.every(button => button.getAttribute('aria-controls') === 'factor-popover'));
+            assert.ok(buttons.every(button => button.getAttribute('aria-describedby') === 'factor-popover'));
+            assert.ok(buttons.every(button => button.getAttribute('aria-expanded') === 'false'));
+            assert.match(buttons[0].getAttribute('aria-label'), /未来因子/);
+            assert.equal(byClass(body, 'factor-popover').length, 1);
+            const popover = byClass(body, 'factor-popover')[0];
+            popover.rect = {{left: 0, right: 220, top: 0, bottom: 160, width: 220, height: 160}};
+            assert.equal(popover.getAttribute('role'), 'tooltip');
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('pointerenter');
+            assert.equal(popover.hidden, false);
+            assert.equal(buttons[0].getAttribute('aria-expanded'), 'true');
+            assert.match(treeText(popover), /未来因子 <img src=x>/);
+            assert.match(treeText(popover), /中文含义 <script>/);
+            assert.match(treeText(popover), /当前值 1.25x/);
+            assert.match(treeText(popover), /数据日期 2026-07-22/);
+            assert.match(treeText(popover), /版本 v2/);
+            assert.match(treeText(popover), /20 个交易日/);
+            assert.match(treeText(popover), /数值越高越强/);
+            assert.equal(popover.style.left, '172px');
+            assert.equal(popover.style.top, '392px');
+            buttons[0].dispatch('pointerleave');
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('focus');
+            assert.equal(popover.hidden, false);
+            buttons[0].dispatch('blur');
+            assert.equal(popover.hidden, true);
+
+            let keyEvent = buttons[0].dispatch('keydown', {{key: 'Enter'}});
+            assert.equal(keyEvent.defaultPrevented, true);
+            assert.equal(popover.hidden, false);
+            buttons[0].dispatch('keydown', {{key: 'Enter'}});
+            assert.equal(popover.hidden, true);
+            keyEvent = buttons[0].dispatch('keydown', {{key: ' '}});
+            assert.equal(keyEvent.defaultPrevented, true);
+            assert.equal(popover.hidden, false);
+
+            buttons[2].dispatch('click');
+            assert.equal(buttons[0].getAttribute('aria-expanded'), 'false');
+            assert.equal(buttons[2].getAttribute('aria-expanded'), 'true');
+            assert.equal(byClass(body, 'factor-popover').length, 1);
+            assert.match(treeText(popover), /缺失原因 缺少基准数据/);
+            document.dispatch('keydown', body, 'Escape');
+            assert.equal(popover.hidden, true);
+            assert.equal(buttons[2].getAttribute('aria-expanded'), 'false');
+            assert.equal(buttons[2].focused, true);
+
+            buttons[1].dispatch('click');
+            document.dispatch('click', new Node('main'));
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('click');
+            renderFactors([translated], {{overview, tableBody, groupMetadata, locale: 'en'}});
+            assert.equal(popover.hidden, true);
+            assert.equal(buttons[0].getAttribute('aria-expanded'), 'false');
+            assert.equal(byClass(body, 'factor-popover').length, 1);
+            const rerendered = [...byClass(overview, 'factor-info'), ...byClass(tableBody, 'factor-info')];
+            rerendered[0].dispatch('click');
+            assert.match(treeText(popover), /Future factor/);
+            assert.match(treeText(popover), /Current value 1.25x/);
+            assert.match(treeText(popover), /Data date 2026-07-22/);
+            assert.match(treeText(popover), /Version v2/);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        )
+
+    def test_factor_popover_styles_are_viewport_safe_and_keyboard_visible(self):
+        css = (STATIC / "css/dashboard.css").read_text()
+
+        self.assertRegex(css, r"\.factor-popover\s*\{[^}]*position:\s*fixed")
+        self.assertRegex(css, r"\.factor-popover\s*\{[^}]*max-width:\s*min\(")
+        self.assertRegex(css, r"\.factor-popover\s*\{[^}]*overflow-y:\s*auto")
+        self.assertIn(".factor-popover[hidden]", css)
+        self.assertIn(".factor-info:focus-visible", css)
 
     def test_daily_return_formatting_uses_fraction_units_and_quote_clear_is_explicit(self):
         module_uri = (STATIC / "js/app.js").as_uri()

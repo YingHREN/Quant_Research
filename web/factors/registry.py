@@ -53,6 +53,7 @@ class FactorRegistry:
                     or "Point-in-time descriptive diagnostics from registered factors."
                 ),
                 overview=bool(getattr(factor, "overview", False)),
+                i18n=getattr(factor, "group_i18n", None),
             )
         return factor
 
@@ -67,6 +68,8 @@ class FactorRegistry:
             "methodology": getattr(factor, "methodology", factor.description),
             "overview": bool(getattr(factor, "overview", False)),
             "version": factor.version,
+            "window": getattr(factor, "window", None),
+            "i18n": getattr(factor, "i18n", None),
         }
         try:
             value = factor.compute(context)
