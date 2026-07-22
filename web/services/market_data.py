@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -24,6 +25,13 @@ class UnknownTicker(LookupError):
     """Raised when a syntactically valid ticker has no local history."""
 
 
+class MarketDataUnavailable(RuntimeError):
+    """Raised when the local market-data database cannot be read safely."""
+
+    def __init__(self):
+        super().__init__("Market data is unavailable")
+
+
 @dataclass(frozen=True)
 class TickerSummary:
     ticker: str
@@ -38,8 +46,18 @@ class MarketDataRepository:
     def __init__(self, db_path):
         self.db_path = Path(db_path)
 
+    @contextmanager
     def _connect(self):
-        return sqlite3.connect(self.db_path)
+        try:
+            connection = sqlite3.connect(
+                f"{self.db_path.resolve().as_uri()}?mode=ro", uri=True
+            )
+            try:
+                yield connection
+            finally:
+                connection.close()
+        except sqlite3.Error as error:
+            raise MarketDataUnavailable() from error
 
     @staticmethod
     def _validate_ticker(ticker):

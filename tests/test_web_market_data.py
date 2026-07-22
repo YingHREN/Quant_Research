@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from web.services.market_data import InvalidTicker, MarketDataRepository, UnknownTicker
+from web.services.market_data import (
+    InvalidTicker,
+    MarketDataRepository,
+    MarketDataUnavailable,
+    UnknownTicker,
+)
 
 
 def create_price_db(path, rows_by_ticker):
@@ -82,3 +87,17 @@ class MarketDataRepositoryTest(unittest.TestCase):
         self.assertTrue(summaries["OLD"].inactive)
         self.assertEqual(summaries["OLD"].lag_days, 31)
         self.assertEqual(summaries["OLD"].latest_date, "2026-06-20")
+
+    def test_missing_database_is_not_created_and_raises_safe_error(self):
+        missing_db = Path(self.tmp.name) / "missing.db"
+        with self.assertRaisesRegex(MarketDataUnavailable, "^Market data is unavailable$"):
+            MarketDataRepository(missing_db).freshness()
+        self.assertFalse(missing_db.exists())
+
+    def test_malformed_database_raises_safe_error_without_sqlite_text(self):
+        malformed_db = Path(self.tmp.name) / "malformed.db"
+        malformed_db.write_text("not a sqlite database")
+        with self.assertRaises(MarketDataUnavailable) as context:
+            MarketDataRepository(malformed_db).freshness()
+        self.assertEqual(str(context.exception), "Market data is unavailable")
+        self.assertNotIn("file is not a database", str(context.exception).lower())
