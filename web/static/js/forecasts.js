@@ -6,7 +6,7 @@ export const DEFAULT_FORECAST_HORIZON = 20;
 let currentIndex = emptyIndex();
 
 function emptyIndex() {
-  return Object.freeze({ byDate: new Map(), evaluation: new Map(), model: null });
+  return Object.freeze({ byDate: new Map(), evaluation: new Map(), model: null, dateCoverage: null });
 }
 
 function dateKey(value) {
@@ -46,7 +46,12 @@ export function indexForecasts(payload) {
       if (evidence && typeof evidence === "object") evaluation.set(horizon, evidence);
     });
   }
-  currentIndex = Object.freeze({ byDate, evaluation, model: forecasts?.model || null });
+  currentIndex = Object.freeze({
+    byDate,
+    evaluation,
+    model: forecasts?.model || null,
+    dateCoverage: forecasts?.date_coverage || null,
+  });
   return currentIndex;
 }
 
@@ -105,7 +110,10 @@ function renderEvidence(section, evidence, locale) {
   const list = document.createElement("dl");
   list.className = "forecast-evidence";
   if (!evidence || evidence.unavailable_reason) {
-    appendItem(list, t("forecast.field.evidenceStatus", {}, locale), t("forecast.value.unavailable", {}, locale));
+    const status = evidence?.unavailable_reason
+      ? localizedCode("forecast.evaluationUnavailable", evidence.unavailable_reason, locale)
+      : t("forecast.value.unavailable", {}, locale);
+    appendItem(list, t("forecast.field.evidenceStatus", {}, locale), status);
   } else {
     appendItem(list, t("forecast.field.coverage", {}, locale), percent(evidence.coverage));
     appendItem(list, t("forecast.field.directionAccuracy", {}, locale), percent(evidence.direction_accuracy));
@@ -163,12 +171,21 @@ export function renderForecastDetail(container, options = {}) {
     appendItem(values, t("forecast.field.trainingSamples", {}, locale), String(forecast.training_sample_count ?? "—"));
     appendItem(values, t("forecast.field.trainingCutoff", {}, locale), forecast.training_cutoff || "—");
     appendItem(values, t("forecast.field.model", {}, locale), modelText(forecast, options.model));
-  } else if (forecast?.unavailable_reason) {
-    appendItem(
-      values,
-      t("forecast.field.unavailableReason", {}, locale),
-      localizedCode("forecast.unavailable", forecast.unavailable_reason, locale),
-    );
+  } else {
+    const computedDates = options.dateCoverage?.computed_dates;
+    const dateWasComputed = Array.isArray(computedDates)
+      && computedDates.includes(String(options.date));
+    const missingReason = forecast?.unavailable_reason
+      || (!forecast && dateWasComputed ? options.model?.unavailable_reason : null)
+      || (!forecast ? options.dateCoverage?.omitted_reason : null)
+      || (!forecast ? options.model?.unavailable_reason : null);
+    if (missingReason) {
+      appendItem(
+        values,
+        t("forecast.field.unavailableReason", {}, locale),
+        localizedCode("forecast.unavailable", missingReason, locale),
+      );
+    }
   }
 
   const disclaimer = document.createElement("p");

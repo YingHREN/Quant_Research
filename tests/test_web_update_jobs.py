@@ -200,8 +200,13 @@ class UpdateJobManagerTest(unittest.TestCase):
             ["AAA", "BBB", "AAA", "BBB"],
         )
 
-    def test_failed_partial_and_rate_limited_updates_do_not_invoke_success_callback(self):
+    def test_zero_write_terminal_states_retain_cache(self):
         cases = (
+            (
+                FakeRepository(()),
+                FakeProvider({}),
+                "completed",
+            ),
             (
                 FailingSummaryRepository(("AAA",)),
                 FakeProvider({}),
@@ -237,6 +242,42 @@ class UpdateJobManagerTest(unittest.TestCase):
 
                 self.assertEqual(snapshot.state, expected_state)
                 self.assertEqual(callbacks, [])
+
+    def test_partial_and_rate_limited_jobs_invalidate_after_committed_writes_before_terminal(self):
+        cases = (
+            (
+                FakeProvider({"AAA": history(10), "BBB": RuntimeError("bad")}),
+                "partial",
+            ),
+            (
+                FakeProvider({"AAA": history(10), "BBB": RateLimited("429")}),
+                "rate_limited",
+            ),
+        )
+        for provider, expected_state in cases:
+            with self.subTest(expected_state=expected_state):
+                callback_states = []
+
+                def invalidate():
+                    callback_states.append(manager.snapshot().state)
+
+                manager = UpdateJobManager(
+                    FakeRepository(("AAA", "BBB")),
+                    provider,
+                    on_success=invalidate,
+                )
+                log_context = (
+                    self.assertLogs("web.services.update_jobs", level="ERROR")
+                    if expected_state == "partial"
+                    else nullcontext()
+                )
+
+                with log_context:
+                    snapshot = manager.run_synchronously_for_test()
+
+                self.assertEqual(snapshot.state, expected_state)
+                self.assertEqual(snapshot.updated, 1)
+                self.assertEqual(callback_states, ["running"])
 
     def test_completed_job_updates_active_tickers_only(self):
         repository = FakeRepository(("AAA", "OLD", "BBB"), inactive=("OLD",))
@@ -326,7 +367,12 @@ class UpdateJobManagerTest(unittest.TestCase):
                     "BBB": [RateLimited("429"), history(20)],
                 }
             )
-            manager = UpdateJobManager(repository, provider)
+            callback_states = []
+
+            def invalidate():
+                callback_states.append(manager.snapshot().state)
+
+            manager = UpdateJobManager(repository, provider, on_success=invalidate)
 
             first = manager.run_synchronously_for_test().to_dict()
             with sqlite3.connect(repository.path) as connection:
@@ -341,6 +387,7 @@ class UpdateJobManagerTest(unittest.TestCase):
             self.assertEqual(first["error"], "rate_limited")
             self.assertTrue(first["resumable"])
             self.assertEqual(committed, [("AAA",)])
+            self.assertEqual(callback_states, ["running"])
 
             resumed = manager.run_synchronously_for_test().to_dict()
 
@@ -348,6 +395,7 @@ class UpdateJobManagerTest(unittest.TestCase):
         self.assertEqual(resumed["completed"], 2)
         self.assertEqual(resumed["updated"], 2)
         self.assertFalse(resumed["resumable"])
+        self.assertEqual(callback_states, ["running", "running"])
         self.assertEqual(provider.calls, ["AAA", "BBB", "BBB"])
 
     def test_provider_error_is_redacted_and_other_tickers_continue(self):

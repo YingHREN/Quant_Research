@@ -138,16 +138,18 @@ def walk_forward_evaluate(frame, horizon, provider):
     )
 
 
-def calibrate_up_probability(predictions, actuals, minimum_samples=100):
+def calibrate_up_probability(predictions, actuals, horizon, minimum_samples=100):
     """Calibrate the last prediction from strictly earlier OOS prediction rows.
 
     ``predictions`` contains the current query as its final value. ``actuals``
     may contain one fewer value, or a same-length final value that is ignored.
     This API shape makes it impossible for the current outcome to affect its
     own probability. Earlier non-finite pairs are excluded from the calibration
-    sample count. An empirical isotonic fit is used only after the sample and
-    both-class gates pass.
+    sample count. The positive class is the horizon-specific ``up`` direction,
+    not merely a return above zero. An empirical isotonic fit is used only after
+    the sample and both-class gates pass.
     """
+    checked_horizon = _validate_horizon(horizon)
     if isinstance(minimum_samples, bool) or not isinstance(minimum_samples, Integral):
         raise TypeError("minimum_samples must be an integer")
     minimum_samples = int(minimum_samples)
@@ -181,7 +183,11 @@ def calibrate_up_probability(predictions, actuals, minimum_samples=100):
             continue
         prediction, actual = pair
         clean_predictions.append(prediction)
-        outcomes.append(1.0 if actual > 0.0 else 0.0)
+        outcomes.append(
+            1.0
+            if direction_for_return(actual, checked_horizon) == "up"
+            else 0.0
+        )
 
     sample_count = len(clean_predictions)
     if sample_count < minimum_samples:

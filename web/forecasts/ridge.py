@@ -38,6 +38,7 @@ class RidgeForecastProvider:
         minimum_samples: int = 30,
         feature_columns: Sequence[str] = FEATURE_COLUMNS,
         calibration_history: pd.DataFrame | None = None,
+        _labels_validated: bool = False,
     ):
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("frame must be a DataFrame")
@@ -50,6 +51,8 @@ class RidgeForecastProvider:
             )
         if frame.index.has_duplicates:
             raise ValueError("duplicate (ticker, observation_date) keys are not allowed")
+        if not isinstance(_labels_validated, bool):
+            raise TypeError("_labels_validated must be a boolean")
         observation_dates = frame.index.get_level_values("observation_date")
         if not pd.api.types.is_datetime64_any_dtype(observation_dates.dtype):
             raise ValueError("observation_date keys must be datetime values")
@@ -76,10 +79,11 @@ class RidgeForecastProvider:
         if missing:
             raise ValueError(f"frame is missing feature columns: {missing}")
 
-        self._frame = frame.copy(deep=True)
+        self._frame = frame if _labels_validated else frame.copy(deep=True)
         self.alpha = float(alpha)
         self.minimum_samples = int(minimum_samples)
         self.feature_columns = columns
+        self._labels_validated = _labels_validated
         self._calibration_history = _validated_calibration_history(calibration_history)
 
     def forecast_series(self, ticker, dates, horizons):
@@ -109,7 +113,12 @@ class RidgeForecastProvider:
         if isinstance(forecast_row, pd.DataFrame):
             raise ValueError("forecast row ticker/date key must be unique")
 
-        training = eligible_training_rows(self._frame, asof, horizon)
+        training = eligible_training_rows(
+            self._frame,
+            asof,
+            horizon,
+            _labels_validated=self._labels_validated,
+        )
         target_name = target_column(horizon)
         finite_target = np.isfinite(
             pd.to_numeric(training[target_name], errors="coerce").to_numpy(
@@ -205,6 +214,7 @@ class RidgeForecastProvider:
         calibration = calibrate_up_probability(
             [*matured["predicted_return"], predicted_return],
             matured["actual_return"],
+            horizon=horizon,
         )
         return calibration
 
@@ -230,7 +240,11 @@ class RidgeForecastProvider:
         imputed_training = np.where(np.isnan(raw_training), medians, raw_training)
         imputed_forecast = np.where(np.isnan(raw_forecast), medians, raw_forecast)
 
-        with np.errstate(over="raise", divide="raise", invalid="raise"):
+        # Accelerate/BLAS may report benign divide status flags for large,
+        # finite matrix products.  Every explicit divisor below is guarded;
+        # keep real overflow/invalid failures strict without converting that
+        # backend status flag into a false model_error.
+        with np.errstate(over="raise", invalid="raise"):
             means = imputed_training.mean(axis=0)
             scales = imputed_training.std(axis=0, ddof=0)
             scales[scales == 0.0] = 1.0
@@ -241,7 +255,10 @@ class RidgeForecastProvider:
             penalty = np.eye(design.shape[1], dtype=float) * self.alpha
             penalty[0, 0] = 0.0
             lhs = design.T @ design + penalty
-            rhs = design.T @ target
+            # Avoid an Accelerate BLAS status-flag bug observed for large,
+            # entirely finite matrix-vector products under warning-strict
+            # execution.  The explicit reduction is algebraically identical.
+            rhs = np.sum(design * target[:, None], axis=0)
             try:
                 coefficients = np.linalg.solve(lhs, rhs)
             except np.linalg.LinAlgError:

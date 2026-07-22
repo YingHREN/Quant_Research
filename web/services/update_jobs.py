@@ -20,10 +20,6 @@ class RateLimited(RuntimeError):
     """Raised when the price provider returns HTTP 429."""
 
 
-class _CacheInvalidationFailed(RuntimeError):
-    """Keep invalidation details in logs while signaling a typed job failure."""
-
-
 @dataclass(frozen=True)
 class JobSnapshot:
     state: str
@@ -99,6 +95,7 @@ class UpdateJobManager:
         self._resumable = False
         self._remaining_tickers = None
         self._had_errors = False
+        self._run_updated_start = 0
 
     def start(self):
         """Start one daemon worker and return its initial running snapshot."""
@@ -152,6 +149,7 @@ class UpdateJobManager:
         self._finished_at = None
         self._error = None
         self._resumable = False
+        self._run_updated_start = self._updated
         self._transition_locked("running")
 
     def _run(self):
@@ -163,7 +161,6 @@ class UpdateJobManager:
                         state = "partial" if self._had_errors else "completed"
                         error = "provider_error" if self._had_errors else None
                         self._current_ticker = None
-                        notify_success = state == "completed" and self._updated > 0
                         break
                     ticker = self._remaining_tickers[0]
                     self._current_ticker = ticker
@@ -172,10 +169,9 @@ class UpdateJobManager:
                     frame = self._provider.fetch_history(ticker)
                     self._repository.upsert_history(ticker, frame)
                 except RateLimited:
-                    with self._lock:
-                        self._finish_locked(
-                            "rate_limited", "rate_limited", resumable=True
-                        )
+                    self._publish_terminal(
+                        "rate_limited", "rate_limited", resumable=True
+                    )
                     return
                 except Exception:
                     logger.exception("Price update failed for %s", ticker)
@@ -189,34 +185,29 @@ class UpdateJobManager:
                     self._updated += 1
                     self._completed += 1
                     self._remaining_tickers.pop(0)
-            if notify_success:
-                self._notify_success()
-            with self._lock:
-                self._finish_locked(state, error, resumable=False)
-        except _CacheInvalidationFailed:
-            with self._lock:
-                self._finish_locked(
-                    "failed",
-                    "cache_invalidation_error",
-                    resumable=False,
-                )
+            self._publish_terminal(state, error, resumable=False)
         except Exception:
             logger.exception("Dashboard price-update worker failed")
-            with self._lock:
-                self._finish_locked(
-                    "failed",
-                    "provider_error",
-                    resumable=bool(self._remaining_tickers),
-                )
+            self._publish_terminal(
+                "failed",
+                "provider_error",
+                resumable=bool(self._remaining_tickers),
+            )
 
-    def _notify_success(self):
-        if self._on_success is None:
-            return
-        try:
-            self._on_success()
-        except Exception as error:
-            logger.exception("Post-update success callback failed")
-            raise _CacheInvalidationFailed("cache_invalidation_error") from error
+    def _publish_terminal(self, state, error, resumable):
+        """Invalidate after this run's writes, then expose its terminal state."""
+        with self._lock:
+            wrote_prices = self._updated > self._run_updated_start
+        if wrote_prices and self._on_success is not None:
+            try:
+                self._on_success()
+            except Exception:
+                logger.exception("Post-write cache invalidation callback failed")
+                state = "failed"
+                error = "cache_invalidation_error"
+                resumable = False
+        with self._lock:
+            self._finish_locked(state, error, resumable)
 
     def _load_tickers_if_needed(self):
         with self._lock:

@@ -1056,7 +1056,9 @@ class WebAssetTest(unittest.TestCase):
             const forecasts = await import({json.dumps(forecast_uri)});
             const payload = {{
               forecasts: {{model: {{key: 'ridge_direction_v1', version: 'ridge-v1'}},
-                horizons: [5, 20, 60], by_date: {{
+                horizons: [5, 20, 60], date_coverage: {{requested_date_count: 70,
+                  computed_date_count: 1, policy: 'latest_only_synchronous',
+                  computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}}, by_date: {{
                   '2026-07-17': {{
                     '5': {{direction: 'neutral', predicted_return: 0.001, up_probability: null,
                       confidence_status: 'uncalibrated',
@@ -1078,9 +1080,8 @@ class WebAssetTest(unittest.TestCase):
                 '20': {{sample_count: 80, coverage: 0.75, direction_accuracy: 0.6, mae: 0.025,
                   zero_return_mae: 0.03, historical_mean_mae: 0.028,
                   evaluation_start: '2025-01-03', evaluation_end: '2026-06-30', model_version: 'ridge-v1'}},
-                '60': {{sample_count: 60, coverage: 0.5, direction_accuracy: 0.58, mae: 0.04,
-                  zero_return_mae: 0.05, historical_mean_mae: 0.047,
-                  evaluation_start: '2025-01-03', evaluation_end: '2026-06-30', model_version: 'ridge-v1'}},
+                '60': {{sample_count: 0, unavailable_reason: 'not_precomputed',
+                  model_version: 'ridge-v1'}},
               }},
             }};
             const index = forecasts.indexForecasts(payload);
@@ -1157,12 +1158,22 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(forecastMarkers.markers[0].text, 'Forecast direction: Down');
             assert.match(textTree(detail), /Locked/);
             assert.match(textTree(detail), /Confidence note Both outcome classes are required/);
+            assert.match(textTree(detail), /Evidence status Not precomputed/);
 
             created[0].clickHandler({{time: '2026-07-18'}});
             assert.equal(forecastMarkers.markers.length, 1);
             assert.equal(forecastMarkers.markers[0].time, '2026-07-18');
             assert.doesNotMatch(forecastMarkers.markers[0].text, /Forecast direction/);
             assert.match(textTree(detail), /Unavailable/);
+            assert.match(textTree(detail), /Unavailable reason Historical point not precomputed/);
+
+            const failureDetail = node();
+            forecasts.renderForecastDetail(failureDetail, {{locale: 'en', horizon: 20,
+              date: '2026-07-17', forecast: null,
+              model: {{unavailable_reason: 'insufficient_training_samples'}},
+              dateCoverage: {{computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}},
+              evaluation: payload.forecast_evaluation['20']}});
+            assert.match(textTree(failureDetail), /Unavailable reason Insufficient training samples/);
             assert.equal(controller.setForecastHorizon(40), 60);
         """
         result = subprocess.run(

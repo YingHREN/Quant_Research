@@ -36,6 +36,7 @@ class EvaluationUnavailableReason(str, Enum):
     """Stable reason used when unavailable forecasts have mixed causes."""
 
     NO_AVAILABLE_FORECASTS = "no_available_forecasts"
+    NOT_PRECOMPUTED = "not_precomputed"
 
 
 @dataclass(frozen=True)

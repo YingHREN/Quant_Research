@@ -9,17 +9,22 @@ import threading
 import pandas as pd
 
 from web.forecasts.base import (
+    EvaluationUnavailableReason,
     ForecastEvaluation,
     ForecastResult,
     SUPPORTED_HORIZONS,
     UnavailableReason,
 )
 from web.forecasts.dataset import attach_forward_targets, build_feature_frame
-from web.forecasts.evaluation import walk_forward_evaluate
 from web.forecasts.ridge import MODEL_KEY, MODEL_VERSION, RidgeForecastProvider
 
 
 DEFAULT_CACHE_SIZE = 16
+DEFAULT_MAX_FORECAST_DATES = 1
+
+
+class ForecastRevisionChanged(RuntimeError):
+    """The repository snapshot predates the service's current revision."""
 
 
 class _RidgeProviderFactory:
@@ -27,23 +32,26 @@ class _RidgeProviderFactory:
     model_version = MODEL_VERSION
 
     def __call__(self, frame):
-        return RidgeForecastProvider(frame)
+        return RidgeForecastProvider(frame, _labels_validated=True)
 
 
 class ForecastService:
-    """Build and cache one point-in-time forecast bundle per exact request range.
+    """Build bounded point-in-time bundles over revision-wide model artifacts.
 
     The lock deliberately covers cache-miss computation. Flask may serve the
     same stock concurrently; serializing a cold miss avoids fitting duplicate
     models and makes invalidation atomic with respect to cache publication.
+    Production leaves exhaustive evaluation unavailable until it is supplied
+    explicitly and computes only the configured trailing chart-date budget.
     """
 
     def __init__(
         self,
         *,
         provider_factory=None,
-        evaluator=walk_forward_evaluate,
+        evaluator=None,
         max_cache_size=DEFAULT_CACHE_SIZE,
+        max_forecast_dates=DEFAULT_MAX_FORECAST_DATES,
     ):
         if isinstance(max_cache_size, bool) or not isinstance(max_cache_size, int):
             raise TypeError("max_cache_size must be an integer")
@@ -56,15 +64,28 @@ class ForecastService:
         )
         if not callable(factory):
             raise TypeError("provider_factory must be callable")
-        if not callable(evaluator):
-            raise TypeError("evaluator must be callable")
+        if evaluator is not None and not callable(evaluator):
+            raise TypeError("evaluator must be callable or None")
+        if max_forecast_dates is not None:
+            if isinstance(max_forecast_dates, bool) or not isinstance(
+                max_forecast_dates, int
+            ):
+                raise TypeError("max_forecast_dates must be an integer or None")
+            if max_forecast_dates <= 0:
+                raise ValueError("max_forecast_dates must be positive")
         self.model_key = _required_identity(factory, "model_key")
         self.model_version = _required_identity(factory, "model_version")
         self._provider_factory = factory
         self._evaluator = evaluator
         self._max_cache_size = max_cache_size
+        self._max_forecast_dates = max_forecast_dates
         self._cache = OrderedDict()
         self._database_revision = 0
+        self._artifact_revision = None
+        self._artifact_frame = None
+        self._artifact_provider = None
+        self._artifact_evaluations = None
+        self._artifact_coverage = None
         self._lock = threading.RLock()
 
     @property
@@ -72,7 +93,7 @@ class ForecastService:
         with self._lock:
             return self._database_revision
 
-    def build(self, ticker, chart_dates, histories):
+    def build(self, ticker, chart_dates, histories, *, expected_revision=None):
         """Return a fresh JSON-ready bundle without mutating input histories."""
         ticker = _required_identity_value(ticker, "ticker")
         dates = _chart_dates(chart_dates)
@@ -87,6 +108,13 @@ class ForecastService:
         first_date = dates[0] if dates else None
         last_date = dates[-1] if dates else None
         with self._lock:
+            if (
+                expected_revision is not None
+                and expected_revision != self._database_revision
+            ):
+                raise ForecastRevisionChanged(
+                    "forecast revision changed after the market-data snapshot"
+                )
             key = (
                 self._database_revision,
                 ticker,
@@ -111,25 +139,30 @@ class ForecastService:
         with self._lock:
             self._database_revision += 1
             self._cache.clear()
+            self._artifact_revision = None
+            self._artifact_frame = None
+            self._artifact_provider = None
+            self._artifact_evaluations = None
+            self._artifact_coverage = None
 
     def _compute(self, ticker, dates, histories):
-        frame = attach_forward_targets(build_feature_frame(histories))
-        provider = self._provider_factory(frame)
-        _validate_provider_identity(provider, self.model_key, self.model_version)
-        results = provider.forecast_series(ticker, dates, SUPPORTED_HORIZONS)
+        _frame, provider, evaluations = self._revision_artifacts(histories)
+        forecast_dates = (
+            dates
+            if self._max_forecast_dates is None
+            else dates[-self._max_forecast_dates :]
+        )
+        bounded = len(forecast_dates) < len(dates)
+        results = provider.forecast_series(ticker, forecast_dates, SUPPORTED_HORIZONS)
         by_date, reasons = _sparse_results(
             results,
             ticker=ticker,
-            dates=dates,
+            dates=forecast_dates,
             model_key=self.model_key,
             model_version=self.model_version,
         )
         model_status = "available" if by_date else "unavailable"
         unavailable_reason = None if by_date else _aggregate_reason(reasons)
-        evaluations = {
-            str(horizon): self._evaluator(frame, horizon, provider).to_dict()
-            for horizon in SUPPORTED_HORIZONS
-        }
         return {
             "forecasts": {
                 "model": {
@@ -140,9 +173,55 @@ class ForecastService:
                 },
                 "horizons": list(SUPPORTED_HORIZONS),
                 "by_date": by_date,
+                "date_coverage": {
+                    "requested_date_count": len(dates),
+                    "computed_date_count": len(forecast_dates),
+                    "computed_dates": [
+                        value.date().isoformat() for value in forecast_dates
+                    ],
+                    "policy": (
+                        "latest_only_synchronous" if bounded else "all_requested"
+                    ),
+                    "omitted_reason": "not_precomputed" if bounded else None,
+                },
             },
             "forecast_evaluation": evaluations,
         }
+
+    def _revision_artifacts(self, histories):
+        coverage = _history_coverage(histories)
+        same_revision = self._artifact_revision == self._database_revision
+        richer_snapshot = same_revision and _coverage_extends(
+            coverage, self._artifact_coverage
+        )
+        if same_revision and not richer_snapshot:
+            return (
+                self._artifact_frame,
+                self._artifact_provider,
+                self._artifact_evaluations,
+            )
+        if richer_snapshot:
+            self._cache.clear()
+        frame = attach_forward_targets(build_feature_frame(histories))
+        provider = self._provider_factory(frame)
+        _validate_provider_identity(provider, self.model_key, self.model_version)
+        if self._evaluator is None:
+            evaluations = _unavailable_evaluations(
+                self.model_key,
+                self.model_version,
+                EvaluationUnavailableReason.NOT_PRECOMPUTED,
+            )
+        else:
+            evaluations = {
+                str(horizon): self._evaluator(frame, horizon, provider).to_dict()
+                for horizon in SUPPORTED_HORIZONS
+            }
+        self._artifact_revision = self._database_revision
+        self._artifact_frame = frame
+        self._artifact_provider = provider
+        self._artifact_evaluations = evaluations
+        self._artifact_coverage = coverage
+        return frame, provider, evaluations
 
 
 def unavailable_forecast_bundle(
@@ -154,9 +233,33 @@ def unavailable_forecast_bundle(
     model_key = _required_identity_value(model_key, "model_key")
     model_version = _required_identity_value(model_version, "model_version")
     reason_value = reason.value if isinstance(reason, UnavailableReason) else str(reason)
-    evaluations = {}
-    for horizon in SUPPORTED_HORIZONS:
-        evaluations[str(horizon)] = ForecastEvaluation(
+    evaluations = _unavailable_evaluations(model_key, model_version, reason_value)
+    return {
+        "forecasts": {
+            "model": {
+                "key": model_key,
+                "version": model_version,
+                "status": "unavailable",
+                "unavailable_reason": reason_value,
+            },
+            "horizons": list(SUPPORTED_HORIZONS),
+            "by_date": {},
+            "date_coverage": {
+                "requested_date_count": 0,
+                "computed_date_count": 0,
+                "computed_dates": [],
+                "policy": "unavailable",
+                "omitted_reason": reason_value,
+            },
+        },
+        "forecast_evaluation": evaluations,
+    }
+
+
+def _unavailable_evaluations(model_key, model_version, reason):
+    reason_value = reason.value if hasattr(reason, "value") else str(reason)
+    return {
+        str(horizon): ForecastEvaluation(
             horizon_sessions=horizon,
             sample_count=0,
             coverage=None,
@@ -173,19 +276,33 @@ def unavailable_forecast_bundle(
             model_version=model_version,
             unavailable_reason=reason_value,
         ).to_dict()
-    return {
-        "forecasts": {
-            "model": {
-                "key": model_key,
-                "version": model_version,
-                "status": "unavailable",
-                "unavailable_reason": reason_value,
-            },
-            "horizons": list(SUPPORTED_HORIZONS),
-            "by_date": {},
-        },
-        "forecast_evaluation": evaluations,
+        for horizon in SUPPORTED_HORIZONS
     }
+
+
+def _history_coverage(histories):
+    coverage = {}
+    for ticker, history in histories.items():
+        if not isinstance(history, pd.DataFrame) or history.empty:
+            coverage[str(ticker)] = (0, None)
+            continue
+        coverage[str(ticker)] = (
+            len(history),
+            pd.Timestamp(history.index[-1]).normalize(),
+        )
+    return coverage
+
+
+def _coverage_extends(incoming, cached):
+    if cached is None:
+        return True
+    for ticker, (row_count, last_date) in incoming.items():
+        cached_count, cached_last = cached.get(ticker, (0, None))
+        if row_count > cached_count:
+            return True
+        if last_date is not None and (cached_last is None or last_date > cached_last):
+            return True
+    return False
 
 
 def _chart_dates(values):

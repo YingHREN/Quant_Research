@@ -263,6 +263,8 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       evaluation: evaluationFor(forecastIndex, forecastHorizon),
       horizon: forecastHorizon,
       model: forecastIndex.model,
+      dateCoverage: forecastIndex.dateCoverage,
+      date,
     });
   }
 

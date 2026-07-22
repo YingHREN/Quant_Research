@@ -50,9 +50,15 @@ ends on `t` is excluded. The historical-mean baseline uses the same boundary.
 Preprocessing is refit on each eligible training set, and calibration may use
 only earlier out-of-sample predictions whose own outcomes have matured.
 
-To reproduce the API's walk-forward summaries from the same local database,
-run this from the repository root. It performs repeated expanding-window fits
-and can take substantially longer than the unit tests:
+Exhaustive walk-forward summaries are an explicit offline research job, not
+request-time work. The production stock API returns the full evaluation
+contract with typed `not_precomputed` values until revision/model-specific
+evidence has been produced and integrated by a separate ingestion path. The
+command below reports evidence but does not populate the production API
+automatically. To run the exhaustive evaluation from the same local database,
+use the following command from the repository root. It performs hundreds of
+thousands of expanding-window fits on the current dataset and can take
+substantially longer than the unit tests:
 
 ```bash
 PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python - <<'PY'
@@ -92,14 +98,18 @@ Interpret the fields conservatively:
   `up` predictions, again only on dates meeting the cross-sectional threshold.
   They are descriptive and have no uncertainty estimate in this report.
 
+Do not substitute a bounded sample or a latest-date fit for this full
+evaluation. If the offline job has not completed, preserve `not_precomputed`
+instead of publishing partial metrics as full evidence.
+
 Short history, survivorship in the local ticker universe, overlapping forward
 outcomes, regime concentration, repeated use of the same data for inspection,
 and absent transaction costs all limit interpretation. Probability is omitted
-unless at least 100 matured earlier out-of-sample rows contain both
-positive-return (`actual_return > 0`) and non-positive-return outcomes. The
-current `up_probability` therefore estimates the positive-return event, not the
-neutral-band `up` direction event. A missing probability is evidence that the
-calibration gate did not pass, not a zero-probability forecast.
+unless at least 100 matured earlier out-of-sample rows contain both outcomes of
+the horizon-specific `up` event. A realized return must exceed +1%, +2%, or +4%
+at 5, 20, or 60 sessions to count as up; a positive return inside the neutral
+band is non-up. A missing probability is evidence that the calibration gate did
+not pass, not a zero-probability forecast.
 
 ## Known legacy conflict
 

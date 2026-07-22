@@ -7,6 +7,7 @@ import subprocess
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,8 @@ import pandas as pd
 from web.app import create_app
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
-from web.services.forecasts import ForecastService
+from web.forecasts.dataset import build_feature_frame
+from web.services.forecasts import ForecastRevisionChanged, ForecastService
 from web.services.market_data import (
     InvalidTicker,
     MarketDataUnavailable,
@@ -439,6 +441,15 @@ class InjectedForecastService:
         }
 
 
+class RevisionAwareInjectedForecastService(InjectedForecastService):
+    database_revision = 7
+
+    def build(self, ticker, chart_dates, histories, *, expected_revision=None):
+        payload = super().build(ticker, chart_dates, histories)
+        self.calls[-1] = (*self.calls[-1], expected_revision)
+        return payload
+
+
 def test_config(**overrides):
     config = {
         "TESTING": True,
@@ -650,6 +661,19 @@ class WebApiTest(unittest.TestCase):
         self.assertFalse(
             any(call[0] == "load_universe_histories" for call in self.repository.calls)
         )
+
+    def test_stock_binds_repository_snapshot_to_forecast_revision(self):
+        service = RevisionAwareInjectedForecastService()
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(service.calls[0][3], 7)
 
     def test_injected_forecast_service_does_not_require_update_cache_hook(self):
         service = InjectedForecastService()
@@ -945,6 +969,7 @@ class ForecastServiceTest(unittest.TestCase):
             provider_factory=factory,
             evaluator=fake_forecast_evaluation,
             max_cache_size=2,
+            max_forecast_dates=None,
         )
 
         payload = service.build("AAA", self.chart_dates, self.histories)
@@ -976,6 +1001,46 @@ class ForecastServiceTest(unittest.TestCase):
         self.assertEqual(set(payload["forecast_evaluation"]), {"5", "20", "60"})
         self.assertEqual(factory.providers[0].calls[0][0], "AAA")
         self.assertEqual(factory.providers[0].calls[0][2], (5, 20, 60))
+
+    def test_default_service_bounds_request_work_and_marks_evaluation_not_precomputed(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+
+        payload = service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(
+            factory.providers[0].calls,
+            [
+                (
+                    "AAA",
+                    (pd.Timestamp(self.chart_dates[-1]),),
+                    (5, 20, 60),
+                )
+            ],
+        )
+        self.assertEqual(
+            payload["forecasts"]["date_coverage"],
+            {
+                "requested_date_count": 2,
+                "computed_date_count": 1,
+                "computed_dates": [self.chart_dates[-1]],
+                "policy": "latest_only_synchronous",
+                "omitted_reason": "not_precomputed",
+            },
+        )
+        self.assertEqual(
+            {
+                row["unavailable_reason"]
+                for row in payload["forecast_evaluation"].values()
+            },
+            {"not_precomputed"},
+        )
+        self.assertTrue(
+            all(
+                row["sample_count"] == 0
+                for row in payload["forecast_evaluation"].values()
+            )
+        )
 
     def test_preserves_falsey_injected_provider_factory(self):
         factory = FalseyForecastFactory()
@@ -1030,8 +1095,74 @@ class ForecastServiceTest(unittest.TestCase):
         self.assertEqual(first, repeated)
         self.assertIsNot(first, repeated)
         self.assertIsNot(first["forecasts"], repeated["forecasts"])
-        self.assertEqual(len(factory.providers), 5)
+        self.assertEqual(len(factory.providers), 2)
         self.assertEqual(first, after_invalidation)
+
+    def test_revision_artifacts_are_built_once_across_distinct_bundle_keys(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+        )
+
+        with mock.patch(
+            "web.services.forecasts.build_feature_frame",
+            wraps=build_feature_frame,
+        ) as builder:
+            service.build("AAA", self.chart_dates, self.histories)
+            service.build("BBB", self.chart_dates, self.histories)
+            service.build("AAA", self.chart_dates[-1:], self.histories)
+            self.assertEqual(builder.call_count, 1)
+            self.assertEqual(len(factory.providers), 1)
+
+            service.invalidate()
+            service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(builder.call_count, 2)
+        self.assertEqual(len(factory.providers), 2)
+
+    def test_revision_artifacts_rebuild_when_a_later_snapshot_is_more_complete(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        short_histories = {
+            ticker: history.iloc[:-10]
+            for ticker, history in self.histories.items()
+        }
+        short_dates = tuple(value.index[-1] for value in short_histories.values())
+
+        service.build("AAA", short_dates[:1], short_histories)
+        service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(len(factory.providers), 2)
+
+    def test_snapshot_from_an_older_revision_is_never_cached_under_a_new_revision(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        observed_revision = service.database_revision
+        service.invalidate()
+
+        with self.assertRaises(ForecastRevisionChanged):
+            service.build(
+                "AAA",
+                self.chart_dates,
+                self.histories,
+                expected_revision=observed_revision,
+            )
+
+        self.assertEqual(len(factory.providers), 0)
+        self.assertEqual(service._cache, {})
+
+    def test_generated_revision_frame_skips_revalidating_labels_per_live_fit(self):
+        service = ForecastService()
+
+        with mock.patch(
+            "web.forecasts.dataset._validate_label_dates",
+            side_effect=AssertionError("generated labels were already validated"),
+        ):
+            payload = service.build("AAA", self.chart_dates, self.histories)
+
+        self.assertEqual(payload["forecasts"]["model"]["status"], "available")
+        self.assertEqual(len(payload["forecasts"]["by_date"]), 1)
 
     def test_same_key_concurrent_requests_compute_once(self):
         factory = FakeForecastFactory()

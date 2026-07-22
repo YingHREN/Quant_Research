@@ -245,11 +245,12 @@ class WalkForwardEvaluationTest(unittest.TestCase):
 class CalibrationTest(unittest.TestCase):
     def test_calibration_minimum_cannot_weaken_the_100_row_gate(self):
         with self.assertRaisesRegex(ValueError, "at least 100"):
-            calibrate_up_probability([0.1], [], minimum_samples=99)
+            calibrate_up_probability([0.1], [], horizon=5, minimum_samples=99)
 
         stricter = calibrate_up_probability(
             [*np.linspace(-1.0, 1.0, 100), 0.5],
             np.resize((-0.01, 0.02), 100),
+            horizon=5,
             minimum_samples=101,
         )
 
@@ -262,10 +263,10 @@ class CalibrationTest(unittest.TestCase):
         history_actuals = np.where(history_predictions > 0.0, 0.02, -0.01)
 
         low = calibrate_up_probability(
-            [*history_predictions, -0.75], history_actuals
+            [*history_predictions, -0.75], history_actuals, horizon=5
         )
         high = calibrate_up_probability(
-            [*history_predictions, 0.75], history_actuals
+            [*history_predictions, 0.75], history_actuals, horizon=5
         )
 
         self.assertEqual(low.sample_count, 100)
@@ -277,10 +278,10 @@ class CalibrationTest(unittest.TestCase):
 
         # A same-row outcome is never allowed to influence its own probability.
         with_current_down = calibrate_up_probability(
-            [*history_predictions, 0.75], [*history_actuals, -1.0]
+            [*history_predictions, 0.75], [*history_actuals, -1.0], horizon=5
         )
         with_current_up = calibrate_up_probability(
-            [*history_predictions, 0.75], [*history_actuals, 1.0]
+            [*history_predictions, 0.75], [*history_actuals, 1.0], horizon=5
         )
         self.assertEqual(with_current_down, with_current_up)
         self.assertEqual(with_current_up.up_probability, high.up_probability)
@@ -289,10 +290,12 @@ class CalibrationTest(unittest.TestCase):
         insufficient = calibrate_up_probability(
             [*np.linspace(-1.0, 1.0, 99), 0.5],
             np.resize((-0.01, 0.02), 99),
+            horizon=5,
         )
         one_class = calibrate_up_probability(
             [*np.linspace(-1.0, 1.0, 100), 0.5],
             np.full(100, 0.02),
+            horizon=5,
         )
 
         self.assertIsNone(insufficient.up_probability)
@@ -301,6 +304,22 @@ class CalibrationTest(unittest.TestCase):
         self.assertIsNone(one_class.up_probability)
         self.assertEqual(one_class.sample_count, 100)
         self.assertEqual(one_class.reason, CALIBRATION_INSUFFICIENT_CLASSES)
+
+    def test_positive_but_neutral_actual_is_not_an_up_outcome(self):
+        history_predictions = np.linspace(-1.0, 1.0, 100)
+        actuals = np.where(history_predictions > 0.0, 0.02, 0.005)
+
+        low = calibrate_up_probability(
+            [*history_predictions, -0.75], actuals, horizon=5
+        )
+        high = calibrate_up_probability(
+            [*history_predictions, 0.75], actuals, horizon=5
+        )
+
+        self.assertIsNone(low.reason)
+        self.assertIsNone(high.reason)
+        self.assertEqual(low.up_probability, 0.0)
+        self.assertEqual(high.up_probability, 1.0)
 
     def test_ridge_uses_only_matured_oos_calibration_and_never_fabricates_probability(self):
         from tests.test_web_forecasts import synthetic_frame

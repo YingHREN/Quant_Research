@@ -105,12 +105,11 @@ samples, a degenerate target, or a model error.
 `up_probability` is intentionally absent unless calibration succeeds. The gate
 requires at least 100 earlier, out-of-sample predictions for the same ticker,
 horizon, model key, and model version; their outcomes must already be observable
-and must contain both classes of the current positive-return event
-(`actual_return > 0`). This event is not the neutral-band direction class: for
-example, a positive 20-session return up to +2% is `neutral` for direction but
-counts as positive for calibration. Therefore `up_probability` must currently
-be read as probability of a positive return, not probability that direction is
-`up`. Otherwise the response preserves `null` with `insufficient_calibration_samples` or
+and must contain both horizon-specific classes: `up` means the realized return
+is greater than +1%, +2%, or +4% for 5, 20, or 60 sessions, respectively, while
+everything at or below that positive band is non-up. A positive return inside
+the neutral band is therefore not an up outcome. Otherwise the response
+preserves `null` with `insufficient_calibration_samples` or
 `calibration_requires_both_classes`. The default local service does not load a
 persisted calibration history, so a predicted return and direction can be
 available while probability remains absent. Never derive a probability by
@@ -135,18 +134,37 @@ from the current point-in-time frame. Supply a callable factory whose own
 Flask config as `FORECAST_SERVICE`. Add API isolation, payload-shape, and cache
 tests under `tests/test_web_api.py`.
 
-The revision cache key is exactly
-`(database_revision, ticker, first_chart_date, last_chart_date, model_version)`.
-A second identical stock request returns a defensive copy of the cached bundle.
-The current implementation clears the bounded cache and advances
-`database_revision` only after a fully successful price update that wrote at
-least one ticker. Failed and rate-limited terminal states do not invalidate.
-Because ticker writes commit individually, a partial or rate-limited job after
-one or more commits can leave stale forecasts under the old revision. This is a
-known correctness limitation; do not rely on cached forecasts after such an
-update until invalidation is made write-aware or the process is restarted. If
-post-update invalidation itself fails, the update is published as `failed` with
-`cache_invalidation_error`, never as a successful update over stale forecasts.
+The service builds the full feature/target frame and provider once per database
+revision and reuses those immutable artifacts across stock requests. Completed
+response bundles use the exact key
+`(database_revision, ticker, first_chart_date, last_chart_date, model_version)`;
+a second identical request returns a defensive copy. Invalidation advances the
+revision and clears both layers.
+
+Every update run records whether at least one ticker write committed during
+that run. If so, it invalidates forecasts while the public job state is still
+`running`, before publishing `completed`, `partial`, `rate_limited`, or `failed`.
+A resumable run that later commits more writes invalidates again. A terminal run
+with zero committed writes retains the cache. If invalidation itself fails, the
+job is published as `failed` with `cache_invalidation_error`; it is never
+reported as successful over stale forecasts.
+
+### Synchronous forecast and evaluation budget
+
+The stock request computes only the latest requested chart date for all three
+horizons. Older chart dates are deliberately sparse and render a typed
+`not_precomputed` state rather than reusing the latest model or pretending full
+coverage. `forecasts.date_coverage` reports `requested_date_count`,
+`computed_date_count`, the exact `computed_dates`, the
+`latest_only_synchronous` policy, and the omission reason.
+
+Exhaustive walk-forward evaluation is not run inside a stock request. The
+production response retains the complete per-horizon evaluation schema with
+`sample_count: 0`, null metrics, and `unavailable_reason: not_precomputed` until
+revision/model-specific evidence is produced offline and integrated by a
+separate ingestion path. The documented offline command does not populate the
+API automatically. This keeps request latency bounded without presenting
+partial rows as a full walk-forward evaluation.
 
 ## Historical scenario methodology
 
@@ -197,8 +215,11 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m py_
 git diff --check
 ```
 
-Then start the dashboard on loopback, load one stock twice to exercise the cold
-and revision-cache paths, and perform desktop and 390x844 browser passes. Confirm
+Then start the dashboard on loopback and load one stock twice to exercise the
+cold and revision-cache paths. Confirm that `date_coverage` declares the bounded
+synchronous policy and that evaluation evidence is typed `not_precomputed`
+rather than partially populated. Separately perform desktop and 390x844 browser
+passes. Confirm
 the Chinese default, English switch and reload persistence, a `07-17` tick, an
 ISO detail date, factor popover pointer and keyboard behavior, all 5/20/60
 forecast controls, linked crosshair hover and click-lock, forecast unavailable

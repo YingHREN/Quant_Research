@@ -28,7 +28,11 @@ from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
-from web.services.forecasts import ForecastService, unavailable_forecast_bundle
+from web.services.forecasts import (
+    ForecastRevisionChanged,
+    ForecastService,
+    unavailable_forecast_bundle,
+)
 from web.services.market_data import (
     InvalidTicker,
     MarketDataRepository,
@@ -116,6 +120,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     @flask_app.get("/api/stocks/<path:ticker>")
     def stock(ticker):
         normalized_ticker = ticker.strip().upper()
+        forecast_revision = getattr(forecast_service, "database_revision", None)
         snapshot = repository.load_analysis_snapshot(normalized_ticker)
         history = snapshot.histories[normalized_ticker]
         if history.empty:
@@ -170,10 +175,22 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             warnings.append("insufficient_indicator_history")
 
         try:
-            forecast_payload = forecast_service.build(
+            forecast_arguments = (
                 normalized_ticker,
                 tuple(row["time"] for row in chart),
                 peer_histories,
+            )
+            if forecast_revision is None:
+                forecast_payload = forecast_service.build(*forecast_arguments)
+            else:
+                forecast_payload = forecast_service.build(
+                    *forecast_arguments,
+                    expected_revision=forecast_revision,
+                )
+        except ForecastRevisionChanged:
+            forecast_payload = unavailable_forecast_bundle(
+                getattr(forecast_service, "model_key", "ridge_direction_v1"),
+                getattr(forecast_service, "model_version", "v1"),
             )
         except Exception as error:
             flask_app.logger.exception(

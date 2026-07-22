@@ -8,7 +8,7 @@ from numbers import Integral
 import numpy as np
 import pandas as pd
 
-from factors.compute import _ema, _sma, tight_platform, vcp_analysis
+from factors.compute import _ema, _sma, _zigzag_pivots
 from web.forecasts.base import SUPPORTED_HORIZONS
 
 
@@ -71,26 +71,25 @@ def attach_forward_targets(
     for horizon in checked_horizons:
         target_name = target_column(horizon)
         end_name = label_end_column(horizon)
-        result[target_name] = np.nan
-        result[end_name] = pd.NaT
-        for _, group in result.groupby(level="ticker", sort=False):
-            ordered = group.sort_index(level="observation_date")
-            future_close = ordered["close"].shift(-horizon)
-            denominator = ordered["close"].replace(0.0, np.nan)
-            target = future_close / denominator - 1.0
-            dates = pd.Series(
-                ordered.index.get_level_values("observation_date"),
-                index=ordered.index,
-                dtype="datetime64[ns]",
-            ).shift(-horizon)
-            result.loc[ordered.index, target_name] = target
-            result.loc[ordered.index, end_name] = dates
+        future_close = result["close"].groupby(level="ticker", sort=False).shift(
+            -horizon
+        )
+        denominator = result["close"].replace(0.0, np.nan)
+        result[target_name] = future_close / denominator - 1.0
+        observation_dates = pd.Series(
+            result.index.get_level_values("observation_date"),
+            index=result.index,
+            dtype="datetime64[ns]",
+        )
+        result[end_name] = observation_dates.groupby(
+            level="ticker", sort=False
+        ).shift(-horizon)
 
     return result.sort_index()
 
 
 def eligible_training_rows(
-    frame: pd.DataFrame, asof, horizon: int
+    frame: pd.DataFrame, asof, horizon: int, *, _labels_validated=False
 ) -> pd.DataFrame:
     """Return labels fully observable strictly before ``asof``.
 
@@ -110,7 +109,8 @@ def eligible_training_rows(
         raise ValueError("asof must be a valid timestamp")
     if cutoff.tz is not None:
         cutoff = cutoff.tz_localize(None)
-    _validate_label_dates(frame, horizon)
+    if not _labels_validated:
+        _validate_label_dates(frame, horizon)
     observation_dates = pd.Series(
         frame.index.get_level_values("observation_date"), index=frame.index
     )
@@ -194,7 +194,7 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
         .std(ddof=1)
         * np.sqrt(252)
     )
-    strict_vcp, platform = _structure_features(history)
+    strict_vcp, platform = _fast_structure_features(history)
     features["strict_vcp"] = strict_vcp
     features["tight_platform"] = platform
     features = features.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
@@ -205,19 +205,164 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
     return features
 
 
-def _structure_features(history: pd.DataFrame):
-    vcp_values = pd.Series(np.nan, index=history.index, dtype=float)
-    platform_values = pd.Series(np.nan, index=history.index, dtype=float)
-    for position in range(59, len(history)):
-        prefix = history.iloc[: position + 1]
-        required_lookback = prefix.iloc[-252:]
-        if not np.isfinite(required_lookback.to_numpy(copy=False)).all():
+def _fast_structure_features(history: pd.DataFrame):
+    """Compute exact causal structure flags without rebuilding DataFrames.
+
+    The public factor analyzers return rich diagnostic dictionaries.  The
+    forecast dataset consumes only their two boolean decisions, so this path
+    ports the same gates to bounded NumPy slices while retaining the exact
+    252-session, expanding-prefix information boundary.
+    """
+    vcp_values = np.full(len(history), np.nan, dtype=float)
+    platform_values = np.full(len(history), np.nan, dtype=float)
+    values = history.loc[:, REQUIRED_PRICE_COLUMNS].to_numpy(dtype=float, copy=False)
+    high = values[:, 1]
+    low = values[:, 2]
+    close = values[:, 3]
+    positions = np.arange(len(history))
+    close_series = pd.Series(close, index=history.index, dtype=float)
+    finite_rows = np.isfinite(values).all(axis=1).astype(float)
+    finite_lookback = (
+        pd.Series(finite_rows, index=history.index)
+        .rolling(252, min_periods=1)
+        .min()
+        .to_numpy(dtype=float)
+        == 1.0
+    )
+    ma50 = close_series.rolling(50).mean().to_numpy(dtype=float)
+    ma200 = close_series.rolling(200).mean().to_numpy(dtype=float)
+    high_52w = close_series.rolling(252, min_periods=1).max().to_numpy(dtype=float)
+    return_20 = (close_series / close_series.shift(20) - 1.0).to_numpy(dtype=float)
+    common_gate = (
+        (positions >= 59)
+        & finite_lookback
+        & (close > ma50)
+        & (np.isnan(ma200) | (ma50 >= ma200))
+        & (return_20 <= 0.12)
+    )
+    vcp_candidates = common_gate & (close / high_52w >= 0.75)
+    for position in np.flatnonzero(vcp_candidates):
+        start = max(0, position - 251)
+        window_high = high[start : position + 1]
+        window_low = low[start : position + 1]
+        window_close = close[start : position + 1]
+        vcp_values[position] = float(
+            _strict_vcp_pattern(window_high, window_low, window_close)
+        )
+    vcp_values[(positions >= 59) & finite_lookback & ~vcp_candidates] = 0.0
+
+    previous_close = close_series.shift(1)
+    true_range = pd.concat(
+        (
+            pd.Series(high - low, index=history.index),
+            pd.Series(np.abs(high - previous_close), index=history.index),
+            pd.Series(np.abs(low - previous_close), index=history.index),
+        ),
+        axis=1,
+    ).max(axis=1)
+    atr20 = true_range.rolling(20).mean().to_numpy(dtype=float)
+    fallback_atr = close * 0.02
+    effective_atr = np.where((atr20 != 0.0) & np.isfinite(atr20), atr20, fallback_atr)
+    window_high = close_series.rolling(20).max().to_numpy(dtype=float)
+    window_low = close_series.rolling(20).min().to_numpy(dtype=float)
+    range_pct = (window_high - window_low) / window_high * 100.0
+    base_return = (close_series / close_series.shift(19) - 1.0).to_numpy(dtype=float)
+    travel = close_series.diff().abs().rolling(19).sum().to_numpy(dtype=float)
+    efficiency = np.ones(len(history), dtype=float)
+    np.divide(
+        np.abs(close - close_series.shift(19).to_numpy(dtype=float)),
+        travel,
+        out=efficiency,
+        where=travel > 0.0,
+    )
+    platform_candidates = (
+        common_gate
+        & (close / high_52w >= 0.90)
+        & (range_pct <= np.maximum(6.0, 4.0 * effective_atr / close * 100.0))
+        & (base_return <= 0.08)
+        & (efficiency <= 0.35)
+    )
+    platform_values[(positions >= 59) & finite_lookback] = platform_candidates[
+        (positions >= 59) & finite_lookback
+    ].astype(float)
+    return (
+        pd.Series(vcp_values, index=history.index, dtype=float),
+        pd.Series(platform_values, index=history.index, dtype=float),
+    )
+
+
+def _strict_vcp_pattern(high, low, close):
+    segment_start = max(0, len(close) - 250)
+    segment_high = high[segment_start:]
+    segment_low = low[segment_start:]
+    segment_close = close[segment_start:]
+    chosen = None
+    for base_days in range(80, 19, -5):
+        if base_days > len(segment_close) - 1:
             continue
-        vcp = vcp_analysis(required_lookback)
-        platform = tight_platform(required_lookback)
-        vcp_values.iloc[position] = float(vcp.get("reject_reason") is None)
-        platform_values.iloc[position] = float(bool(platform.get("is_platform")))
-    return vcp_values, platform_values
+        base_high = segment_high[-base_days:]
+        base_low = segment_low[-base_days:]
+        base_close = segment_close[-base_days:]
+        highest = float(np.max(base_high))
+        lowest = float(np.min(base_low))
+        depth = (highest - lowest) / highest if highest else 1.0
+        if depth > 0.35:
+            continue
+        base_return = base_close[-1] / base_close[0] - 1.0
+        travel = float(np.sum(np.abs(np.diff(base_close))))
+        efficiency = (
+            abs(base_close[-1] - base_close[0]) / travel if travel > 0.0 else 1.0
+        )
+        if base_return > 0.15 and efficiency > 0.50:
+            continue
+        chosen = (base_high, base_low, base_close)
+        break
+    if chosen is None:
+        return False
+
+    base_high, base_low, base_close = chosen
+    atr = _array_atr(base_high, base_low, base_close, min(20, len(base_close) - 1))
+    if not atr:
+        atr = base_close[-1] * 0.03
+    adaptive_pct = min(max(atr / base_close[-1] * 150.0, 3.0), 10.0)
+    pivots = _zigzag_pivots(base_close, pct=adaptive_pct)
+    if len(pivots) < 3:
+        return False
+    contractions = []
+    for left, right in zip(pivots, pivots[1:]):
+        if left[2] == "H" and right[2] == "L":
+            depth = (left[1] - right[1]) / left[1] * 100.0
+            if depth > 2.0:
+                contractions.append(round(float(depth), 1))
+    if len(contractions) < 2:
+        return False
+    contractions = contractions[-4:]
+    strictly_decreasing = all(
+        contractions[index + 1] <= contractions[index] * 0.95
+        for index in range(len(contractions) - 1)
+    )
+    last_first_ratio = contractions[-1] / contractions[0]
+    return bool(
+        strictly_decreasing
+        and last_first_ratio <= 0.75
+        and contractions[0] - contractions[-1] >= 3.0
+    )
+
+
+def _array_atr(high, low, close, periods):
+    if len(close) < periods + 1:
+        return None
+    previous_close = np.empty_like(close, dtype=float)
+    previous_close[0] = np.nan
+    previous_close[1:] = close[:-1]
+    true_range = np.fmax.reduce(
+        (
+            high - low,
+            np.abs(high - previous_close),
+            np.abs(low - previous_close),
+        )
+    )
+    return float(np.mean(true_range[-periods:]))
 
 
 def _relative_percent(numerator: pd.Series, denominator: pd.Series):

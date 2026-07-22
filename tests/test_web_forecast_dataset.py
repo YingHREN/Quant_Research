@@ -1,10 +1,14 @@
 import unittest
 from dataclasses import FrozenInstanceError
 import json
+import warnings
 
 import numpy as np
 import pandas as pd
 from pandas.testing import assert_series_equal
+
+from factors.compute import tight_platform, vcp_analysis
+import web.forecasts.dataset as forecast_dataset
 
 from web.forecasts.base import (
     ForecastEvaluation,
@@ -39,6 +43,43 @@ def price_history(start="2025-01-02", periods=280, close=None):
 
 
 class ForecastDatasetTest(unittest.TestCase):
+    def test_fast_structure_features_match_causal_reference(self):
+        close = 100.0 + np.sin(np.arange(280) / 4.0) * 8.0 + np.arange(280) * 0.08
+        history = price_history(periods=280, close=close)
+        fast_structure_features = getattr(
+            forecast_dataset, "_fast_structure_features", None
+        )
+        self.assertIsNotNone(
+            fast_structure_features,
+            "forecast dataset needs the bounded NumPy structure implementation",
+        )
+        if fast_structure_features is None:
+            return
+
+        fast_vcp, fast_platform = fast_structure_features(history)
+        expected_vcp = pd.Series(np.nan, index=history.index, dtype=float)
+        expected_platform = pd.Series(np.nan, index=history.index, dtype=float)
+        for position in range(59, len(history)):
+            prefix = history.iloc[max(0, position - 251) : position + 1]
+            expected_vcp.iloc[position] = float(
+                vcp_analysis(prefix).get("reject_reason") is None
+            )
+            expected_platform.iloc[position] = float(
+                bool(tight_platform(prefix).get("is_platform"))
+            )
+
+        assert_series_equal(fast_vcp, expected_vcp)
+        assert_series_equal(fast_platform, expected_platform)
+
+    def test_flat_history_structure_features_emit_no_numeric_warning(self):
+        history = price_history(periods=280, close=np.full(280, 100.0))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            frame = build_feature_frame({"AAA": history})
+
+        self.assertEqual(len(frame), len(history))
+
     def test_forward_target_uses_ticker_local_session_positions(self):
         histories = {
             "AAA": price_history(periods=80),

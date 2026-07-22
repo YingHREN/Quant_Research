@@ -74,6 +74,18 @@ class RidgeForecastProviderTest(unittest.TestCase):
         ).forecast_series("AAA", (dates[10],), (5,))[0]
         self.assertAlmostEqual(unregularized.predicted_return, 0.032, places=12)
 
+    def test_large_finite_universe_does_not_fail_inside_blas(self):
+        tickers = tuple(f"T{number:03d}" for number in range(181))
+        frame, dates = synthetic_frame(periods=501, tickers=tickers)
+
+        result = RidgeForecastProvider(frame).forecast_series(
+            "T000", (dates[-1],), (5,)
+        )[0]
+
+        self.assertNotEqual(result.direction, "unavailable")
+        self.assertIsNone(result.unavailable_reason)
+        self.assertTrue(np.isfinite(result.predicted_return))
+
     def test_intercept_is_not_penalized(self):
         frame, dates = synthetic_frame()
         training_target_mean = 0.011
