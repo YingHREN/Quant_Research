@@ -8,14 +8,22 @@ from web.forecasts.dataset import (
     build_feature_frame,
     eligible_training_rows,
 )
+from web.forecasts.evaluation import (
+    CalibrationResult,
+    calibrate_up_probability,
+    walk_forward_evaluate,
+)
 
 __all__ = (
     "FEATURE_COLUMNS",
     "SUPPORTED_HORIZONS",
     "ForecastEvaluation",
     "ForecastResult",
+    "CalibrationResult",
     "UnavailableReason",
     "attach_forward_targets",
     "build_feature_frame",
     "eligible_training_rows",
+    "calibrate_up_probability",
+    "walk_forward_evaluate",
 )

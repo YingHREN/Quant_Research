@@ -37,6 +37,7 @@ class RidgeForecastProvider:
         alpha: float = 1.0,
         minimum_samples: int = 30,
         feature_columns: Sequence[str] = FEATURE_COLUMNS,
+        calibration_history: pd.DataFrame | None = None,
     ):
         if not isinstance(frame, pd.DataFrame):
             raise TypeError("frame must be a DataFrame")
@@ -79,6 +80,7 @@ class RidgeForecastProvider:
         self.alpha = float(alpha)
         self.minimum_samples = int(minimum_samples)
         self.feature_columns = columns
+        self._calibration_history = _validated_calibration_history(calibration_history)
 
     def forecast_series(self, ticker, dates, horizons):
         """Return forecasts in requested date-major, horizon-minor order."""
@@ -163,20 +165,48 @@ class RidgeForecastProvider:
                 cutoff,
             )
 
+        up_probability = self._calibrated_probability(
+            predicted_return, asof, horizon
+        )
         return ForecastResult(
             ticker=ticker,
             asof_date=asof,
             horizon_sessions=horizon,
             direction=direction_for_return(predicted_return, horizon),
             predicted_return=predicted_return,
-            up_probability=None,
-            confidence_status="uncalibrated",
+            up_probability=up_probability,
+            confidence_status=(
+                "calibrated" if up_probability is not None else "uncalibrated"
+            ),
             training_sample_count=sample_count,
             training_cutoff=cutoff,
             model_key=self.model_key,
             model_version=self.model_version,
             unavailable_reason=None,
         )
+
+    def _calibrated_probability(self, predicted_return, asof, horizon):
+        if self._calibration_history.empty:
+            return None
+        history = self._calibration_history
+        matured = history.loc[
+            (history["horizon_sessions"] == horizon)
+            & (history["model_key"] == self.model_key)
+            & (history["model_version"] == self.model_version)
+            & (history["asof_date"] < asof)
+            & (history["label_end_date"] < asof)
+        ]
+        if matured.empty:
+            return None
+        # Local import avoids coupling the model implementation to evaluation
+        # at module-import time.
+        from web.forecasts.evaluation import calibrate_up_probability
+
+        calibration = calibrate_up_probability(
+            [*matured["predicted_return"], predicted_return],
+            matured["actual_return"],
+        )
+        return calibration.up_probability
 
     def _fit_predict(self, training, target, forecast_row):
         raw_training = training.loc[:, self.feature_columns].to_numpy(
@@ -300,3 +330,65 @@ def _validated_horizons(values):
     if invalid:
         raise ValueError(f"unsupported forecast horizons: {invalid}")
     return result
+
+
+def _validated_calibration_history(history):
+    columns = (
+        "asof_date",
+        "label_end_date",
+        "training_cutoff",
+        "horizon_sessions",
+        "predicted_return",
+        "actual_return",
+        "model_key",
+        "model_version",
+    )
+    if history is None:
+        return pd.DataFrame(columns=columns)
+    if not isinstance(history, pd.DataFrame):
+        raise TypeError("calibration_history must be a DataFrame or None")
+    missing = [column for column in columns if column not in history]
+    if missing:
+        raise ValueError(f"calibration_history is missing columns: {missing}")
+    result = history.copy(deep=True)
+    for column in ("asof_date", "label_end_date", "training_cutoff"):
+        try:
+            result[column] = pd.to_datetime(result[column])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"calibration_history {column} must contain valid dates"
+            ) from exc
+        if result[column].isna().any():
+            raise ValueError(f"calibration_history {column} must not be missing")
+        if result[column].dt.tz is not None:
+            result[column] = result[column].dt.tz_localize(None)
+        result[column] = result[column].dt.normalize()
+    if not (result["asof_date"] < result["label_end_date"]).all():
+        raise ValueError("calibration labels must end after their OOS prediction date")
+    if not (result["training_cutoff"] < result["asof_date"]).all():
+        raise ValueError(
+            "calibration training cutoffs must precede their OOS prediction date"
+        )
+    checked_horizons = []
+    for value in result["horizon_sessions"]:
+        checked_horizons.append(_validated_horizons((value,))[0])
+    result["horizon_sessions"] = checked_horizons
+    for column in ("predicted_return", "actual_return"):
+        try:
+            numeric = pd.to_numeric(result[column], errors="raise").astype(float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"calibration_history {column} must contain finite numbers"
+            ) from exc
+        if not np.isfinite(numeric.to_numpy()).all():
+            raise ValueError(
+                f"calibration_history {column} must contain finite numbers"
+            )
+        result[column] = numeric
+    for column in ("model_key", "model_version"):
+        if any(not isinstance(value, str) or not value.strip() for value in result[column]):
+            raise ValueError(f"calibration_history {column} must be non-empty strings")
+        result[column] = result[column].str.strip()
+    return result.loc[:, columns].sort_values(
+        ["label_end_date", "asof_date"], kind="mergesort"
+    ).reset_index(drop=True)
