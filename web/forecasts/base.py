@@ -67,11 +67,11 @@ class ForecastResult:
         asof_date = _optional_date(self.asof_date, "asof_date")
         training_cutoff = _optional_date(self.training_cutoff, "training_cutoff")
         reason = _normalize_reason(self.unavailable_reason)
+        if asof_date is None:
+            raise ValueError("forecasts require asof_date")
         if int(self.training_sample_count) > 0 and training_cutoff is None:
             raise ValueError("positive training_sample_count requires training_cutoff")
         if training_cutoff is not None:
-            if asof_date is None:
-                raise ValueError("training_cutoff requires asof_date")
             if training_cutoff >= asof_date:
                 raise ValueError("training_cutoff must be strictly before asof_date")
         if self.direction == "unavailable" and reason is None:
@@ -86,8 +86,6 @@ class ForecastResult:
         else:
             if predicted_return is None:
                 raise ValueError("available forecasts require a finite predicted_return")
-            if asof_date is None:
-                raise ValueError("available forecasts require asof_date")
             if int(self.training_sample_count) <= 0:
                 raise ValueError("available forecasts require training samples")
             if self.confidence_status == "unavailable":

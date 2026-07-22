@@ -211,7 +211,7 @@ def _structure_features(history: pd.DataFrame):
     for position in range(59, len(history)):
         prefix = history.iloc[: position + 1]
         required_lookback = prefix.iloc[-252:]
-        if required_lookback.isna().any(axis=None):
+        if not np.isfinite(required_lookback.to_numpy(copy=False)).all():
             continue
         vcp = vcp_analysis(required_lookback)
         platform = tight_platform(required_lookback)

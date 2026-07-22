@@ -123,3 +123,26 @@ All supplied result cutoffs now require an as-of date and precede it strictly,
 positive training counts require a cutoff in available and unavailable states,
 and numeric contract fields reject booleans. The final focused and full counts
 above include those review regressions.
+
+## Final Important findings
+
+The final review required a valid `asof_date` for every `ForecastResult`, not
+only available predictions, and required the structure dependency guard to
+reject every non-finite OHLCV value rather than NaN alone. RED coverage showed
+that unavailable results accepted both `None` and `NaT` as-of dates. It also
+showed that `+inf` and `-inf` placed 100 sessions back in each of Open, High,
+Low, Close, and Volume reached the canonical structure detectors and produced
+false `0.0` signals (and, for some close paths, numeric warnings).
+
+Construction now rejects a missing as-of date before branching on forecast
+availability. The structure guard now applies `numpy.isfinite` to the complete
+up-to-252-session OHLCV matrix before either detector runs, leaving
+`strict_vcp` and `tight_platform` missing for NaN, positive infinity, or
+negative infinity in any required input.
+
+Final verification:
+
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-final2-green-pycache ../../venv/bin/python -W error -m unittest tests.test_web_forecast_dataset -v`
+  - PASS (21 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-final2-full-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (151 tests)

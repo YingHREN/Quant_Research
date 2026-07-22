@@ -128,6 +128,18 @@ class ForecastDatasetTest(unittest.TestCase):
         self.assertTrue(pd.isna(latest["strict_vcp"]))
         self.assertTrue(pd.isna(latest["tight_platform"]))
 
+    def test_structure_features_stay_missing_for_infinite_ohlcv_in_lookback(self):
+        for column in ("Open", "High", "Low", "Close", "Volume"):
+            for non_finite in (np.inf, -np.inf):
+                with self.subTest(column=column, non_finite=non_finite):
+                    history = price_history(periods=280)
+                    history.loc[history.index[-100], column] = non_finite
+
+                    latest = build_feature_frame({"AAA": history}).iloc[-1]
+
+                    self.assertTrue(pd.isna(latest["strict_vcp"]))
+                    self.assertTrue(pd.isna(latest["tight_platform"]))
+
     def test_empty_feature_frame_accepts_forward_targets(self):
         empty = build_feature_frame({})
 
@@ -288,7 +300,6 @@ class ForecastContractTest(unittest.TestCase):
         unavailable = ForecastResult(
             **{
                 **common,
-                "asof_date": None,
                 "direction": "unavailable",
                 "predicted_return": None,
                 "confidence_status": "unavailable",
@@ -297,9 +308,11 @@ class ForecastContractTest(unittest.TestCase):
                 "unavailable_reason": "insufficient_history",
             }
         )
-        self.assertIsNone(unavailable.asof_date)
+        self.assertEqual(unavailable.asof_date, pd.Timestamp("2026-07-22"))
 
         invalid_unavailable_provenance = (
+            {"asof_date": None, "training_sample_count": 0, "training_cutoff": None},
+            {"asof_date": pd.NaT, "training_sample_count": 0, "training_cutoff": None},
             {"asof_date": "2026-07-22", "training_cutoff": "2026-07-22"},
             {"asof_date": "2026-07-22", "training_cutoff": "2026-07-23"},
             {"training_sample_count": 10, "training_cutoff": None},
