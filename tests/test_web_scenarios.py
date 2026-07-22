@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 import numpy as np
@@ -22,7 +23,23 @@ def deterministic_history(periods: int) -> pd.DataFrame:
     )
 
 
+def cap_triggering_history() -> pd.DataFrame:
+    """Build seven extreme old 20-session gains outside current volatility data."""
+    history = deterministic_history(500)
+    adjusted_close = history.columns.get_loc("Adj Close")
+    for position, price in zip(range(199, 340, 20), 100 * 2 ** np.arange(8)):
+        history.iloc[position, adjusted_close] = price
+    history.iloc[359, adjusted_close] = 100.0
+    return history
+
+
 class HistoricalScenarioProviderTest(unittest.TestCase):
+    def test_defaults_are_the_documented_horizons_and_quantiles(self):
+        provider = HistoricalScenarioProvider()
+
+        self.assertEqual(provider.horizons, (20, 40, 60))
+        self.assertEqual(provider.quantiles, (0.25, 0.5, 0.75))
+
     def test_uses_non_overlapping_samples_and_no_future_bars(self):
         history = deterministic_history(320)
         asof = history.index[-61]
@@ -59,22 +76,43 @@ class HistoricalScenarioProviderTest(unittest.TestCase):
             )
 
     def test_caps_quantile_returns_and_interpolates_log_paths(self):
-        history = deterministic_history(500)
-        history.loc[history.index[-21], "Adj Close"] = 1.0
-        history.loc[history.index[-1], "Adj Close"] = 10_000.0
+        history = cap_triggering_history()
+        close = history["Adj Close"]
+        raw_returns = [
+            close.iloc[end] / close.iloc[end - 20] - 1
+            for end in range(len(close) - 1, 19, -20)
+        ]
+        realized_volatility = float(
+            close.pct_change().dropna().iloc[-63:].std(ddof=1) * math.sqrt(252)
+        )
+        expected_cap = float(3 * realized_volatility * math.sqrt(20 / 252))
+        raw_optimistic = float(np.quantile(raw_returns, 0.75))
 
         band = HistoricalScenarioProvider().build(history, None)["horizons"]["20"]
 
-        self.assertLessEqual(
-            abs(band["quantiles"]["optimistic"]), band["return_cap"]
-        )
+        self.assertGreater(raw_optimistic, expected_cap)
+        self.assertEqual(band["return_cap"], expected_cap)
+        self.assertEqual(band["quantiles"]["optimistic"], expected_cap)
         endpoint = band["paths"]["optimistic"][-1]
-        self.assertAlmostEqual(endpoint["return"], band["quantiles"]["optimistic"])
+        self.assertAlmostEqual(endpoint["return"], expected_cap)
+        self.assertAlmostEqual(endpoint["price"], close.iloc[-1] * (1 + expected_cap))
         midpoint = band["paths"]["median"][10]
-        expected_midpoint = history["Adj Close"].iloc[-1] * np.exp(
+        expected_midpoint = close.iloc[-1] * np.exp(
             np.log1p(band["quantiles"]["median"]) / 2
         )
         self.assertAlmostEqual(midpoint["price"], expected_midpoint)
+
+    def test_exactly_eight_samples_is_an_available_inclusive_boundary(self):
+        provider = HistoricalScenarioProvider()
+        enough = provider.build(deterministic_history(161), None)["horizons"]["20"]
+        too_short = provider.build(deterministic_history(160), None)["horizons"]["20"]
+
+        self.assertTrue(enough["available"])
+        self.assertIsNone(enough["missing_reason"])
+        self.assertEqual(enough["sample_count"], 8)
+        self.assertFalse(too_short["available"])
+        self.assertEqual(too_short["sample_count"], 7)
+        self.assertEqual(too_short["missing_reason"], "insufficient_samples")
 
     def test_missing_horizon_returns_reason(self):
         result = HistoricalScenarioProvider().build(deterministic_history(80), None)
