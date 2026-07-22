@@ -193,6 +193,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .empty-list { padding: 20px 8px; color: var(--muted); text-align: center; }
 
 .research-panel { display: grid; min-width: 0; gap: 16px; }
+.research-panel > .panel { min-width: 0; max-width: 100%; overflow: hidden; }
 .research-panel > .panel, .analysis-grid > .panel { padding: 18px; }
 
 .security-header {
@@ -215,6 +216,9 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .range-controls button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
 .chart-placeholder, .volume-placeholder, .scenario-placeholder {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   border: 1px dashed var(--line-strong);
   border-radius: 10px;
   background: repeating-linear-gradient(135deg, rgba(255,255,255,0.014) 0 8px, transparent 8px 16px);
@@ -267,6 +271,7 @@ tr:not([data-state="missing"]) .missing-reason { color: var(--muted); }
 .structure-nested .structure-item { padding: 6px 0 0; border-width: 1px 0 0; border-radius: 0; }
 
 .scenario-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 0.42fr); gap: 10px; align-items: stretch; }
+.scenario-layout, .scenario-layout > * { min-width: 0; max-width: 100%; }
 .scenario-layout .detail-strip { margin-top: 14px; }
 .scenario-empty { display: grid; height: 100%; margin: 0; place-items: center; color: var(--muted); text-align: center; }
 .scenario-methodology { margin-bottom: 6px; color: var(--text); }

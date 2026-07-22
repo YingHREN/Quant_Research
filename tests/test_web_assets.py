@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -193,6 +194,24 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-range="1y"', html)
         self.assertIn('data-range="2y"', html)
         self.assertIn('data-range="all"', html)
+
+    def test_chart_panels_contain_canvas_intrinsic_width_on_mobile(self):
+        css = (STATIC / "css/dashboard.css").read_text()
+
+        selectors = (
+            ".research-panel > .panel",
+            ".chart-placeholder, .volume-placeholder, .scenario-placeholder",
+            ".scenario-layout, .scenario-layout > *",
+        )
+        for selector in selectors:
+            match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+            self.assertIsNotNone(match, selector)
+            declarations = match.group(1)
+            self.assertIn("min-width: 0", declarations)
+            self.assertIn("max-width: 100%", declarations)
+        for selector in selectors[:2]:
+            match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+            self.assertIn("overflow: hidden", match.group(1))
 
     def test_factor_helpers_are_payload_driven_and_preserve_diagnostics(self):
         module_uri = (STATIC / "js/factors.js").as_uri()
