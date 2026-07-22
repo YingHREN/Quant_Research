@@ -133,7 +133,16 @@
             <table id="factor-table">
               <caption>Raw factor observations and methodology</caption>
               <thead>
-                <tr><th>Factor</th><th>Raw value</th><th>Percentile</th><th>Date</th></tr>
+                <tr>
+                  <th>Factor</th>
+                  <th>Formatted value</th>
+                  <th>Raw value</th>
+                  <th>Percentile / peers</th>
+                  <th>Display score</th>
+                  <th>Date</th>
+                  <th>Description / version</th>
+                  <th>Missing reason</th>
+                </tr>
               </thead>
               <tbody id="factor-table-body"></tbody>
             </table>
@@ -155,8 +164,10 @@
           </div>
         </div>
         <p class="safety-copy">Historical scenarios describe ranges; they are not predicted probabilities.</p>
-        <div id="scenario-chart" class="scenario-placeholder" aria-label="Historical scenario chart"></div>
-        <div id="scenario-meta" class="detail-strip">Scenario methodology loads with a selected ticker.</div>
+        <div class="scenario-layout">
+          <div id="scenario-chart" class="scenario-placeholder" aria-label="Historical scenario chart"></div>
+          <div id="scenario-meta" class="detail-strip">Scenario methodology loads with a selected ticker.</div>
+        </div>
       </section>
     </main>
   </div>

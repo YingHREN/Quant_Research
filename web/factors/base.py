@@ -40,6 +40,7 @@ class FactorResult:
     description: str
     version: str
     percentile: float | None = None
+    percentile_peer_count: int | None = None
     display_score: float | None = None
 
     def to_dict(self):
@@ -52,6 +53,7 @@ class FactorResult:
             "raw_value": json_safe(self.raw_value),
             "formatted": self.formatted,
             "percentile": json_safe(self.percentile),
+            "percentile_peer_count": self.percentile_peer_count,
             "display_score": json_safe(self.display_score),
             "observation_date": iso_date(self.observation_date),
             "missing": self.missing,

@@ -44,4 +44,12 @@ export function getStock(ticker) {
   return requestJson(`/api/stocks/${encodeURIComponent(ticker)}`);
 }
 
-export const api = Object.freeze({ getUniverse, getStock });
+export function startUpdate() {
+  return requestJson("/api/update", { method: "POST" });
+}
+
+export function getUpdateStatus() {
+  return requestJson("/api/update/status");
+}
+
+export const api = Object.freeze({ getUniverse, getStock, startUpdate, getUpdateStatus });

@@ -1,5 +1,7 @@
 import { api } from "./api.js";
 import { createLinkedCharts } from "./charts.js";
+import { renderFactors, renderStructures } from "./factors.js";
+import { renderScenarios } from "./scenarios.js";
 import {
   chooseInitialTicker,
   persistSelectedTicker,
@@ -7,10 +9,12 @@ import {
   store,
 } from "./store.js";
 import { filterTickers, renderUniverse, sortTickers } from "./universe.js";
+import { createUpdateController, shouldReloadSelectedTicker } from "./update.js";
 
 const elements = {};
 let stockRequestSequence = 0;
 let chartController = null;
+let updateController = null;
 
 function byId(id) {
   return document.getElementById(id);
@@ -83,6 +87,19 @@ function renderStockHeader(payload) {
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
 
+function clearResearchPanels() {
+  chartController.setChartData({ chart: [] });
+  renderFactors([], {
+    overview: elements.factorOverview,
+    tableBody: elements.factorTableBody,
+  });
+  renderStructures(null, elements.structureContent);
+  renderScenarios(null, {
+    chart: elements.scenarioChart,
+    metadata: elements.scenarioMeta,
+  });
+}
+
 async function selectTicker(ticker) {
   if (!ticker) return;
   const requestSequence = ++stockRequestSequence;
@@ -94,7 +111,7 @@ async function selectTicker(ticker) {
   setText(elements.researchStatus, `Loading ${ticker} from the local database…`);
   elements.researchStatus.removeAttribute("data-tone");
   renderWarnings([]);
-  chartController.setChartData({ chart: [] });
+  clearResearchPanels();
 
   try {
     const payload = await api.getStock(ticker);
@@ -102,6 +119,15 @@ async function selectTicker(ticker) {
     store.setState({ stockPayload: payload });
     renderStockHeader(payload);
     chartController.setChartData(payload);
+    renderFactors(payload.factors, {
+      overview: elements.factorOverview,
+      tableBody: elements.factorTableBody,
+    });
+    renderStructures(payload.structures, elements.structureContent);
+    renderScenarios(payload.scenarios, {
+      chart: elements.scenarioChart,
+      metadata: elements.scenarioMeta,
+    });
   } catch (error) {
     if (requestSequence !== stockRequestSequence) return;
     setText(elements.securityState, "Unavailable");
@@ -134,6 +160,34 @@ async function loadUniverse() {
     setText(elements.universeStatus, describeError(error));
     elements.universeStatus.dataset.tone = "error";
     setText(elements.researchStatus, "Stock research is unavailable until the local universe loads.");
+  }
+}
+
+async function refreshUniverseAfterUpdate() {
+  const previous = store.getState();
+  const previousTicker = previous.selectedTicker;
+  const previousObservationDate = previous.stockPayload?.observation_date || null;
+  try {
+    const payload = await api.getUniverse();
+    const rows = Array.isArray(payload.tickers) ? payload.tickers : [];
+    const selectedTicker = chooseInitialTicker(rows, previousTicker);
+    store.setState({ universePayload: payload, universe: rows, selectedTicker });
+    setText(elements.marketDate, payload.asof || "No data");
+    setText(elements.marketCoverage, coverageText(payload));
+    paintUniverse();
+
+    const selectionChanged = selectedTicker !== previousTicker;
+    const observationChanged = shouldReloadSelectedTicker(
+      selectedTicker,
+      previousObservationDate,
+      rows,
+    );
+    if (selectedTicker && (selectionChanged || observationChanged)) {
+      await selectTicker(selectedTicker);
+    }
+  } catch (error) {
+    setText(elements.universeStatus, describeError(error));
+    elements.universeStatus.dataset.tone = "error";
   }
 }
 
@@ -190,6 +244,13 @@ function captureElements() {
     priceChart: byId("price-chart"),
     volumeChart: byId("volume-chart"),
     crosshairDetail: byId("crosshair-detail"),
+    factorOverview: byId("factor-overview"),
+    factorTableBody: byId("factor-table-body"),
+    structureContent: byId("structure-content"),
+    scenarioChart: byId("scenario-chart"),
+    scenarioMeta: byId("scenario-meta"),
+    updateData: byId("update-data"),
+    updateStatus: byId("update-status"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
   });
 }
@@ -201,11 +262,19 @@ export async function initializeDashboard() {
     elements.volumeChart,
     elements.crosshairDetail,
   );
+  updateController = createUpdateController({
+    button: elements.updateData,
+    status: elements.updateStatus,
+    onTerminal: refreshUniverseAfterUpdate,
+  });
   bindControls();
   await loadUniverse();
 }
 
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", initializeDashboard, { once: true });
-  window.addEventListener("pagehide", () => chartController?.destroy(), { once: true });
+  window.addEventListener("pagehide", () => {
+    chartController?.destroy();
+    updateController?.destroy();
+  }, { once: true });
 }

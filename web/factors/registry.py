@@ -96,6 +96,11 @@ class FactorRegistry:
                     )
 
         for peers in positions.values():
+            peer_count = len(peers)
+            for ticker, index, _ in peers:
+                rows[ticker][index] = replace(
+                    rows[ticker][index], percentile_peer_count=peer_count
+                )
             if len(peers) < MIN_PERCENTILE_PEERS:
                 continue
             values = pd.Series([value for _, _, value in peers])
