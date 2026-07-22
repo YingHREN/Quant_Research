@@ -105,10 +105,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
         peer_histories = {normalized_ticker: history}
         for summary in summaries:
-            if (
-                summary.ticker != normalized_ticker
-                and summary.latest_date == observation_date
-            ):
+            if summary.ticker != normalized_ticker:
                 peer_history = repository.load_history(
                     summary.ticker, asof=observation_timestamp
                 )

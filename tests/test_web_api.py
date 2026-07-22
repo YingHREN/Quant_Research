@@ -106,6 +106,33 @@ class FalseyRepository(FakeRepository):
         return False
 
 
+class StaleSelectionRepository(FakeRepository):
+    def __init__(self):
+        super().__init__()
+        self.histories = {
+            "OLD": price_history(end="2026-07-15", offset=0),
+            **{
+                f"P{number}": price_history(
+                    end="2026-07-21", offset=number * 10
+                )
+                for number in range(1, 6)
+            },
+            "SPY": price_history(end="2026-07-21", offset=70),
+        }
+
+    def list_summaries(self):
+        summaries = super().list_summaries()
+        return [
+            SimpleNamespace(
+                ticker=summary.ticker,
+                latest_date=summary.latest_date,
+                lag_days=6 if summary.ticker == "OLD" else 0,
+                inactive=summary.ticker == "OLD",
+            )
+            for summary in summaries
+        ]
+
+
 class FakeManager:
     def __init__(self, start_error=None):
         self.start_error = start_error
@@ -191,6 +218,30 @@ class WebApiTest(unittest.TestCase):
             if call[0] == "load_history" and call[1] == "AAA"
         ]
         self.assertEqual(len(selected_loads), 1)
+
+    def test_stale_stock_uses_peers_truncated_to_its_observation_date(self):
+        repository = StaleSelectionRepository()
+        client = create_app(
+            {"TESTING": True}, repository, FakeManager()
+        ).test_client()
+
+        response = client.get("/api/stocks/OLD")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["observation_date"], "2026-07-15")
+        factor = next(
+            factor
+            for factor in response.json["factors"]
+            if factor["key"] == "close_vs_ema20_pct"
+        )
+        self.assertEqual(factor["observation_date"], "2026-07-15")
+        self.assertIsNotNone(factor["percentile"])
+        self.assertIn("inactive_ticker", response.json["warnings"])
+        for ticker in ("P1", "P2", "P3", "P4", "P5"):
+            self.assertIn(
+                ("load_history", ticker, pd.Timestamp("2026-07-15")),
+                repository.calls,
+            )
 
     def test_stock_ticker_is_normalized_before_repository_access(self):
         response = self.client.get("/api/stocks/%20aaa%20")
