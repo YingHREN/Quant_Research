@@ -74,3 +74,52 @@ dataset and result contracts.
 
 The independent re-review reported no remaining Critical, Important, or Minor
 findings and marked the dataset contracts ready for Task 6.
+
+## Reviewer follow-up fixes
+
+A later Task 5 review identified five additional downstream-contract gaps. New
+regressions first reproduced all five under `-W error`: available forecasts
+accepted missing or non-causal training provenance; evaluations accepted mixed
+available/unavailable states and out-of-domain metrics; structure features
+turned a NaN 100 sessions back into a false negative; mutable model/ticker
+identity inputs were stringified only during serialization; and the empty
+builder returned an object-typed observation-date level rejected by target
+attachment.
+
+The result contract now requires available forecasts to have a valid as-of
+date, a positive training sample count, and a valid training cutoff strictly
+before the as-of date while preserving prediction-free typed unavailable
+states. Ticker and model identities are snapshotted as trimmed, non-empty
+scalar strings at construction and mutable inputs are rejected.
+
+The evaluation contract now distinguishes availability through
+`unavailable_reason`: available evaluations require positive samples, complete
+core metrics, a valid date range, and model identity; unavailable evaluations
+must omit metrics and retain a typed reason. Error metrics are nonnegative,
+coverage and direction accuracy are in `[0, 1]`, rank IC is in `[-1, 1]`, and
+signed signal-bucket returns remain unrestricted apart from being finite when
+present. Nonzero unavailable sample counts may retain their valid observed date
+range without exposing suppressed metrics.
+
+Structure features now inspect the complete canonical dependency window of up
+to 252 sessions and remain missing when any required OHLCV value in that window
+is missing. Empty feature frames now carry a datetime-typed observation-date
+index and can flow directly through `attach_forward_targets`.
+
+Follow-up TDD and verification evidence:
+
+- Focused RED command: five new focused tests failed with 28 expected subtest
+  failures before production changes.
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-review-green-pycache ../../venv/bin/python -W error -m unittest tests.test_web_forecast_dataset -v`
+  - PASS (20 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task5-final-full-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (150 tests)
+
+The first independent follow-up review found one remaining Important edge case:
+an unavailable result could be prediction-free while carrying a non-causal
+cutoff or a positive sample count without a cutoff. It also noted that Python
+booleans passed the real-number check. Additional RED tests reproduced both.
+All supplied result cutoffs now require an as-of date and precede it strictly,
+positive training counts require a cutoff in available and unavailable states,
+and numeric contract fields reject booleans. The final focused and full counts
+above include those review regressions.

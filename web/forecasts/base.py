@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import Enum
 import math
 from numbers import Integral, Real
@@ -46,12 +47,17 @@ class ForecastResult:
     unavailable_reason: UnavailableReason | str | None = None
 
     def __post_init__(self):
+        ticker = _required_string(self.ticker, "ticker")
+        model_key = _required_string(self.model_key, "model_key")
+        model_version = _required_string(self.model_version, "model_version")
         _validate_horizon(self.horizon_sessions)
         if self.direction not in FORECAST_DIRECTIONS:
             raise ValueError(f"invalid forecast direction: {self.direction}")
         if self.confidence_status not in CONFIDENCE_STATUSES:
             raise ValueError(f"invalid confidence_status: {self.confidence_status}")
-        if not isinstance(self.training_sample_count, Integral):
+        if isinstance(self.training_sample_count, bool) or not isinstance(
+            self.training_sample_count, Integral
+        ):
             raise TypeError("training_sample_count must be an integer")
         if int(self.training_sample_count) < 0:
             raise ValueError("training_sample_count must not be negative")
@@ -61,6 +67,13 @@ class ForecastResult:
         asof_date = _optional_date(self.asof_date, "asof_date")
         training_cutoff = _optional_date(self.training_cutoff, "training_cutoff")
         reason = _normalize_reason(self.unavailable_reason)
+        if int(self.training_sample_count) > 0 and training_cutoff is None:
+            raise ValueError("positive training_sample_count requires training_cutoff")
+        if training_cutoff is not None:
+            if asof_date is None:
+                raise ValueError("training_cutoff requires asof_date")
+            if training_cutoff >= asof_date:
+                raise ValueError("training_cutoff must be strictly before asof_date")
         if self.direction == "unavailable" and reason is None:
             raise ValueError("unavailable forecasts require unavailable_reason")
         if self.direction != "unavailable" and reason is not None:
@@ -73,12 +86,19 @@ class ForecastResult:
         else:
             if predicted_return is None:
                 raise ValueError("available forecasts require a finite predicted_return")
+            if asof_date is None:
+                raise ValueError("available forecasts require asof_date")
+            if int(self.training_sample_count) <= 0:
+                raise ValueError("available forecasts require training samples")
             if self.confidence_status == "unavailable":
                 raise ValueError("available forecasts cannot have unavailable confidence")
             if self.confidence_status == "calibrated" and up_probability is None:
                 raise ValueError("calibrated forecasts require up_probability")
             if self.confidence_status != "calibrated" and up_probability is not None:
                 raise ValueError("up_probability requires calibrated confidence")
+        object.__setattr__(self, "ticker", ticker)
+        object.__setattr__(self, "model_key", model_key)
+        object.__setattr__(self, "model_version", model_version)
         object.__setattr__(self, "horizon_sessions", int(self.horizon_sessions))
         object.__setattr__(self, "training_sample_count", int(self.training_sample_count))
         object.__setattr__(self, "predicted_return", predicted_return)
@@ -90,7 +110,7 @@ class ForecastResult:
     def to_dict(self):
         """Return a fresh JSON-safe representation of this result."""
         return {
-            "ticker": str(self.ticker),
+            "ticker": self.ticker,
             "asof_date": iso_date(self.asof_date),
             "horizon_sessions": self.horizon_sessions,
             "direction": self.direction,
@@ -99,8 +119,8 @@ class ForecastResult:
             "confidence_status": self.confidence_status,
             "training_sample_count": self.training_sample_count,
             "training_cutoff": iso_date(self.training_cutoff),
-            "model_key": str(self.model_key),
-            "model_version": str(self.model_version),
+            "model_key": self.model_key,
+            "model_version": self.model_version,
             "unavailable_reason": (
                 None
                 if self.unavailable_reason is None
@@ -130,8 +150,12 @@ class ForecastEvaluation:
     unavailable_reason: UnavailableReason | str | None = None
 
     def __post_init__(self):
+        model_key = _required_string(self.model_key, "model_key")
+        model_version = _required_string(self.model_version, "model_version")
         _validate_horizon(self.horizon_sessions)
-        if not isinstance(self.sample_count, Integral):
+        if isinstance(self.sample_count, bool) or not isinstance(
+            self.sample_count, Integral
+        ):
             raise TypeError("sample_count must be an integer")
         if int(self.sample_count) < 0:
             raise ValueError("sample_count must not be negative")
@@ -140,28 +164,57 @@ class ForecastEvaluation:
             raise TypeError("signal_bucket_returns must be a mapping")
         buckets = MappingProxyType(
             {
-                str(key): _optional_number(value, f"signal_bucket_returns[{key!r}]")
+                _required_string(key, "signal bucket key"): _optional_number(
+                    value, f"signal_bucket_returns[{key!r}]"
+                )
                 for key, value in self.signal_bucket_returns.items()
             }
         )
-        object.__setattr__(self, "horizon_sessions", int(self.horizon_sessions))
-        object.__setattr__(self, "sample_count", int(self.sample_count))
-        for name in (
+        metrics = {
+            name: _optional_number(getattr(self, name), name)
+            for name in (
+                "coverage",
+                "mae",
+                "rmse",
+                "direction_accuracy",
+                "zero_return_mae",
+                "historical_mean_mae",
+                "rank_ic",
+            )
+        }
+        evaluation_start = _optional_date(self.evaluation_start, "evaluation_start")
+        evaluation_end = _optional_date(self.evaluation_end, "evaluation_end")
+        _validate_evaluation_metrics(metrics)
+        _validate_evaluation_dates(
+            int(self.sample_count), evaluation_start, evaluation_end
+        )
+        required_metrics = (
             "coverage",
             "mae",
             "rmse",
             "direction_accuracy",
             "zero_return_mae",
             "historical_mean_mae",
-            "rank_ic",
-        ):
-            object.__setattr__(self, name, _optional_number(getattr(self, name), name))
-        object.__setattr__(
-            self, "evaluation_start", _optional_date(self.evaluation_start, "evaluation_start")
         )
-        object.__setattr__(
-            self, "evaluation_end", _optional_date(self.evaluation_end, "evaluation_end")
-        )
+        if reason is None:
+            if int(self.sample_count) <= 0:
+                raise ValueError("available evaluations require samples")
+            missing = [name for name in required_metrics if metrics[name] is None]
+            if missing:
+                raise ValueError(
+                    f"unavailable evaluations require unavailable_reason; missing metrics: {missing}"
+                )
+        elif any(value is not None for value in metrics.values()) or buckets:
+            raise ValueError("unavailable evaluations cannot contain metrics")
+
+        object.__setattr__(self, "model_key", model_key)
+        object.__setattr__(self, "model_version", model_version)
+        object.__setattr__(self, "horizon_sessions", int(self.horizon_sessions))
+        object.__setattr__(self, "sample_count", int(self.sample_count))
+        for name, value in metrics.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "evaluation_start", evaluation_start)
+        object.__setattr__(self, "evaluation_end", evaluation_end)
         object.__setattr__(self, "signal_bucket_returns", buckets)
         object.__setattr__(self, "unavailable_reason", reason)
 
@@ -180,8 +233,8 @@ class ForecastEvaluation:
             "signal_bucket_returns": json_safe(dict(self.signal_bucket_returns)),
             "evaluation_start": iso_date(self.evaluation_start),
             "evaluation_end": iso_date(self.evaluation_end),
-            "model_key": str(self.model_key),
-            "model_version": str(self.model_version),
+            "model_key": self.model_key,
+            "model_version": self.model_version,
             "unavailable_reason": (
                 None
                 if self.unavailable_reason is None
@@ -207,7 +260,7 @@ def _validate_probability(value):
 def _optional_number(value, field_name):
     if value is None or value is pd.NA or value is pd.NaT:
         return None
-    if not isinstance(value, Real):
+    if isinstance(value, bool) or not isinstance(value, Real):
         raise TypeError(f"{field_name} must be a real number or None")
     number = float(value)
     return number if math.isfinite(number) else None
@@ -216,11 +269,56 @@ def _optional_number(value, field_name):
 def _optional_date(value, field_name):
     if value is None or value is pd.NaT:
         return None
+    if not isinstance(value, (str, date, datetime, pd.Timestamp)):
+        try:
+            is_numpy_datetime = pd.api.types.is_datetime64_dtype(type(value))
+        except TypeError:
+            is_numpy_datetime = False
+        if not is_numpy_datetime:
+            raise TypeError(f"{field_name} must be date-like or None")
     try:
         timestamp = pd.Timestamp(value)
     except (TypeError, ValueError) as exc:
         raise TypeError(f"{field_name} must be date-like or None") from exc
-    return None if pd.isna(timestamp) else timestamp
+    if pd.isna(timestamp):
+        return None
+    if timestamp.tz is not None:
+        timestamp = timestamp.tz_localize(None)
+    return timestamp.normalize()
+
+
+def _required_string(value, field_name):
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not be empty")
+    return normalized
+
+
+def _validate_evaluation_metrics(metrics):
+    for name in ("mae", "rmse", "zero_return_mae", "historical_mean_mae"):
+        value = metrics[name]
+        if value is not None and value < 0.0:
+            raise ValueError(f"{name} must not be negative")
+    for name in ("coverage", "direction_accuracy"):
+        value = metrics[name]
+        if value is not None and not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between zero and one")
+    rank_ic = metrics["rank_ic"]
+    if rank_ic is not None and not -1.0 <= rank_ic <= 1.0:
+        raise ValueError("rank_ic must be between negative one and one")
+
+
+def _validate_evaluation_dates(sample_count, evaluation_start, evaluation_end):
+    if (evaluation_start is None) != (evaluation_end is None):
+        raise ValueError("evaluation_start and evaluation_end must be provided together")
+    if sample_count > 0 and evaluation_start is None:
+        raise ValueError("positive sample_count requires an evaluation date range")
+    if sample_count == 0 and evaluation_start is not None:
+        raise ValueError("zero sample_count cannot have an evaluation date range")
+    if evaluation_start is not None and evaluation_start > evaluation_end:
+        raise ValueError("evaluation_start must not be after evaluation_end")
 
 
 def _normalize_reason(value):

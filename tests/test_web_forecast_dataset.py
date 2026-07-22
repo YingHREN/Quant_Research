@@ -119,6 +119,34 @@ class ForecastDatasetTest(unittest.TestCase):
         self.assertFalse(np.isinf(frame.select_dtypes(include=["number"])).any(axis=None))
         pd.testing.assert_frame_equal(history, original)
 
+    def test_structure_features_stay_missing_when_252_session_lookback_has_nan(self):
+        history = price_history(periods=280)
+        history.loc[history.index[-100], "Close"] = np.nan
+
+        latest = build_feature_frame({"AAA": history}).iloc[-1]
+
+        self.assertTrue(pd.isna(latest["strict_vcp"]))
+        self.assertTrue(pd.isna(latest["tight_platform"]))
+
+    def test_empty_feature_frame_accepts_forward_targets(self):
+        empty = build_feature_frame({})
+
+        self.assertTrue(
+            pd.api.types.is_datetime64_any_dtype(
+                empty.index.get_level_values("observation_date").dtype
+            )
+        )
+        attached = attach_forward_targets(empty)
+
+        self.assertTrue(attached.empty)
+        for horizon in (5, 20, 60):
+            self.assertIn(f"target_return_{horizon}", attached)
+            self.assertTrue(
+                pd.api.types.is_datetime64_any_dtype(
+                    attached[f"label_end_date_{horizon}"].dtype
+                )
+            )
+
     def test_duplicate_observation_dates_are_rejected(self):
         history = price_history(periods=20)
         duplicate = pd.concat([history, history.iloc[[5]]])
@@ -230,6 +258,148 @@ class ForecastContractTest(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 ForecastResult(**common, **invalid)
 
+    def test_available_forecast_requires_point_in_time_provenance(self):
+        common = {
+            "ticker": "AAA",
+            "asof_date": "2026-07-22",
+            "horizon_sessions": 20,
+            "direction": "up",
+            "predicted_return": 0.1,
+            "up_probability": None,
+            "confidence_status": "uncalibrated",
+            "training_sample_count": 100,
+            "training_cutoff": "2026-07-21",
+            "model_key": "ridge_direction_v1",
+            "model_version": "v1",
+            "unavailable_reason": None,
+        }
+        invalid_provenance = (
+            {"asof_date": None},
+            {"training_sample_count": 0},
+            {"training_cutoff": None},
+            {"training_cutoff": "2026-07-22"},
+            {"training_cutoff": "2026-07-23"},
+        )
+
+        for changes in invalid_provenance:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ForecastResult(**{**common, **changes})
+
+        unavailable = ForecastResult(
+            **{
+                **common,
+                "asof_date": None,
+                "direction": "unavailable",
+                "predicted_return": None,
+                "confidence_status": "unavailable",
+                "training_sample_count": 0,
+                "training_cutoff": None,
+                "unavailable_reason": "insufficient_history",
+            }
+        )
+        self.assertIsNone(unavailable.asof_date)
+
+        invalid_unavailable_provenance = (
+            {"asof_date": "2026-07-22", "training_cutoff": "2026-07-22"},
+            {"asof_date": "2026-07-22", "training_cutoff": "2026-07-23"},
+            {"training_sample_count": 10, "training_cutoff": None},
+            {
+                "asof_date": None,
+                "training_sample_count": 10,
+                "training_cutoff": "2026-07-21",
+            },
+        )
+        unavailable_common = {
+            **common,
+            "direction": "unavailable",
+            "predicted_return": None,
+            "confidence_status": "unavailable",
+            "unavailable_reason": "model_error",
+        }
+        for changes in invalid_unavailable_provenance:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ForecastResult(**{**unavailable_common, **changes})
+
+    def test_contract_numeric_fields_reject_booleans(self):
+        with self.assertRaises(TypeError):
+            ForecastResult(
+                ticker="AAA",
+                asof_date="2026-07-22",
+                horizon_sessions=20,
+                direction="up",
+                predicted_return=True,
+                up_probability=None,
+                confidence_status="uncalibrated",
+                training_sample_count=100,
+                training_cutoff="2026-07-21",
+                model_key="ridge_direction_v1",
+                model_version="v1",
+            )
+
+        with self.assertRaises(TypeError):
+            ForecastEvaluation(
+                horizon_sessions=20,
+                sample_count=40,
+                coverage=0.5,
+                mae=True,
+                rmse=0.04,
+                direction_accuracy=0.6,
+                zero_return_mae=0.05,
+                historical_mean_mae=0.045,
+                rank_ic=None,
+                signal_bucket_returns={},
+                evaluation_start="2026-01-02",
+                evaluation_end="2026-07-22",
+                model_key="ridge_direction_v1",
+                model_version="v1",
+            )
+
+    def test_contract_identity_fields_reject_mutable_or_blank_values(self):
+        result_common = {
+            "ticker": "AAA",
+            "asof_date": "2026-07-22",
+            "horizon_sessions": 20,
+            "direction": "unavailable",
+            "predicted_return": None,
+            "up_probability": None,
+            "confidence_status": "unavailable",
+            "training_sample_count": 0,
+            "training_cutoff": None,
+            "model_key": "ridge_direction_v1",
+            "model_version": "v1",
+            "unavailable_reason": "insufficient_history",
+        }
+        for field_name, invalid in (
+            ("ticker", ["AAA"]),
+            ("ticker", "   "),
+            ("model_key", {"name": "ridge_direction_v1"}),
+            ("model_version", ""),
+        ):
+            with self.subTest(field_name=field_name, invalid=invalid), self.assertRaises(
+                (TypeError, ValueError)
+            ):
+                ForecastResult(**{**result_common, field_name: invalid})
+
+        evaluation_common = {
+            "horizon_sessions": 20,
+            "sample_count": 0,
+            "coverage": None,
+            "mae": None,
+            "rmse": None,
+            "direction_accuracy": None,
+            "zero_return_mae": None,
+            "historical_mean_mae": None,
+            "rank_ic": None,
+            "signal_bucket_returns": {},
+            "model_key": "ridge_direction_v1",
+            "model_version": "v1",
+            "unavailable_reason": "insufficient_training_samples",
+        }
+        mutable_model_key = ["ridge_direction_v1"]
+        with self.assertRaises(TypeError):
+            ForecastEvaluation(**{**evaluation_common, "model_key": mutable_model_key})
+        mutable_model_key.append("mutated")
+
     def test_contracts_reject_non_json_scalars_and_normalize_missing_dates(self):
         with self.assertRaises((TypeError, ValueError)):
             ForecastResult(
@@ -302,6 +472,70 @@ class ForecastContractTest(unittest.TestCase):
                 "unavailable_reason": None,
             },
         )
+
+    def test_evaluation_enforces_availability_metric_domains_and_provenance(self):
+        available = {
+            "horizon_sessions": 20,
+            "sample_count": 40,
+            "coverage": 0.5,
+            "mae": 0.03,
+            "rmse": 0.04,
+            "direction_accuracy": 0.6,
+            "zero_return_mae": 0.05,
+            "historical_mean_mae": 0.045,
+            "rank_ic": -0.2,
+            "signal_bucket_returns": {"down": -0.02, "up": 0.03},
+            "evaluation_start": "2026-01-02",
+            "evaluation_end": "2026-07-22",
+            "model_key": "ridge_direction_v1",
+            "model_version": "v1",
+            "unavailable_reason": None,
+        }
+        invalid_available = (
+            {"sample_count": 0},
+            {"coverage": None},
+            {"mae": -0.01},
+            {"rmse": -0.01},
+            {"direction_accuracy": 1.01},
+            {"coverage": -0.01},
+            {"zero_return_mae": -0.01},
+            {"historical_mean_mae": -0.01},
+            {"rank_ic": -1.01},
+            {"evaluation_start": None},
+            {"evaluation_start": "2026-07-23"},
+            {"model_key": ""},
+        )
+        for changes in invalid_available:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ForecastEvaluation(**{**available, **changes})
+
+        # Signed correlations and returns remain valid in their natural domains.
+        evaluation = ForecastEvaluation(**available)
+        self.assertEqual(evaluation.rank_ic, -0.2)
+        self.assertEqual(evaluation.signal_bucket_returns["down"], -0.02)
+
+        unavailable = {
+            **available,
+            "sample_count": 10,
+            "coverage": None,
+            "mae": None,
+            "rmse": None,
+            "direction_accuracy": None,
+            "zero_return_mae": None,
+            "historical_mean_mae": None,
+            "rank_ic": None,
+            "signal_bucket_returns": {},
+            "unavailable_reason": "insufficient_training_samples",
+        }
+        ForecastEvaluation(**unavailable)
+        for changes in (
+            {"mae": 0.03},
+            {"rank_ic": -0.2},
+            {"signal_bucket_returns": {"down": -0.02}},
+            {"unavailable_reason": None},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                ForecastEvaluation(**{**unavailable, **changes})
 
     def test_unavailable_reasons_are_typed_and_complete(self):
         self.assertEqual(

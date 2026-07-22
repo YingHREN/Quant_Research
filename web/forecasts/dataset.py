@@ -49,7 +49,9 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         ticker_frames.append(_ticker_features(ticker, history))
 
     if not ticker_frames:
-        index = pd.MultiIndex.from_arrays([[], []], names=INDEX_NAMES)
+        index = pd.MultiIndex.from_arrays(
+            [pd.Index([], dtype=object), pd.DatetimeIndex([])], names=INDEX_NAMES
+        )
         return pd.DataFrame(columns=("close", *FEATURE_COLUMNS), index=index)
 
     result = pd.concat(ticker_frames, axis=0).sort_index()
@@ -208,10 +210,11 @@ def _structure_features(history: pd.DataFrame):
     platform_values = pd.Series(np.nan, index=history.index, dtype=float)
     for position in range(59, len(history)):
         prefix = history.iloc[: position + 1]
-        if prefix.iloc[-60:].isna().any(axis=None):
+        required_lookback = prefix.iloc[-252:]
+        if required_lookback.isna().any(axis=None):
             continue
-        vcp = vcp_analysis(prefix)
-        platform = tight_platform(prefix)
+        vcp = vcp_analysis(required_lookback)
+        platform = tight_platform(required_lookback)
         vcp_values.iloc[position] = float(vcp.get("reject_reason") is None)
         platform_values.iloc[position] = float(bool(platform.get("is_platform")))
     return vcp_values, platform_values
