@@ -1,117 +1,171 @@
-<!DOCTYPE html>
-<html lang="zh">
+<!doctype html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>美股选股评分 · CAN SLIM + VCP</title>
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-           margin: 0; background: #0f1419; color: #e6e6e6; }
-    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 18px 60px; }
-    h1 { font-size: 22px; margin: 0 0 4px; }
-    .sub { color: #8b98a5; font-size: 13px; margin-bottom: 20px; }
-    form { display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
-    input[type=text] { flex: 1; min-width: 280px; padding: 11px 14px; font-size: 15px;
-           border: 1px solid #2f3b47; border-radius: 8px; background: #1a2029; color: #e6e6e6; }
-    button { padding: 11px 22px; font-size: 15px; border: none; border-radius: 8px;
-           background: #1d9bf0; color: #fff; cursor: pointer; font-weight: 600; }
-    button:hover { background: #1a8cd8; }
-    .market { padding: 10px 14px; border-radius: 8px; margin-bottom: 18px; font-size: 14px; font-weight: 600; }
-    .market.up { background: #0f2e1a; color: #4ade80; border: 1px solid #1a5c33; }
-    .market.down { background: #2e1515; color: #f87171; border: 1px solid #5c2020; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #232d38; }
-    th { color: #8b98a5; font-weight: 600; font-size: 12px; text-transform: uppercase; }
-    tr:hover { background: #161d26; }
-    .grade-A { color: #4ade80; font-weight: 700; }
-    .grade-B { color: #60a5fa; font-weight: 600; }
-    .grade-C { color: #fbbf24; }
-    .grade-x { color: #6b7280; }
-    .buy { background: #1d9bf0; color:#fff; padding: 2px 8px; border-radius: 5px; font-size: 12px; font-weight: 700; }
-    .pass-y { color: #4ade80; } .pass-n { color: #f87171; }
-    .score-bar { display:inline-block; height: 8px; border-radius: 4px; background:#1d9bf0; vertical-align: middle; }
-    details { margin-top: 4px; }
-    summary { cursor: pointer; color:#8b98a5; font-size: 12px; }
-    .detail { font-size: 12px; color:#b8c2cc; padding: 8px 0 4px 14px; line-height: 1.7; }
-    .gap { color:#fbbf24; font-size: 12px; }
-    .err { color:#f87171; }
-    .disclaimer { margin-top: 26px; color:#6b7280; font-size: 12px; border-top:1px solid #232d38; padding-top:14px; }
-    .hint { color:#8b98a5; font-size:13px; margin-bottom:14px; }
-  </style>
+  <meta name="color-scheme" content="dark">
+  <title>Quant Research Workstation</title>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
 </head>
 <body>
-<div class="wrap">
-  <h1>美股选股评分系统</h1>
-  <div class="sub">CAN SLIM + Minervini VCP · 过滤层 → 100分打分 → 触发层 · 数据源 yfinance</div>
-
-  <form method="post">
-    <input type="text" name="tickers" placeholder="输入代码，空格或逗号分隔，如 NVDA AAPL MSFT（留空用示例组）"
-           value="{{ query }}">
-    <button type="submit">评分</button>
-  </form>
-
-  {% if rows is none %}
-    <div class="hint">输入一组美股代码开始。首次拉取每只票约需 1~2 秒（含大盘基准 SPY）。</div>
-  {% endif %}
-
-  {% if mkt_ok is not none %}
-    <div class="market {{ 'up' if mkt_ok else 'down' }}">
-      大盘状态（SPY）：{{ '确认上升趋势 ✓ 允许开仓' if mkt_ok else '未确认上升 ✗ 大盘分被扣，建议降低仓位' }}
+  <a class="skip-link" href="#research-panel">Skip to research</a>
+  <header class="app-header">
+    <div class="brand-block">
+      <p class="eyebrow">Local market research</p>
+      <h1>Quant Workstation</h1>
+      <p class="research-note">Descriptive diagnostics only · Not validated for prediction</p>
     </div>
-  {% endif %}
+    <div class="market-status">
+      <div>
+        <span class="status-label">Latest common date</span>
+        <strong id="market-date">—</strong>
+      </div>
+      <div>
+        <span class="status-label">Coverage</span>
+        <strong id="market-coverage">—</strong>
+      </div>
+      <button id="update-data" type="button" disabled>Update market data</button>
+    </div>
+    <p id="update-status" class="global-status" role="status" aria-live="polite">
+      Price-only update status: idle
+    </p>
+  </header>
 
-  {% if rows %}
-  <table>
-    <thead>
-      <tr>
-        <th>#</th><th>代码</th><th>总分</th><th>评级</th><th>过滤</th><th>可买入</th>
-        <th>RS</th><th>EPS同比</th><th>营收同比</th><th>距高%</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-        {% if r.error %}
-          <tr><td>{{ loop.index }}</td><td>{{ r.ticker }}</td>
-              <td colspan="8" class="err">数据获取失败：{{ r.error }}</td></tr>
-        {% else %}
-        <tr>
-          <td>{{ loop.index }}</td>
-          <td><b>{{ r.ticker }}</b></td>
-          <td>
-            <span class="score-bar" style="width: {{ (r.total * 1.0)|round(0,'floor') }}px"></span>
-            {{ r.total }}
-          </td>
-          <td class="{% if 'A' in r.grade %}grade-A{% elif 'B' in r.grade %}grade-B{% elif 'C' in r.grade %}grade-C{% else %}grade-x{% endif %}">{{ r.grade }}</td>
-          <td class="{{ 'pass-y' if r.passed else 'pass-n' }}">{{ '✓' if r.passed else '✗' }}</td>
-          <td>{% if r.buyable %}<span class="buy">★ 买点</span>{% else %}—{% endif %}</td>
-          <td>{{ r.rs if r.rs is not none else '—' }}</td>
-          <td>{{ (r.eps_yoy ~ '%') if r.eps_yoy is not none else '—' }}</td>
-          <td>{{ (r.rev_yoy ~ '%') if r.rev_yoy is not none else '—' }}</td>
-          <td>{{ r.pct_from_high if r.pct_from_high is not none else '—' }}</td>
-        </tr>
-        <tr><td></td><td colspan="9">
-          <details>
-            <summary>评分明细 / VCP / 触发</summary>
-            <div class="detail">
-              分项：{% for k, v in r.breakdown.items() %}{{ k }} <b>{{ v }}</b>&nbsp;&nbsp;{% endfor %}<br>
-              VCP：收缩 {{ r.vcp.n_contractions }} 段 {{ r.vcp.contractions }}，递减={{ r.vcp.is_decreasing }}，量枯={{ r.vcp.vol_dryup }}，波动收缩={{ r.vcp.vola_contract }}<br>
-              Pivot：{{ r.pivot.pivot }}，突破={{ r.pivot.breakout }}，量比={{ r.pivot.vol_ratio }}，距pivot={{ r.pivot.pct_over_pivot }}%<br>
-              触发：VCP突破={{ r.trigger.vcp_breakout }}，PocketPivot={{ r.trigger.pocket_pivot }} → <b>可买入={{ r.trigger.buyable_now }}</b>
-              {% if r.gaps %}<br><span class="gap">⚠ 数据缺口：{{ r.gaps|join('；') }}</span>{% endif %}
+  <div class="workstation">
+    <aside id="universe-panel" class="panel universe-panel" aria-labelledby="universe-title">
+      <div class="panel-heading">
+        <div>
+          <p class="eyebrow">Local database</p>
+          <h2 id="universe-title">Stock pool</h2>
+        </div>
+        <span id="universe-count" class="count-badge">0</span>
+      </div>
+
+      <label class="field-label" for="universe-search">Search ticker</label>
+      <input id="universe-search" type="search" autocomplete="off" placeholder="e.g. AAPL">
+
+      <div class="sort-controls">
+        <div>
+          <label class="field-label" for="sort-key">Sort by</label>
+          <select id="sort-key">
+            <option value="ticker">Ticker</option>
+            <option value="latest_date">Data freshness</option>
+            <option value="factor_percentile">Momentum percentile</option>
+            <option value="shape_state">Shape state</option>
+            <option value="volatility">Volatility</option>
+          </select>
+        </div>
+        <button id="sort-direction" class="quiet-button" type="button" aria-label="Sort ascending">
+          Ascending
+        </button>
+      </div>
+
+      <fieldset class="filter-set">
+        <legend>Filters</legend>
+        <label><input type="checkbox" data-filter="strictVcp"> Strict VCP</label>
+        <label><input type="checkbox" data-filter="tightPlatform"> Tight platform</label>
+        <label><input type="checkbox" data-filter="nearPivot"> Near pivot</label>
+        <label><input type="checkbox" data-filter="fresh"> Fresh data</label>
+        <label><input type="checkbox" data-filter="inactive"> Inactive / stale only</label>
+      </fieldset>
+
+      <p id="universe-status" class="inline-status" role="status" aria-live="polite">
+        Loading local universe…
+      </p>
+      <nav aria-label="Stock pool">
+        <ul id="universe-list" class="universe-list"></ul>
+      </nav>
+    </aside>
+
+    <main id="research-panel" class="research-panel" tabindex="-1">
+      <section class="panel security-header" aria-labelledby="selected-ticker">
+        <div>
+          <p class="eyebrow">Selected security</p>
+          <div class="security-title-row">
+            <h2 id="selected-ticker">Select a ticker</h2>
+            <span id="security-state" class="state-badge">Waiting</span>
+          </div>
+          <p id="company-label" class="secondary-copy">Local price history</p>
+        </div>
+        <dl class="quote-grid">
+          <div><dt>Close</dt><dd id="selected-close">—</dd></div>
+          <div><dt>Daily change</dt><dd id="selected-change">—</dd></div>
+          <div><dt>Observation date</dt><dd id="observation-date">—</dd></div>
+        </dl>
+        <p id="research-status" class="inline-status span-full" role="status" aria-live="polite">
+          Choose a ticker from the stock pool.
+        </p>
+        <ul id="data-warnings" class="warning-list span-full" aria-label="Data quality warnings"></ul>
+      </section>
+
+      <section class="panel chart-panel" aria-labelledby="chart-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Price and volume</p>
+            <h2 id="chart-title">Market history</h2>
+          </div>
+          <div class="range-controls" aria-label="Chart date range">
+            <button type="button" data-range="3m">3M</button>
+            <button type="button" data-range="6m">6M</button>
+            <button type="button" data-range="1y">1Y</button>
+            <button type="button" data-range="2y">2Y</button>
+            <button type="button" data-range="all">All</button>
+          </div>
+        </div>
+        <div id="price-chart" class="chart-placeholder" aria-label="Candlestick price chart"></div>
+        <div id="volume-chart" class="volume-placeholder" aria-label="Volume chart"></div>
+        <div id="crosshair-detail" class="detail-strip" role="status" aria-live="polite">
+          Select a ticker to inspect OHLCV and indicator values.
+        </div>
+      </section>
+
+      <div class="analysis-grid">
+        <section class="panel" aria-labelledby="factor-title">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Normalized diagnostics</p>
+              <h2 id="factor-title">Factor overview</h2>
             </div>
-          </details>
-        </td></tr>
-        {% endif %}
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
+          </div>
+          <p class="safety-copy">Display scores organize observations; they are not probabilities.</p>
+          <div id="factor-overview" class="empty-state">Factor diagnostics load with a selected ticker.</div>
+          <div class="table-scroll">
+            <table id="factor-table">
+              <caption>Raw factor observations and methodology</caption>
+              <thead>
+                <tr><th>Factor</th><th>Raw value</th><th>Percentile</th><th>Date</th></tr>
+              </thead>
+              <tbody id="factor-table-body"></tbody>
+            </table>
+          </div>
+        </section>
 
-  <div class="disclaimer">
-    ⚠️ 仅供研究与教育用途，不构成投资建议。评分基于免费数据（yfinance），基本面与机构数据可能缺失或滞后；
-    RS/行业强度为近似算法，非 IBD 官方口径。交易有风险，决策请独立判断。
+        <section class="panel" aria-labelledby="structure-title">
+          <p class="eyebrow">Descriptive setup</p>
+          <h2 id="structure-title">Structure</h2>
+          <div id="structure-content" class="empty-state">Structure diagnostics load with a selected ticker.</div>
+        </section>
+      </div>
+
+      <section class="panel" aria-labelledby="scenario-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Historical conditional ranges</p>
+            <h2 id="scenario-title">Scenarios</h2>
+          </div>
+        </div>
+        <p class="safety-copy">Historical scenarios describe ranges; they are not predicted probabilities.</p>
+        <div id="scenario-chart" class="scenario-placeholder" aria-label="Historical scenario chart"></div>
+        <div id="scenario-meta" class="detail-strip">Scenario methodology loads with a selected ticker.</div>
+      </section>
+    </main>
   </div>
-</div>
+
+  <footer>
+    Research and education only. This workstation does not provide investment advice.
+  </footer>
+
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>
