@@ -213,6 +213,13 @@ class WebAssetTest(unittest.TestCase):
             match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
             self.assertIn("overflow: hidden", match.group(1))
 
+    def test_research_grid_track_has_zero_intrinsic_minimum(self):
+        css = (STATIC / "css/dashboard.css").read_text()
+
+        match = re.search(r"\.research-panel\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(match)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", match.group(1))
+
     def test_factor_helpers_are_payload_driven_and_preserve_diagnostics(self):
         module_uri = (STATIC / "js/factors.js").as_uri()
         script = f"""

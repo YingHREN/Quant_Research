@@ -192,7 +192,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .ticker-state[data-state="inactive"] { color: var(--warning); }
 .empty-list { padding: 20px 8px; color: var(--muted); text-align: center; }
 
-.research-panel { display: grid; min-width: 0; gap: 16px; }
+.research-panel { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 16px; }
 .research-panel > .panel { min-width: 0; max-width: 100%; overflow: hidden; }
 .research-panel > .panel, .analysis-grid > .panel { padding: 18px; }
 
