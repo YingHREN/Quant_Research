@@ -156,6 +156,50 @@ class UpdateJobManagerTest(unittest.TestCase):
         release_callback.set()
         self.assertEqual(wait_until_terminal(manager).state, "completed")
 
+    def test_invalidation_failure_is_typed_and_next_start_is_a_fresh_job(self):
+        secret = "/Users/alice/cache.db?token=secret"
+        repository = FakeRepository(("AAA", "BBB"))
+        provider = FakeProvider(
+            {
+                "AAA": [history(10), history(11)],
+                "BBB": [history(20), history(21)],
+            }
+        )
+        callback_states = []
+
+        def invalidate():
+            callback_states.append(manager.snapshot().state)
+            if len(callback_states) == 1:
+                raise RuntimeError(secret)
+
+        manager = UpdateJobManager(
+            repository,
+            provider,
+            on_success=invalidate,
+        )
+
+        with self.assertLogs("web.services.update_jobs", level="ERROR") as logs:
+            failed = manager.run_synchronously_for_test().to_dict()
+
+        self.assertEqual(failed["state"], "failed")
+        self.assertEqual(failed["error"], "cache_invalidation_error")
+        self.assertFalse(failed["resumable"])
+        self.assertNotIn(secret, str(failed))
+        self.assertIn(secret, "\n".join(logs.output))
+        self.assertEqual(callback_states, ["running"])
+
+        retried = manager.run_synchronously_for_test().to_dict()
+
+        self.assertEqual(retried["state"], "completed")
+        self.assertIsNone(retried["error"])
+        self.assertFalse(retried["resumable"])
+        self.assertEqual(callback_states, ["running", "running"])
+        self.assertEqual(provider.calls, ["AAA", "BBB", "AAA", "BBB"])
+        self.assertEqual(
+            [ticker for ticker, _frame in repository.upserts],
+            ["AAA", "BBB", "AAA", "BBB"],
+        )
+
     def test_failed_partial_and_rate_limited_updates_do_not_invoke_success_callback(self):
         cases = (
             (

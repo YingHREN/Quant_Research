@@ -86,3 +86,69 @@ repository interpreter at `../../venv/bin/python`.
 - No correctness blockers found. Cold real-model computation is intentionally
   substantial; Task 10 owns endpoint timing/profile verification, while Task 8
   ensures repeat requests are revision-cached and bounded.
+
+---
+
+## Review Fixes (2026-07-22)
+
+### Status
+
+Implemented and verified both Task 8 review findings.
+
+### Findings Fixed
+
+1. Exact cache-key contract
+   - Removed `model_key` from the stored cache identity.
+   - Cache keys are now exactly `(database_revision, ticker,
+     first_chart_date, last_chart_date, model_version)`.
+   - `model_version` is the validated immutable service value. The provider
+     factory and `model_key` are fixed for the lifetime of each service-owned
+     cache, and provider publication still requires an exact factory key and
+     version match, so the version field is unambiguous in that namespace.
+
+2. Invalidation failure state
+   - A completion-hook/invalidation exception can no longer fall through to a
+     `completed` publication.
+   - The original exception is logged server-side, while the public snapshot
+     is safely typed as `state="failed"`,
+     `error="cache_invalidation_error"`, and `resumable=false`.
+   - The callback still observes `running`; terminal publication occurs only
+     after invalidation succeeds or its failure has been classified.
+   - A subsequent start is a fresh job, refetches the complete active ticker
+     set, and can complete after a successful invalidation.
+
+### Strict TDD Evidence
+
+1. Cache identity RED:
+   `ForecastServiceTest.test_cache_key_is_exact_five_field_versioned_identity`
+   failed with `AssertionError: 6 != 5` before production code changed.
+2. Cache identity GREEN: the same test passed after removing only
+   `self.model_key` from the tuple.
+3. Invalidation RED:
+   `UpdateJobManagerTest.test_invalidation_failure_is_typed_and_next_start_is_a_fresh_job`
+   failed because the observed terminal state was `completed`, not `failed`.
+4. Invalidation GREEN: the same test passed after adding the typed internal
+   failure path. Existing blocking-order and successful-callback-once tests
+   also remained green.
+
+### Verification
+
+- Focused API/update, warning-strict:
+  `PYTHONWARNINGS=error PYTHONPYCACHEPREFIX=/private/tmp/task8-fix-focused ../../venv/bin/python -m unittest tests.test_web_api tests.test_web_update_jobs -v`
+  - `Ran 42 tests` / `OK`.
+- Full suite, warning-strict:
+  `PYTHONWARNINGS=error PYTHONPYCACHEPREFIX=/private/tmp/task8-fix-full ../../venv/bin/python -m unittest discover -s tests -v`
+  - `Ran 184 tests` / `OK`.
+- Bytecode compilation:
+  `PYTHONWARNINGS=error PYTHONPYCACHEPREFIX=/private/tmp/task8-fix-compile ../../venv/bin/python -m py_compile web/services/forecasts.py web/services/update_jobs.py tests/test_web_api.py tests/test_web_update_jobs.py`
+  - Exit 0.
+- `git diff --check`
+  - Exit 0 with no output.
+
+### Remaining Concerns
+
+- No known correctness concern remains for these two findings.
+- After an invalidation failure, price writes have already committed while the
+  forecast cache intentionally remains stale and the job reports failure. A
+  fresh retry repeats active-ticker price upserts before retrying invalidation;
+  repository upserts are idempotent by design.

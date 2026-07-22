@@ -989,6 +989,28 @@ class ForecastServiceTest(unittest.TestCase):
         self.assertEqual(payload["forecasts"]["model"]["key"], "fake_direction")
         self.assertEqual(len(factory.providers), 1)
 
+    def test_cache_key_is_exact_five_field_versioned_identity(self):
+        service = ForecastService(
+            provider_factory=FakeForecastFactory(),
+            evaluator=fake_forecast_evaluation,
+            max_cache_size=2,
+        )
+
+        service.build("AAA", self.chart_dates, self.histories)
+
+        cache_key = next(iter(service._cache))
+        self.assertEqual(len(cache_key), 5)
+        self.assertEqual(
+            cache_key,
+            (
+                service.database_revision,
+                "AAA",
+                pd.Timestamp(self.chart_dates[0]),
+                pd.Timestamp(self.chart_dates[-1]),
+                service.model_version,
+            ),
+        )
+
     def test_cache_is_bounded_exact_and_invalidated_by_revision(self):
         factory = FakeForecastFactory()
         service = ForecastService(

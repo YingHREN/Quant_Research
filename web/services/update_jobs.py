@@ -20,6 +20,10 @@ class RateLimited(RuntimeError):
     """Raised when the price provider returns HTTP 429."""
 
 
+class _CacheInvalidationFailed(RuntimeError):
+    """Keep invalidation details in logs while signaling a typed job failure."""
+
+
 @dataclass(frozen=True)
 class JobSnapshot:
     state: str
@@ -189,6 +193,13 @@ class UpdateJobManager:
                 self._notify_success()
             with self._lock:
                 self._finish_locked(state, error, resumable=False)
+        except _CacheInvalidationFailed:
+            with self._lock:
+                self._finish_locked(
+                    "failed",
+                    "cache_invalidation_error",
+                    resumable=False,
+                )
         except Exception:
             logger.exception("Dashboard price-update worker failed")
             with self._lock:
@@ -203,8 +214,9 @@ class UpdateJobManager:
             return
         try:
             self._on_success()
-        except Exception:
+        except Exception as error:
             logger.exception("Post-update success callback failed")
+            raise _CacheInvalidationFailed("cache_invalidation_error") from error
 
     def _load_tickers_if_needed(self):
         with self._lock:

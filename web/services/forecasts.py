@@ -92,7 +92,6 @@ class ForecastService:
                 ticker,
                 first_date,
                 last_date,
-                self.model_key,
                 self.model_version,
             )
             cached = self._cache.get(key)
