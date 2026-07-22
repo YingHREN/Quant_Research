@@ -194,6 +194,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 
 .research-panel { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 16px; }
 .research-panel > .panel { min-width: 0; max-width: 100%; overflow: hidden; }
+.analysis-grid > .panel { min-width: 0; }
 .research-panel > .panel, .analysis-grid > .panel { padding: 18px; }
 
 .security-header {
@@ -300,7 +301,7 @@ footer a:hover { color: var(--text); }
 
 @media (max-width: 960px) {
   .workstation { grid-template-columns: minmax(230px, 280px) minmax(0, 1fr); }
-  .security-header, .analysis-grid { grid-template-columns: 1fr; }
+  .security-header, .analysis-grid { grid-template-columns: minmax(0, 1fr); }
   .scenario-layout { grid-template-columns: 1fr; }
   .span-full { grid-column: auto; }
 }
