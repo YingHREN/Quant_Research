@@ -1,4 +1,4 @@
-import { getLocale, t } from "./i18n.js";
+import { formatChartTickDate, formatFullDate, getLocale, t } from "./i18n.js";
 
 const RANGE_BARS = Object.freeze({
   "3m": 63,
@@ -139,7 +139,12 @@ function chartOptions(element) {
       horzLines: { color: COLORS.grid },
     },
     rightPriceScale: { borderColor: COLORS.grid },
-    timeScale: { borderColor: COLORS.grid, timeVisible: false },
+    timeScale: {
+      borderColor: COLORS.grid,
+      timeVisible: false,
+      tickMarkFormatter: formatChartTickDate,
+    },
+    localization: { timeFormatter: formatFullDate },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   };
 }

@@ -589,7 +589,7 @@ export function translateError(error, fallbackKey = "request.failed", locale = c
     : null;
   const key = codeKey || messageKey;
   if (key) return t(key, {}, locale);
-  return message || t(fallbackKey, {}, locale);
+  return t(fallbackKey, {}, locale);
 }
 
 export function applyDocumentLocale(root = globalThis.document, locale = currentLocale) {

@@ -313,6 +313,8 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(universe["en"]["researchTone"], "error")
         stock = self.run_dashboard_runtime("stock-error")
         self.assertNotIn("An internal error occurred", stock.values())
+        unknown = self.run_dashboard_runtime("stock-unknown-error")
+        self.assertNotIn("/Users/", " ".join(unknown.values()))
 
     def test_known_update_errors_are_localized_and_unknown_errors_remain_safe_fallbacks(self):
         module_uri = (STATIC / "js/update.js").as_uri()
@@ -345,22 +347,30 @@ class WebAssetTest(unittest.TestCase):
               code: 'internal_error', message: 'An internal error occurred'
             }});
             const unknown = await exercise({{
-              code: 'future_safe_error', message: 'A safe future-facing explanation'
+              code: 'future_error', message: 'unsafe /Users/alice/private.db detail'
             }});
             const collision = await exercise({{
-              code: 'constructor', message: 'A safe constructor explanation'
+              code: 'constructor', message: 'unsafe constructor detail'
             }});
+            const nullError = await exercise(null);
+            const undefinedError = await exercise(undefined);
             assert.deepEqual(known, {{
               zh: '本地仪表板遇到内部错误。',
               en: 'The local dashboard encountered an internal error.',
             }});
             assert.deepEqual(unknown, {{
-              zh: 'A safe future-facing explanation',
-              en: 'A safe future-facing explanation',
+              zh: '无法启动价格更新',
+              en: 'Unable to start price update',
             }});
             assert.deepEqual(collision, {{
-              zh: 'A safe constructor explanation',
-              en: 'A safe constructor explanation',
+              zh: '无法启动价格更新',
+              en: 'Unable to start price update',
+            }});
+            assert.deepEqual(nullError, {{
+              zh: '无法启动价格更新', en: 'Unable to start price update',
+            }});
+            assert.deepEqual(undefinedError, {{
+              zh: '无法启动价格更新', en: 'Unable to start price update',
             }});
         """
         subprocess.run(

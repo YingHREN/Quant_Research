@@ -237,6 +237,11 @@ globalThis.fetch = async (path) => {
     if (mode === "stock-error") {
       return jsonResponse({ error: { code: "internal_error", message: "An internal error occurred" } }, 500);
     }
+    if (mode === "stock-unknown-error") {
+      return jsonResponse({
+        error: { code: "future_error", message: "unsafe /Users/alice/private.db detail" },
+      }, 500);
+    }
     return jsonResponse(stock);
   }
   throw new Error(`Unexpected fetch: ${path}`);
@@ -258,6 +263,10 @@ if (mode === "success") {
   const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersZh = markerControllers[0].markers.map((marker) => marker.text);
   const meterZh = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
+  const datesZh = [priceChart, volumeChart].map((chart) => [
+    chart.options.timeScale.tickMarkFormatter("2026-07-17"),
+    chart.options.localization.timeFormatter("2026-07-17"),
+  ]);
 
   enButton.dispatch("click");
 
@@ -269,6 +278,10 @@ if (mode === "success") {
   const priceLinesEn = priceChart.priceLines.map((line) => line.title);
   const volumeTitlesEn = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersEn = markerControllers[0].markers.map((marker) => marker.text);
+  const datesEn = [priceChart, volumeChart].map((chart) => [
+    chart.options.timeScale.tickMarkFormatter("2026-07-17"),
+    chart.options.localization.timeFormatter("2026-07-17"),
+  ]);
   const meterEn = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
 
   assert.match(factorZh, /趋势/);
@@ -285,6 +298,7 @@ if (mode === "success") {
   assert.deepEqual(markersZh, ["严格 VCP"]);
   assert.ok(volumeTitlesZh.includes("成交量 MA20"));
   assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
+  assert.deepEqual(datesZh, [["07-17", "2026-07-17"], ["07-17", "2026-07-17"]]);
 
   assert.equal(document.documentElement.lang, "en");
   assert.equal(enButton.getAttribute("aria-pressed"), "true");
@@ -300,6 +314,7 @@ if (mode === "success") {
   assert.deepEqual(markersEn, ["Strict VCP"]);
   assert.ok(volumeTitlesEn.includes("Volume MA20"));
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
+  assert.deepEqual(datesEn, datesZh);
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
     factorEn, tableEn, scenarioEn, structureEn, chartEn }));
 } else if (mode === "universe-error") {
@@ -329,13 +344,19 @@ if (mode === "success") {
     security: "Unavailable",
   });
   console.log(JSON.stringify({ zh, en }));
-} else if (mode === "stock-error") {
+} else if (mode === "stock-error" || mode === "stock-unknown-error") {
   const zh = elements.get("research-status").textContent;
   enButton.dispatch("click");
   const en = elements.get("research-status").textContent;
-  assert.equal(zh, "本地仪表板遇到内部错误。");
-  assert.equal(en, "The local dashboard encountered an internal error.");
-  assert.notEqual(zh, "An internal error occurred");
+  if (mode === "stock-error") {
+    assert.equal(zh, "本地仪表板遇到内部错误。");
+    assert.equal(en, "The local dashboard encountered an internal error.");
+    assert.notEqual(zh, "An internal error occurred");
+  } else {
+    assert.equal(zh, "本地仪表板无法完成请求");
+    assert.equal(en, "The local dashboard could not complete the request");
+    assert.ok(!zh.includes("/Users/") && !en.includes("/Users/"));
+  }
   assert.equal(elements.get("research-status").dataset.tone, "error");
   console.log(JSON.stringify({ zh, en }));
 }

@@ -97,15 +97,15 @@ export function createUpdateController(options = {}) {
   let statusFailureCount = 0;
   let locale = getLocale();
   let lastSnapshot = { state: "idle" };
-  let lastStatus = { key: "update.state.idle", params: {} };
+  let lastStatus = { kind: "message", key: "update.state.idle", params: {} };
 
   function localizedStatus(key, params = {}) {
-    lastStatus = { key, params };
+    lastStatus = { kind: "message", key, params };
     if (status) status.textContent = t(key, params, locale);
   }
 
   function localizedErrorStatus(error, fallbackKey) {
-    lastStatus = { error, fallbackKey };
+    lastStatus = { kind: "error", error, fallbackKey };
     if (status) status.textContent = translateError(error, fallbackKey, locale);
   }
 
@@ -204,10 +204,10 @@ export function createUpdateController(options = {}) {
   const unsubscribeLocale = subscribeLocale((nextLocale) => {
     locale = nextLocale;
     if (lastStatus && status) {
-      if (lastStatus.error) {
+      if (lastStatus.kind === "error") {
         status.textContent = translateError(lastStatus.error, lastStatus.fallbackKey, locale);
       } else if (lastStatus.key === "update.state.running") {
-        lastStatus = updateMessage(lastSnapshot, locale);
+        lastStatus = { kind: "message", ...updateMessage(lastSnapshot, locale) };
         status.textContent = t(lastStatus.key, lastStatus.params, locale);
       } else {
         status.textContent = t(lastStatus.key, lastStatus.params, locale);

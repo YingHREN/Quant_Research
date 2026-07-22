@@ -212,3 +212,81 @@ Output: exit `0`, no whitespace errors.
 - The runtime harness exercises the real application/controller path with a
   small in-process DOM and Lightweight Charts test double. Live visual browser
   QA remains unavailable in this environment, matching the original report.
+
+## Second re-review fix pass (2026-07-22)
+
+### Result
+
+Resolved the three remaining Important findings from the second re-review:
+unknown error detail is now always redacted behind a localized generic
+fallback, both linked charts receive deterministic date formatters, and update
+errors with falsey rejection values remain locale-responsive.
+
+### TDD evidence
+
+The following focused run was executed after strengthening the runtime tests:
+
+```sh
+/Users/renyinghao.1/Project/stock_screener/venv/bin/python -m unittest \
+  tests.test_web_assets.WebAssetTest.test_actual_dashboard_locale_switch_refreshes_dynamic_renderers \
+  tests.test_web_assets.WebAssetTest.test_actual_dashboard_locale_switch_preserves_safe_error_states \
+  tests.test_web_assets.WebAssetTest.test_known_update_errors_are_localized_and_unknown_errors_remain_safe_fallbacks -v
+```
+
+RED output: `Ran 3 tests ... FAILED (errors=3)`. The failures demonstrated:
+
+- main-chart options lacked `tickMarkFormatter` and `timeFormatter`;
+- an unknown server error exposed `/Users/alice/private.db`;
+- switching locale after `Promise.reject(null)` or
+  `Promise.reject(undefined)` entered `t(undefined)` and failed.
+
+After implementation, the identical focused command reported
+`Ran 3 tests ... OK`.
+
+### Implementation
+
+- `translateError` now uses known code/message mappings only; every unknown
+  error returns the caller's localized generic fallback and never returns the
+  arbitrary server message.
+- `chartOptions` now passes `formatChartTickDate` and `formatFullDate` to both
+  price and volume charts. The actual-app runtime harness verifies `07-17` and
+  `2026-07-17` before and after a locale switch.
+- Update status state now carries an explicit `kind` discriminator, so falsey
+  caught values are still treated as errors and safely rerendered on locale
+  changes.
+
+### Final verification
+
+```sh
+node --check web/static/js/i18n.js
+node --check web/static/js/charts.js
+node --check web/static/js/update.js
+node --check tests/dashboard_runtime.mjs
+```
+
+Output: all four syntax checks exited `0` with no output.
+
+```sh
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task2-rereview-pycache \
+  /Users/renyinghao.1/Project/stock_screener/venv/bin/python \
+  -m unittest tests.test_web_assets -v
+```
+
+Output: `Ran 28 tests in 1.008s` and `OK`.
+
+```sh
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task2-rereview-pycache \
+  /Users/renyinghao.1/Project/stock_screener/venv/bin/python \
+  -W error -m unittest discover -v
+```
+
+Output: `Ran 123 tests in 1.794s` and `OK`.
+
+`git diff --check` also exited `0` with no output.
+
+### Concerns
+
+- Deterministic linked-chart date behavior is now implemented earlier than the
+  original Task 3 sequence because the binding re-review required it. Task 3
+  should treat these formatter assertions as an existing baseline rather than
+  duplicate the implementation.
