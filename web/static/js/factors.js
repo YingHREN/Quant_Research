@@ -1,12 +1,3 @@
-const GROUPS = Object.freeze([
-  ["trend", "Trend"],
-  ["momentum", "Momentum"],
-  ["structure", "Structure"],
-  ["volume", "Volume / price"],
-  ["risk", "Risk"],
-  ["legacy", "Legacy diagnostics"],
-]);
-
 function humanize(value) {
   if (value == null || value === "") return "—";
   return String(value)
@@ -42,17 +33,34 @@ function ordinal(value) {
 }
 
 function percentileText(factor) {
-  if (!finite(factor.percentile)) return "Unavailable · peer count unavailable";
-  const count = factor.percentile_peer_count ?? factor.peer_count;
+  const count = factor.peer_count ?? factor.percentile_peer_count;
   const peers = Number.isInteger(count) && count >= 0
     ? `${count} same-date peer${count === 1 ? "" : "s"}`
     : "peer count unavailable";
-  return `${ordinal(factor.percentile * 100)} percentile · ${peers}`;
+  const percentile = finite(factor.percentile)
+    ? `${ordinal(factor.percentile * 100)} percentile`
+    : "Unavailable";
+  return `${percentile} · ${peers}`;
 }
 
-export function groupFactorResults(results) {
+function normalizeGroupMetadata(groupMetadata) {
+  const seen = new Set();
+  return (Array.isArray(groupMetadata) ? groupMetadata : []).flatMap((metadata) => {
+    const key = typeof metadata === "string"
+      ? metadata
+      : metadata && (metadata.key ?? metadata.group);
+    if (key == null || key === "" || seen.has(String(key))) return [];
+    const normalizedKey = String(key);
+    seen.add(normalizedKey);
+    const suppliedLabel = typeof metadata === "object" && metadata ? metadata.label : null;
+    return [{ key: normalizedKey, label: suppliedLabel || humanize(normalizedKey), factors: [] }];
+  });
+}
+
+export function groupFactorResults(results, groupMetadata = []) {
   const factors = Array.isArray(results) ? results : [];
-  const known = new Map(GROUPS.map(([key, label]) => [key, { key, label, factors: [] }]));
+  const configuredGroups = normalizeGroupMetadata(groupMetadata);
+  const known = new Map(configuredGroups.map((group) => [group.key, group]));
   const other = { key: "other", label: "Other", factors: [] };
 
   factors.forEach((factor) => {
@@ -60,7 +68,7 @@ export function groupFactorResults(results) {
     bucket.factors.push(factor || {});
   });
 
-  const groups = GROUPS.map(([key]) => known.get(key)).filter((group) => group.factors.length);
+  const groups = configuredGroups.filter((group) => group.factors.length);
   if (other.factors.length) groups.push(other);
   return groups;
 }
@@ -89,9 +97,9 @@ function appendText(parent, tagName, className, value) {
   return node;
 }
 
-function renderOverview(container, results) {
+function renderOverview(container, results, groupMetadata) {
   container.replaceChildren();
-  const groups = groupFactorResults(results)
+  const groups = groupFactorResults(results, groupMetadata)
     .map((group) => ({
       ...group,
       factors: group.factors.filter((factor) => finite(factor.display_score)),
@@ -175,7 +183,7 @@ function renderDetailTable(tableBody, results) {
 export function renderFactors(results, options = {}) {
   const overview = options.overview || document.getElementById("factor-overview");
   const tableBody = options.tableBody || document.getElementById("factor-table-body");
-  if (overview) renderOverview(overview, results);
+  if (overview) renderOverview(overview, results, options.groupMetadata);
   if (tableBody) renderDetailTable(tableBody, results);
 }
 

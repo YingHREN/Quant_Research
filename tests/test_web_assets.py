@@ -201,11 +201,12 @@ class WebAssetTest(unittest.TestCase):
             const factors = [
               {{key: 'fresh_factor', label: 'Fresh factor', group: 'trend',
                 raw_value: 1.25, formatted: '1.25x', percentile: 0.75,
-                percentile_peer_count: 11, display_score: 75,
+                peer_count: 11, display_score: 75,
                 observation_date: '2026-07-22', missing: false,
                 missing_reason: null, description: 'A registry factor.', version: 'v2'}},
               {{key: 'future_factor', label: 'Future factor', group: 'future_lab',
                 raw_value: {{window: 12}}, formatted: null, percentile: null,
+                peer_count: 4,
                 display_score: null, observation_date: '2026-07-22', missing: false,
                 missing_reason: null, description: 'Added after this UI.', version: 'v1'}},
               {{key: 'missing_factor', label: 'Missing factor', group: 'risk',
@@ -213,12 +214,12 @@ class WebAssetTest(unittest.TestCase):
                 display_score: null, observation_date: '2026-07-22', missing: true,
                 missing_reason: 'missing_benchmark', description: 'Needs a peer.', version: 'v3'}}
             ];
-            const groups = groupFactorResults(factors);
+            const groups = groupFactorResults(factors, ['risk', 'trend']);
             const rows = factorDetailRows(factors);
             console.log(JSON.stringify({{
               groups: groups.map(group => [group.label, group.factors.map(row => row.key)]),
               raw: rows.map(row => row.rawValue),
-              percentile: rows[0].percentile,
+              percentiles: rows.map(row => row.percentile),
               missingReason: rows[2].missingReason,
               descriptions: rows.map(row => row.description),
               versions: rows.map(row => row.version),
@@ -235,12 +236,16 @@ class WebAssetTest(unittest.TestCase):
             json.loads(result.stdout),
             {
                 "groups": [
-                    ["Trend", ["fresh_factor"]],
                     ["Risk", ["missing_factor"]],
+                    ["Trend", ["fresh_factor"]],
                     ["Other", ["future_factor"]],
                 ],
                 "raw": ["1.25", '{"window":12}', "null"],
-                "percentile": "75th percentile · 11 same-date peers",
+                "percentiles": [
+                    "75th percentile · 11 same-date peers",
+                    "Unavailable · 4 same-date peers",
+                    "Unavailable · peer count unavailable",
+                ],
                 "missingReason": "missing benchmark",
                 "descriptions": [
                     "A registry factor.",
@@ -259,6 +264,8 @@ class WebAssetTest(unittest.TestCase):
             "legacy_score",
         ):
             self.assertNotIn(hard_coded_factor_key, source)
+        for hard_coded_group in ('["trend"', '["momentum"', '["structure"', '["volume"', '["risk"', '["legacy"'):
+            self.assertNotIn(hard_coded_group, source)
 
     def test_scenario_helpers_use_historical_labels_and_report_metadata(self):
         module_uri = (STATIC / "js/scenarios.js").as_uri()
@@ -314,13 +321,16 @@ class WebAssetTest(unittest.TestCase):
     def test_update_controller_polls_running_jobs_and_exposes_429_resume(self):
         module_uri = (STATIC / "js/update.js").as_uri()
         script = f"""
-            import {{ createUpdateController, shouldReloadSelectedTicker }} from {json.dumps(module_uri)};
+            import {{
+              createUpdateController, shouldReloadSelectedTicker, updateRetryDelay
+            }} from {json.dumps(module_uri)};
             const button = {{disabled: false, textContent: '', dataset: {{}},
               addEventListener(_name, handler) {{ this.handler = handler; }}}};
             const status = {{textContent: '', dataset: {{}}}};
             const timers = [];
             const terminal = [];
-            const snapshots = [
+            const outcomes = [
+              new Error('unsafe /Users/alice/update.log'),
               {{state: 'running', total: 3, completed: 1, updated: 1,
                 current_ticker: 'BBB', error: null, resumable: false}},
               {{state: 'rate_limited', total: 3, completed: 1, updated: 1,
@@ -329,7 +339,11 @@ class WebAssetTest(unittest.TestCase):
             const client = {{
               async startUpdate() {{ return {{state: 'running', total: 3, completed: 0,
                 updated: 0, current_ticker: 'AAA', error: null, resumable: false}}; }},
-              async getUpdateStatus() {{ return snapshots.shift(); }},
+              async getUpdateStatus() {{
+                const outcome = outcomes.shift();
+                if (outcome instanceof Error) throw outcome;
+                return outcome;
+              }},
             }};
             const controller = createUpdateController({{
               button, status, apiClient: client,
@@ -340,12 +354,20 @@ class WebAssetTest(unittest.TestCase):
             await controller.start();
             const first = timers.shift();
             await first.callback();
+            const retryState = {{
+              text: status.textContent,
+              disabled: button.disabled,
+              tone: status.dataset.tone,
+            }};
             const second = timers.shift();
             await second.callback();
+            const third = timers.shift();
+            await third.callback();
             console.log(JSON.stringify({{
-              delays: [first.delay, second.delay],
+              delays: [first.delay, second.delay, third.delay],
               timerCount: timers.length,
               terminal,
+              retryState,
               buttonText: button.textContent,
               buttonDisabled: button.disabled,
               statusText: status.textContent,
@@ -365,6 +387,7 @@ class WebAssetTest(unittest.TestCase):
                   {{ticker: 'BBB', latest_date: '2026-07-23'}}
                 ])
               ],
+              retryDelays: [1, 2, 3, 4, 20].map(updateRetryDelay),
             }}));
         """
         result = subprocess.run(
@@ -375,15 +398,25 @@ class WebAssetTest(unittest.TestCase):
             text=True,
         )
         actual = json.loads(result.stdout)
-        self.assertEqual(actual["delays"], [1000, 1000])
+        self.assertEqual(actual["delays"], [1000, 2000, 1000])
         self.assertEqual(actual["timerCount"], 0)
         self.assertEqual(actual["terminal"], ["rate_limited"])
+        self.assertEqual(
+            actual["retryState"],
+            {
+                "text": "Update status is temporarily unavailable; still running and retrying.",
+                "disabled": True,
+                "tone": "warning",
+            },
+        )
+        self.assertNotIn("/Users/", actual["retryState"]["text"])
         self.assertEqual(actual["buttonText"], "Resume price update")
         self.assertFalse(actual["buttonDisabled"])
         self.assertIn("Rate limited after 1/3", actual["statusText"])
         self.assertNotIn("complete", actual["statusText"].lower())
         self.assertEqual(actual["terminalPredicate"], [True, False, True, True, True, True])
         self.assertEqual(actual["reloadPredicate"], [False, True, False])
+        self.assertEqual(actual["retryDelays"], [2000, 4000, 5000, 5000, 5000])
 
     def test_task_ten_modules_are_integrated_with_the_dashboard(self):
         app_source = (STATIC / "js/app.js").read_text()
@@ -395,6 +428,7 @@ class WebAssetTest(unittest.TestCase):
             "renderStructures(payload.structures",
             "renderScenarios(payload.scenarios",
             "createUpdateController",
+            "groupMetadata: store.getState().universePayload?.factor_groups",
         ):
             self.assertIn(marker, app_source)
 

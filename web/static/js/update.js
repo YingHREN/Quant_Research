@@ -1,9 +1,19 @@
 import { api } from "./api.js";
 
 const TERMINAL_STATES = new Set(["idle", "completed", "partial", "rate_limited", "failed"]);
+const POLL_INTERVAL_MS = 1000;
+const MAX_RETRY_INTERVAL_MS = 5000;
 
 export function isUpdateTerminal(state) {
   return TERMINAL_STATES.has(state);
+}
+
+export function updateRetryDelay(failureCount) {
+  const count = Number.isFinite(failureCount) ? Math.max(1, failureCount) : 1;
+  return Math.min(
+    MAX_RETRY_INTERVAL_MS,
+    POLL_INTERVAL_MS * (2 ** Math.min(count, 3)),
+  );
 }
 
 function progress(snapshot) {
@@ -65,6 +75,7 @@ export function createUpdateController(options = {}) {
   let timer = null;
   let generation = 0;
   let destroyed = false;
+  let statusFailureCount = 0;
 
   function render(snapshot) {
     if (status) status.textContent = describeUpdateSnapshot(snapshot);
@@ -84,9 +95,10 @@ export function createUpdateController(options = {}) {
 
   async function accept(snapshot, currentGeneration) {
     if (destroyed || currentGeneration !== generation) return;
+    statusFailureCount = 0;
     render(snapshot);
     if (snapshot.state === "running") {
-      timer = schedule(() => poll(currentGeneration), 1000);
+      timer = schedule(() => poll(currentGeneration), POLL_INTERVAL_MS);
       return;
     }
     clearPoll();
@@ -102,9 +114,14 @@ export function createUpdateController(options = {}) {
       await accept(snapshot, currentGeneration);
     } catch (error) {
       if (destroyed || currentGeneration !== generation) return;
-      if (status) status.textContent = error && error.message ? error.message : "Unable to read update status";
-      setTone(status, "error");
-      if (button) button.disabled = false;
+      statusFailureCount += 1;
+      if (status) {
+        status.textContent = "Update status is temporarily unavailable; still running and retrying.";
+      }
+      setTone(status, "warning");
+      if (button) button.disabled = true;
+      const retryDelay = updateRetryDelay(statusFailureCount);
+      timer = schedule(() => poll(currentGeneration), retryDelay);
     }
   }
 
@@ -112,6 +129,7 @@ export function createUpdateController(options = {}) {
     if (destroyed) return;
     generation += 1;
     const currentGeneration = generation;
+    statusFailureCount = 0;
     clearPoll();
     render({ state: "running", completed: 0, total: 0, updated: 0 });
     try {

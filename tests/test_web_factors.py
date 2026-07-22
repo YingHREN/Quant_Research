@@ -99,9 +99,9 @@ class FactorRegistryTest(unittest.TestCase):
 
         self.assertEqual(rows["EEE"][0].percentile, 1.0)
         self.assertEqual(rows["EEE"][0].display_score, 100.0)
-        self.assertEqual(rows["EEE"][0].percentile_peer_count, 5)
+        self.assertEqual(rows["EEE"][0].peer_count, 5)
         self.assertIsNone(rows["OTHER"][0].percentile)
-        self.assertEqual(rows["OTHER"][0].percentile_peer_count, 1)
+        self.assertEqual(rows["OTHER"][0].peer_count, 1)
 
     def test_percentile_is_missing_with_fewer_than_five_same_date_peers(self):
         rows = self.registry.evaluate_universe(
@@ -109,7 +109,11 @@ class FactorRegistryTest(unittest.TestCase):
         )
 
         self.assertTrue(all(row[0].percentile is None for row in rows.values()))
-        self.assertTrue(all(row[0].percentile_peer_count == 4 for row in rows.values()))
+        self.assertTrue(all(row[0].peer_count == 4 for row in rows.values()))
+        self.assertEqual(
+            rows["AAA"][0].to_dict()["peer_count"],
+            4,
+        )
 
     def test_result_json_shape_is_safe_and_stable(self):
         result = self.registry.evaluate_one(ConstantFactor(), context(value=2.5))
@@ -124,7 +128,7 @@ class FactorRegistryTest(unittest.TestCase):
                 "raw_value": 2.5,
                 "formatted": "2.5",
                 "percentile": None,
-                "percentile_peer_count": None,
+                "peer_count": None,
                 "display_score": None,
                 "observation_date": "2026-07-21",
                 "missing": False,

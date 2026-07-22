@@ -87,12 +87,17 @@ function renderStockHeader(payload) {
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
 
-function clearResearchPanels() {
-  chartController.setChartData({ chart: [] });
-  renderFactors([], {
+function factorRenderOptions() {
+  return {
     overview: elements.factorOverview,
     tableBody: elements.factorTableBody,
-  });
+    groupMetadata: store.getState().universePayload?.factor_groups,
+  };
+}
+
+function clearResearchPanels() {
+  chartController.setChartData({ chart: [] });
+  renderFactors([], factorRenderOptions());
   renderStructures(null, elements.structureContent);
   renderScenarios(null, {
     chart: elements.scenarioChart,
@@ -119,10 +124,7 @@ async function selectTicker(ticker) {
     store.setState({ stockPayload: payload });
     renderStockHeader(payload);
     chartController.setChartData(payload);
-    renderFactors(payload.factors, {
-      overview: elements.factorOverview,
-      tableBody: elements.factorTableBody,
-    });
+    renderFactors(payload.factors, factorRenderOptions());
     renderStructures(payload.structures, elements.structureContent);
     renderScenarios(payload.scenarios, {
       chart: elements.scenarioChart,
