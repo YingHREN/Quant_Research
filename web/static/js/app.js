@@ -300,6 +300,14 @@ function bindControls() {
       chartController.setRange(control.dataset.range);
     });
   });
+  elements.forecastControls.forEach((control) => {
+    control.addEventListener("click", () => {
+      const horizon = chartController.setForecastHorizon(control.dataset.forecastHorizon);
+      elements.forecastControls.forEach((button) => {
+        button.setAttribute("aria-pressed", String(Number(button.dataset.forecastHorizon) === horizon));
+      });
+    });
+  });
   elements.localeControls.forEach((control) => {
     control.addEventListener("click", () => setLocale(control.dataset.locale));
   });
@@ -374,6 +382,7 @@ function captureElements() {
     updateData: byId("update-data"),
     updateStatus: byId("update-status"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
+    forecastControls: [...document.querySelectorAll("[data-forecast-horizon]")],
     localeControls: [...document.querySelectorAll("[data-locale]")],
   });
 }

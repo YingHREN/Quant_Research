@@ -1,4 +1,13 @@
 import { formatChartTickDate, formatFullDate, getLocale, t } from "./i18n.js";
+import {
+  DEFAULT_FORECAST_HORIZON,
+  FORECAST_HORIZONS,
+  evaluationFor,
+  forecastFor,
+  forecastMarker,
+  indexForecasts,
+  renderForecastDetail,
+} from "./forecasts.js";
 
 const RANGE_BARS = Object.freeze({
   "3m": 63,
@@ -103,7 +112,7 @@ function appendDetail(detailEl, label, value) {
   detailEl.append(item);
 }
 
-function renderDetail(detailEl, row, locked, locale) {
+function renderDetail(detailEl, row, locked, locale, forecastOptions = {}) {
   detailEl.replaceChildren();
   if (!row) {
     detailEl.textContent = t("chart.empty", {}, locale);
@@ -123,6 +132,7 @@ function renderDetail(detailEl, row, locked, locale) {
   detailItems(row, locale).forEach((item) => appendDetail(values, item.label, item.value));
 
   detailEl.append(heading, values);
+  renderForecastDetail(detailEl, { ...forecastOptions, locale });
 }
 
 function chartOptions(element) {
@@ -214,7 +224,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       borderVisible: false,
     });
   }
-  const shapeMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
+  const seriesMarkers = LightweightCharts.createSeriesMarkers(candleSeries, []);
 
   const priceScale = priceChart.timeScale();
   const volumeScale = volumeChart.timeScale();
@@ -228,10 +238,32 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let destroyed = false;
   let lastPayload = null;
   let displayedRow = null;
+  let forecastIndex = indexForecasts(null);
+  let forecastHorizon = DEFAULT_FORECAST_HORIZON;
+  let shapeMarkerData = [];
+  let forecastMarkerData = null;
+
+  function refreshMarkers() {
+    const markers = [
+      ...shapeMarkerData,
+      ...(forecastMarkerData ? [forecastMarkerData] : []),
+    ];
+    markers.sort((left, right) => String(left.time).localeCompare(String(right.time)));
+    seriesMarkers.setMarkers(markers);
+  }
 
   function paintDetail(row, locked) {
     displayedRow = row;
-    renderDetail(detailEl, row, locked, locale);
+    const date = row ? timeKey(row.time) : null;
+    const forecast = date === null ? null : forecastFor(forecastIndex, date, forecastHorizon);
+    forecastMarkerData = forecastMarker(forecast, date, locale);
+    refreshMarkers();
+    renderDetail(detailEl, row, locked, locale, {
+      forecast,
+      evaluation: evaluationFor(forecastIndex, forecastHorizon),
+      horizon: forecastHorizon,
+      model: forecastIndex.model,
+    });
   }
 
   function synchronizeRange(targetScale) {
@@ -356,7 +388,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     ));
 
     const annotations = payload && payload.structures && payload.structures.annotations;
-    shapeMarkers.setMarkers((Array.isArray(annotations) ? annotations : []).map((annotation) => ({
+    shapeMarkerData = (Array.isArray(annotations) ? annotations : []).map((annotation) => ({
       time: annotation.time,
       position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
       color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
@@ -366,7 +398,8 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         const localized = t(key, {}, locale);
         return localized === key ? annotation.label || t("chart.shape.default", {}, locale) : localized;
       })(),
-    })));
+    }));
+    refreshMarkers();
   }
 
   function setChartData(payload) {
@@ -375,6 +408,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     rows = Array.isArray(payload && payload.chart) ? payload.chart : [];
     rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
     lockedTime = null;
+    forecastIndex = indexForecasts(payload);
 
     candleSeries.setData(rows.map((row) => ({
       time: row.time,
@@ -398,6 +432,25 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
     paintDetail(rows.at(-1) || null, false);
     setRange(selectedRange);
+  }
+
+  function setForecasts(payload) {
+    if (destroyed) return;
+    forecastIndex = indexForecasts(payload);
+    paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
+  }
+
+  function setForecastHorizon(horizon) {
+    if (destroyed) return forecastHorizon;
+    const normalized = Number(horizon);
+    if (!FORECAST_HORIZONS.includes(normalized)) return forecastHorizon;
+    forecastHorizon = normalized;
+    paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
+    return forecastHorizon;
+  }
+
+  function getForecastHorizon() {
+    return forecastHorizon;
   }
 
   function setLocale(nextLocale) {
@@ -430,5 +483,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     volumeChart.remove();
   }
 
-  return { setChartData, setRange, setLocale, destroy };
+  return {
+    setChartData,
+    setForecasts,
+    setForecastHorizon,
+    getForecastHorizon,
+    setRange,
+    setLocale,
+    destroy,
+  };
 }

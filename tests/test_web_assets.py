@@ -1006,6 +1006,185 @@ class WebAssetTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_chart_forecast_interaction(self):
+        forecast_uri = (STATIC / "js/forecasts.js").as_uri()
+        chart_uri = (STATIC / "js/charts.js").as_uri()
+        script = rf"""
+            import assert from 'node:assert/strict';
+            const created = [];
+            const markerControllers = [];
+            function node() {{
+              return {{textContent: '', className: '', children: [], dataset: {{}}, attributes: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }},
+                getAttribute(name) {{ return this.attributes[name]; }}}};
+            }}
+            function textTree(value) {{
+              return [value.textContent, ...value.children.map(textTree)].join(' ')
+                .replace(/\\s+/g, ' ').trim();
+            }}
+            globalThis.document = {{createElement: () => node()}};
+            function chart(name) {{
+              const scale = {{range: null, subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}},
+                setVisibleLogicalRange(next) {{ this.range = next; }}, fitContent() {{}}}};
+              const value = {{name, series: [], crosshairHandler: null, clickHandler: null,
+                timeScale: () => scale,
+                addSeries(type, options) {{
+                  const series = {{type, options, data: [], setData(data) {{ this.data = data; }},
+                    createPriceLine() {{ return {{}}; }}, removePriceLine() {{}}, applyOptions() {{}}}};
+                  this.series.push(series); return series;
+                }},
+                subscribeCrosshairMove(handler) {{ this.crosshairHandler = handler; }},
+                unsubscribeCrosshairMove() {{}}, subscribeClick(handler) {{ this.clickHandler = handler; }},
+                unsubscribeClick() {{}}, setCrosshairPosition() {{}}, clearCrosshairPosition() {{}},
+                applyOptions() {{}}, remove() {{}}}};
+              created.push(value); return value;
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
+              createChart(element) {{ return chart(element.name); }},
+              createSeriesMarkers(_series, markers) {{
+                const controller = {{markers, calls: 1, setMarkers(next) {{
+                  this.markers = next; this.calls += 1;
+                }}}};
+                markerControllers.push(controller); return controller;
+              }},
+            }};
+            const forecasts = await import({json.dumps(forecast_uri)});
+            const payload = {{
+              forecasts: {{model: {{key: 'ridge_direction_v1', version: 'ridge-v1'}},
+                horizons: [5, 20, 60], by_date: {{
+                  '2026-07-17': {{
+                    '5': {{direction: 'neutral', predicted_return: 0.001, up_probability: null,
+                      confidence_status: 'uncalibrated',
+                      confidence_reason: 'insufficient_calibration_samples', training_sample_count: 108,
+                      training_cutoff: '2026-07-09', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                    '20': {{direction: 'up', predicted_return: 0.034, up_probability: 0.64,
+                      confidence_status: 'calibrated', confidence_reason: null, training_sample_count: 105,
+                      training_cutoff: '2026-06-19', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                    '60': {{direction: 'down', predicted_return: -0.051, up_probability: null,
+                      confidence_status: 'uncalibrated',
+                      confidence_reason: 'calibration_requires_both_classes', training_sample_count: 101,
+                      training_cutoff: '2026-04-24', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                  }}
+                }}}},
+              forecast_evaluation: {{
+                '5': {{sample_count: 90, coverage: 0.8, direction_accuracy: 0.55, mae: 0.015,
+                  zero_return_mae: 0.018, historical_mean_mae: 0.017,
+                  evaluation_start: '2025-01-03', evaluation_end: '2026-06-30', model_version: 'ridge-v1'}},
+                '20': {{sample_count: 80, coverage: 0.75, direction_accuracy: 0.6, mae: 0.025,
+                  zero_return_mae: 0.03, historical_mean_mae: 0.028,
+                  evaluation_start: '2025-01-03', evaluation_end: '2026-06-30', model_version: 'ridge-v1'}},
+                '60': {{sample_count: 60, coverage: 0.5, direction_accuracy: 0.58, mae: 0.04,
+                  zero_return_mae: 0.05, historical_mean_mae: 0.047,
+                  evaluation_start: '2025-01-03', evaluation_end: '2026-06-30', model_version: 'ridge-v1'}},
+              }},
+            }};
+            const index = forecasts.indexForecasts(payload);
+            assert.equal(forecasts.forecastFor('2026-07-17', 20),
+              payload.forecasts.by_date['2026-07-17']['20']);
+            assert.equal(forecasts.forecastFor(index, {{year: 2026, month: 7, day: 17}}, '60'),
+              payload.forecasts.by_date['2026-07-17']['60']);
+            assert.equal(forecasts.forecastFor('2026-07-18', 20), null);
+            const directIndex = forecasts.indexForecasts(payload.forecasts);
+            assert.equal(forecasts.forecastFor(directIndex, '2026-07-17', 5),
+              payload.forecasts.by_date['2026-07-17']['5']);
+
+            const {{createLinkedCharts}} = await import({json.dumps(chart_uri)});
+            const detail = node();
+            const controller = createLinkedCharts(
+              {{name: 'price', clientWidth: 800, clientHeight: 400}},
+              {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
+              {{locale: 'zh-CN'}},
+            );
+            const rows = Array.from({{length: 70}}, (_, index) => ({{
+              time: new Date(Date.UTC(2026, 4, 10 + index)).toISOString().slice(0, 10),
+              open: 100, high: 103, low: 99, close: 102, volume: 1000,
+            }}));
+            rows[68].time = '2026-07-17';
+            rows[69].time = '2026-07-18';
+            controller.setChartData({{...payload, chart: rows, structures: {{annotations: [{{
+              time: '2026-07-18', type: 'strict_vcp', label: 'Strict VCP',
+            }}]}}}});
+            assert.equal(controller.getForecastHorizon(), 20);
+            assert.equal(markerControllers.length, 1);
+
+            created[0].crosshairHandler({{time: '2026-07-17'}});
+            const forecastMarkers = markerControllers[0];
+            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'belowBar',
+              color: '#35c6a5', shape: 'arrowUp', text: '预测方向：上涨'}});
+            assert.equal(forecastMarkers.markers[1].time, '2026-07-18');
+            const zhUp = textTree(detail);
+            assert.match(zhUp, /上涨概率 64\.0%/);
+            assert.match(zhUp, /预测收益率 \+3\.40%/);
+            assert.match(zhUp, /训练样本 105/);
+            assert.match(zhUp, /训练截止日期 2026-06-19/);
+            assert.match(zhUp, /模型 ridge_direction_v1 · ridge-v1/);
+            assert.match(zhUp, /滚动前推历史证据/);
+            assert.match(zhUp, /覆盖率 75\.0%/);
+            assert.match(zhUp, /方向准确率 60\.0%/);
+            assert.match(zhUp, /平均绝对误差 2\.50%/);
+            assert.match(zhUp, /基线比较/);
+            assert.match(zhUp, /样本期 2025-01-03 — 2026-06-30/);
+            assert.match(zhUp, /仅供研究/);
+
+            const callsBeforeSwitch = forecastMarkers.calls;
+            assert.equal(controller.setForecastHorizon(5), 5);
+            assert.equal(controller.getForecastHorizon(), 5);
+            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
+              color: '#91a3b0', shape: 'circle', text: '预测方向：中性'}});
+            const zhNeutral = textTree(detail);
+            assert.doesNotMatch(zhNeutral, /上涨概率/);
+            assert.match(zhNeutral, /置信度说明 校准样本不足/);
+
+            assert.equal(controller.setForecastHorizon(60), 60);
+            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
+              color: '#ff7a7a', shape: 'arrowDown', text: '预测方向：下跌'}});
+            assert.equal(markerControllers.length, 1);
+            assert.ok(forecastMarkers.calls > callsBeforeSwitch);
+
+            created[0].clickHandler({{time: '2026-07-17'}});
+            created[0].crosshairHandler({{time: '2026-07-18'}});
+            assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
+            assert.match(textTree(detail), /已锁定/);
+            controller.setRange('3m');
+            controller.setLocale('en');
+            assert.equal(controller.getForecastHorizon(), 60);
+            assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
+            assert.equal(forecastMarkers.markers[0].text, 'Forecast direction: Down');
+            assert.match(textTree(detail), /Locked/);
+            assert.match(textTree(detail), /Confidence note Both outcome classes are required/);
+
+            created[0].clickHandler({{time: '2026-07-18'}});
+            assert.equal(forecastMarkers.markers.length, 1);
+            assert.equal(forecastMarkers.markers[0].time, '2026-07-18');
+            assert.doesNotMatch(forecastMarkers.markers[0].text, /Forecast direction/);
+            assert.match(textTree(detail), /Unavailable/);
+            assert.equal(controller.setForecastHorizon(40), 60);
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        html = HTML.read_text()
+        self.assertEqual(len(re.findall(r'data-forecast-horizon="(?:5|20|60)"', html)), 3)
+        self.assertIn('data-forecast-horizon="20" aria-pressed="true"', html)
+        self.assertNotIn('data-forecast-horizon="40"', html)
+        self.assertIn('data-i18n="forecast.disclaimer"', html)
+        css = (STATIC / "css/dashboard.css").read_text()
+        self.assertIn(".forecast-controls", css)
+        self.assertIn(".forecast-evidence", css)
+        self.assertIn(".quiet-button, .range-controls button, .forecast-controls button", css)
+        self.assertNotIn("var(--up)", css)
+        self.assertNotIn("var(--down)", css)
+
     def test_chart_adapter_plots_shape_levels_annotations_and_volume_diagnostics(self):
         module_uri = (STATIC / "js/charts.js").as_uri()
         script = f"""
