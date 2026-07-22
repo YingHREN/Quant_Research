@@ -62,3 +62,78 @@ The independent review identified that the initial noninteractive popover used
 the appropriate tooltip/disclosure relationship; the popover now uses
 `role="tooltip"`, and every trigger references it with `aria-describedby` while
 retaining the required `aria-controls` and `aria-expanded` state.
+
+## Review fix pass (2026-07-22)
+
+Resolved all three Task 4 re-review findings:
+
+- The popover now records whether it opened from hover, focus, click, or
+  keyboard activation. Escape restores trigger focus only for click/keyboard
+  activation, and focus restoration is guarded so its synchronous focus event
+  cannot immediately reopen the popover.
+- Trigger and popover hover state is coordinated with a 100 ms close delay.
+  Entering either surface cancels the pending close; leaving both closes the
+  hover disclosure, while click/keyboard-pinned disclosures remain open until
+  explicitly toggled, escaped, or dismissed outside.
+- `FactorResult.window` and `FactorResult.i18n` now follow the pre-existing
+  `percentile`, `peer_count`, and `display_score` fields, preserving the legacy
+  positional constructor contract while keeping all current keyword callers
+  unchanged.
+
+### Review-fix TDD evidence
+
+The focused RED run was:
+
+```text
+../../venv/bin/python -m unittest \
+  tests.test_web_factors.FactorRegistryTest.test_result_preserves_legacy_optional_positional_arguments \
+  tests.test_web_assets.WebAssetTest.test_factor_popover_supports_pointer_keyboard_aria_and_cleanup -v
+
+FAILED (errors=2)
+- FactorResult treated legacy peer_count=12 as i18n and raised AttributeError.
+- The JavaScript interaction process failed when the fake focus implementation
+  dispatched a real focus event and the new hover-transfer assertions expected
+  delayed coordinated closure.
+```
+
+After the minimal implementation, the same command passed both regressions.
+The JavaScript regression now proves that Escape on a hover-opened popover does
+not focus the trigger or reopen the popover; it also deterministically drains
+fake timers to cover trigger-to-popover movement, leaving both surfaces, and
+click-pinned behavior. The Python regression passes all 16 legacy positional
+arguments and verifies the percentile fields remain correctly assigned.
+
+### Review-fix verification
+
+- `../../venv/bin/python -m unittest tests.test_web_factors tests.test_web_assets -v`
+  - PASS (48 tests)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-review-pycache ../../venv/bin/python -W error -m unittest discover -s tests -v`
+  - PASS (130 tests)
+- `node --check` for every file in `web/static/js/*.js`
+  - PASS (9 files)
+- `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-task4-review-pycache ../../venv/bin/python -m py_compile web/factors/*.py`
+  - PASS
+- `git diff --check`
+  - PASS
+
+No unresolved Task 4 review concern remains.
+
+### Independent fix review follow-up
+
+The independent read-only review found one additional Important interaction
+edge case: focus and hover were each correct in isolation, but were not tracked
+independently, so a popover leave could close a still-focused disclosure and a
+blur could close a still-hovered disclosure.
+
+Two mixed-modality assertions were added first. The focused JavaScript test
+failed before the implementation changed. Per-trigger focus/pointer presence
+is now tracked independently from popover pointer presence, and unpinned
+closure occurs only when none of those states remains. The same focused test
+then passed, including both focus-plus-pointer transfer and hover-plus-blur
+sequences.
+
+The independent re-review reported no Critical, Important, or Minor findings
+and assessed the updated diff ready. Fresh post-review verification repeated
+the 48-test focused suite, 130-test warning-strict full suite, all nine
+JavaScript syntax checks, Python compilation, and `git diff --check`; all
+passed.

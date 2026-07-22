@@ -497,7 +497,7 @@ class WebAssetTest(unittest.TestCase):
               }}
               contains(target) {{ return target === this || this.children.some(child => child.contains(target)); }}
               getBoundingClientRect() {{ return this.rect; }}
-              focus() {{ this.focused = true; }}
+              focus() {{ this.focused = true; this.dispatch('focus'); }}
             }}
             function descendants(node) {{ return node.children.flatMap(child => [child, ...descendants(child)]); }}
             function byClass(node, name) {{ return descendants(node).filter(child => child.className === name); }}
@@ -505,6 +505,13 @@ class WebAssetTest(unittest.TestCase):
 
             const body = new Node('body');
             const documentListeners = new Map();
+            let nextTimer = 1;
+            const timers = new Map();
+            globalThis.setTimeout = handler => {{ const id = nextTimer++; timers.set(id, handler); return id; }};
+            globalThis.clearTimeout = id => timers.delete(id);
+            const runTimers = () => {{
+              const pending = [...timers.values()]; timers.clear(); pending.forEach(handler => handler());
+            }};
             globalThis.document = {{body, createElement: tag => new Node(tag),
               createDocumentFragment: () => new Node('fragment'), getElementById: () => null,
               addEventListener(name, handler) {{ documentListeners.set(name, handler); }},
@@ -561,12 +568,53 @@ class WebAssetTest(unittest.TestCase):
             assert.match(treeText(popover), /数值越高越强/);
             assert.equal(popover.style.left, '172px');
             assert.equal(popover.style.top, '392px');
+            document.dispatch('keydown', body, 'Escape');
+            assert.equal(popover.hidden, true);
+            assert.equal(buttons[0].focused, false);
+
+            buttons[0].dispatch('pointerenter');
             buttons[0].dispatch('pointerleave');
+            assert.equal(popover.hidden, false);
+            popover.dispatch('pointerenter');
+            runTimers();
+            assert.equal(popover.hidden, false);
+            popover.dispatch('pointerleave');
+            assert.equal(popover.hidden, false);
+            runTimers();
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('click');
+            buttons[0].dispatch('pointerleave');
+            popover.dispatch('pointerenter');
+            runTimers();
+            popover.dispatch('pointerleave');
+            runTimers();
+            assert.equal(popover.hidden, false);
+            buttons[0].dispatch('click');
             assert.equal(popover.hidden, true);
 
             buttons[0].dispatch('focus');
             assert.equal(popover.hidden, false);
             buttons[0].dispatch('blur');
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('focus');
+            buttons[0].dispatch('pointerenter');
+            buttons[0].dispatch('pointerleave');
+            popover.dispatch('pointerenter');
+            runTimers();
+            popover.dispatch('pointerleave');
+            runTimers();
+            assert.equal(popover.hidden, false);
+            buttons[0].dispatch('blur');
+            assert.equal(popover.hidden, true);
+
+            buttons[0].dispatch('pointerenter');
+            buttons[0].dispatch('focus');
+            buttons[0].dispatch('blur');
+            assert.equal(popover.hidden, false);
+            buttons[0].dispatch('pointerleave');
+            runTimers();
             assert.equal(popover.hidden, true);
 
             let keyEvent = buttons[0].dispatch('keydown', {{key: 'Enter'}});

@@ -6,6 +6,7 @@ import pandas as pd
 
 from factors.compute import _atr, pivot_breakout
 from scoring.engine import evaluate
+from web.factors.base import FactorResult
 from web.factors.builtin import (
     _legacy_inputs,
     build_chart_rows,
@@ -140,6 +141,32 @@ class FactorRegistryTest(unittest.TestCase):
                 "version": "v1",
             },
         )
+
+    def test_result_preserves_legacy_optional_positional_arguments(self):
+        result = FactorResult(
+            "constant",
+            "Constant",
+            "test",
+            "higher",
+            2.5,
+            "2.5",
+            "2026-07-21",
+            False,
+            None,
+            "fixture",
+            "Fixture methodology.",
+            True,
+            "v1",
+            0.75,
+            12,
+            75.0,
+        )
+
+        self.assertEqual(result.percentile, 0.75)
+        self.assertEqual(result.peer_count, 12)
+        self.assertEqual(result.display_score, 75.0)
+        self.assertIsNone(result.window)
+        self.assertFalse(result.i18n)
 
 
 class BuiltinFactorTest(unittest.TestCase):

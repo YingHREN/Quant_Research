@@ -46,11 +46,11 @@ class FactorResult:
     methodology: str
     overview: bool
     version: str
-    window: str | None = None
-    i18n: Mapping[str, Mapping[str, str]] | None = None
     percentile: float | None = None
     peer_count: int | None = None
     display_score: float | None = None
+    window: str | None = None
+    i18n: Mapping[str, Mapping[str, str]] | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "i18n", freeze_i18n(self.i18n))

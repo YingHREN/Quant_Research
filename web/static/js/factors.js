@@ -2,10 +2,16 @@ import { formatFullDate, getLocale, t } from "./i18n.js";
 
 const POPOVER_ID = "factor-popover";
 const POPOVER_MARGIN = 8;
+const POPOVER_CLOSE_DELAY = 100;
 let factorPopover = null;
 let popoverDocument = null;
 let activeTrigger = null;
 let activePinned = false;
+let activeOpenReason = null;
+let pendingPopoverClose = null;
+let suppressFocusOpen = false;
+let popoverPointerOver = false;
+const triggerPresence = new WeakMap();
 
 function humanize(value) {
   if (value == null || value === "") return "—";
@@ -249,19 +255,53 @@ function positionFactorPopover() {
   factorPopover.style.top = `${Math.round(top)}px`;
 }
 
+function cancelPopoverClose() {
+  if (pendingPopoverClose == null) return;
+  globalThis.clearTimeout(pendingPopoverClose);
+  pendingPopoverClose = null;
+}
+
+function activeTriggerHasPresence() {
+  const presence = activeTrigger && triggerPresence.get(activeTrigger);
+  return Boolean(presence?.pointerOver || presence?.focused || popoverPointerOver);
+}
+
 function closeFactorPopover({ restoreFocus = false } = {}) {
+  cancelPopoverClose();
   const trigger = activeTrigger;
   if (trigger) trigger.setAttribute("aria-expanded", "false");
   activeTrigger = null;
   activePinned = false;
+  activeOpenReason = null;
+  popoverPointerOver = false;
   if (factorPopover) factorPopover.hidden = true;
-  if (restoreFocus) trigger?.focus?.();
+  if (restoreFocus && trigger?.focus) {
+    suppressFocusOpen = true;
+    try {
+      trigger.focus();
+    } finally {
+      suppressFocusOpen = false;
+    }
+  }
+}
+
+function schedulePopoverClose(trigger = activeTrigger) {
+  if (!trigger || activePinned) return;
+  cancelPopoverClose();
+  pendingPopoverClose = globalThis.setTimeout(() => {
+    pendingPopoverClose = null;
+    if (activeTrigger === trigger && !activePinned && !activeTriggerHasPresence()) {
+      closeFactorPopover();
+    }
+  }, POPOVER_CLOSE_DELAY);
 }
 
 function documentKeydown(event) {
   if (event.key === "Escape" && activeTrigger) {
     event.preventDefault?.();
-    closeFactorPopover({ restoreFocus: true });
+    closeFactorPopover({
+      restoreFocus: activeOpenReason === "click" || activeOpenReason === "keyboard",
+    });
   }
 }
 
@@ -283,6 +323,15 @@ function ensureFactorPopover() {
   factorPopover.className = "factor-popover";
   factorPopover.hidden = true;
   factorPopover.setAttribute("role", "tooltip");
+  factorPopover.addEventListener?.("pointerenter", () => {
+    if (!activeTrigger) return;
+    popoverPointerOver = true;
+    cancelPopoverClose();
+  });
+  factorPopover.addEventListener?.("pointerleave", () => {
+    popoverPointerOver = false;
+    if (!activeTriggerHasPresence()) schedulePopoverClose();
+  });
   document.body.append(factorPopover);
   popoverDocument = document;
   document.addEventListener?.("keydown", documentKeydown);
@@ -292,25 +341,27 @@ function ensureFactorPopover() {
   return factorPopover;
 }
 
-function openFactorPopover(trigger, explanation, pinned) {
+function openFactorPopover(trigger, explanation, { pinned = false, reason = "hover" } = {}) {
   if (!ensureFactorPopover()) return;
+  cancelPopoverClose();
   if (activeTrigger && activeTrigger !== trigger) {
     activeTrigger.setAttribute("aria-expanded", "false");
   }
   activeTrigger = trigger;
   activePinned = pinned;
+  activeOpenReason = reason;
   trigger.setAttribute("aria-expanded", "true");
   renderPopoverContent(explanation);
   factorPopover.hidden = false;
   positionFactorPopover();
 }
 
-function activateFactorPopover(trigger, explanation) {
+function activateFactorPopover(trigger, explanation, reason) {
   if (activeTrigger === trigger && activePinned) {
     closeFactorPopover();
     return;
   }
-  openFactorPopover(trigger, explanation, true);
+  openFactorPopover(trigger, explanation, { pinned: true, reason });
 }
 
 function appendFactorInfo(parent, explanation) {
@@ -325,23 +376,36 @@ function appendFactorInfo(parent, explanation) {
     "aria-label", t("factor.popover.explainAria", { label: explanation.label }, explanation.locale),
   );
   button.textContent = "ⓘ";
+  const presence = { pointerOver: false, focused: false };
+  triggerPresence.set(button, presence);
   button.addEventListener?.("pointerenter", () => {
-    if (!activePinned || activeTrigger !== button) openFactorPopover(button, explanation, false);
+    presence.pointerOver = true;
+    if (!activePinned) openFactorPopover(button, explanation, { reason: "hover" });
   });
   button.addEventListener?.("pointerleave", () => {
-    if (activeTrigger === button && !activePinned) closeFactorPopover();
+    presence.pointerOver = false;
+    if (activeTrigger === button && !activePinned && !activeTriggerHasPresence()) {
+      schedulePopoverClose(button);
+    }
   });
   button.addEventListener?.("focus", () => {
-    if (!activePinned || activeTrigger !== button) openFactorPopover(button, explanation, false);
+    presence.focused = true;
+    if (suppressFocusOpen) return;
+    if (!activePinned || activeTrigger !== button) {
+      openFactorPopover(button, explanation, { reason: "focus" });
+    }
   });
   button.addEventListener?.("blur", () => {
-    if (activeTrigger === button && !activePinned) closeFactorPopover();
+    presence.focused = false;
+    if (activeTrigger === button && !activePinned && !activeTriggerHasPresence()) {
+      closeFactorPopover();
+    }
   });
-  button.addEventListener?.("click", () => activateFactorPopover(button, explanation));
+  button.addEventListener?.("click", () => activateFactorPopover(button, explanation, "click"));
   button.addEventListener?.("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
-    activateFactorPopover(button, explanation);
+    activateFactorPopover(button, explanation, "keyboard");
   });
   parent.append(button);
   return button;
