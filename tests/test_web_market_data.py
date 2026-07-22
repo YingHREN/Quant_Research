@@ -86,6 +86,16 @@ class MarketDataRepositoryTest(unittest.TestCase):
                 list(history.columns), ["Open", "High", "Low", "Close", "Volume"]
             )
 
+    def test_analysis_snapshot_returns_selected_asof_cohort_and_summaries(self):
+        self.assertTrue(hasattr(self.repo, "load_analysis_snapshot"))
+        snapshot = self.repo.load_analysis_snapshot("BBB")
+
+        self.assertEqual({summary.ticker for summary in snapshot.summaries}, {"AAA", "BBB", "OLD"})
+        self.assertEqual(snapshot.histories["BBB"].index.max(), pd.Timestamp("2026-07-20"))
+        self.assertEqual(snapshot.histories["AAA"].index.max(), pd.Timestamp("2026-07-20"))
+        self.assertEqual(snapshot.histories["OLD"].index.max(), pd.Timestamp("2026-06-20"))
+        self.assertEqual(snapshot.observation_date, "2026-07-20")
+
     def test_rejects_ticker_before_query(self):
         with self.assertRaises(InvalidTicker):
             self.repo.load_history("AAA' OR 1=1 --")

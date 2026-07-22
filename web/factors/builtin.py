@@ -42,6 +42,7 @@ class BuiltinFactor:
     version: str = "builtin-v1"
     methodology: str = "Computed point in time from local OHLCV history through the observation date."
     overview: bool = True
+    percentile_eligible: bool = True
 
     def compute(self, context: AnalysisContext):
         return self._compute(context)
@@ -203,7 +204,7 @@ def build_default_registry():
                       "Not validated for prediction; retained only as a traditional-rule diagnostic.",
                       _legacy_score, lambda v: f"{v:.1f}",
                       methodology="Existing traditional rule engine evaluated point in time with price and benchmark inputs; not validated for prediction.",
-                      overview=False),
+                      overview=False, percentile_eligible=False),
     ]
     groups = [
         FactorGroup("trend", "Trend", "Moving-average position diagnostics.", True),

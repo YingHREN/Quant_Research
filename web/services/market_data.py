@@ -48,6 +48,15 @@ class TickerSummary:
     inactive: bool
 
 
+@dataclass(frozen=True)
+class MarketAnalysisSnapshot:
+    """One consistent read snapshot for selected-stock analysis."""
+
+    observation_date: str
+    summaries: tuple[TickerSummary, ...]
+    histories: dict[str, pd.DataFrame]
+
+
 class MarketDataRepository:
     """Repository for read-only queries and explicit per-ticker price writes."""
 
@@ -189,6 +198,56 @@ class MarketDataRepository:
 
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
+        return self._histories_from_rows(rows)
+
+    def load_analysis_snapshot(self, ticker):
+        """Load summaries and the selected-date peer cohort in one SQL snapshot."""
+        self._validate_ticker(ticker)
+        query = """
+            SELECT ticker AS Ticker,
+                   date AS Date,
+                   open AS Open,
+                   high AS High,
+                   low AS Low,
+                   close AS Close,
+                   volume AS Volume
+            FROM prices
+            ORDER BY ticker ASC, date ASC
+        """
+        with self._connect() as connection:
+            rows = connection.execute(query).fetchall()
+        histories = self._histories_from_rows(rows)
+        if ticker not in histories:
+            raise UnknownTicker(f"Ticker not found: {ticker}")
+
+        latest_by_ticker = {
+            symbol: pd.Timestamp(history.index[-1])
+            for symbol, history in histories.items()
+        }
+        database_latest = max(latest_by_ticker.values())
+        summaries = tuple(
+            TickerSummary(
+                ticker=symbol,
+                latest_date=iso_date(latest),
+                lag_days=(database_latest.normalize() - latest.normalize()).days,
+                inactive=(database_latest.normalize() - latest.normalize()).days
+                > INACTIVE_LAG_DAYS,
+            )
+            for symbol, latest in latest_by_ticker.items()
+        )
+        observation = latest_by_ticker[ticker]
+        asof_histories = {
+            symbol: history.loc[history.index <= observation].copy()
+            for symbol, history in histories.items()
+        }
+        return MarketAnalysisSnapshot(
+            observation_date=iso_date(observation),
+            summaries=summaries,
+            histories=asof_histories,
+        )
+
+    @staticmethod
+    def _histories_from_rows(rows):
         frame = pd.DataFrame.from_records(
             rows,
             columns=("Ticker", "Date", "Open", "High", "Low", "Close", "Volume"),

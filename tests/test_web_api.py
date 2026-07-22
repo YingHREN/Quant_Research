@@ -117,6 +117,29 @@ class FakeRepository:
             for ticker, history in self.histories.items()
         }
 
+    def load_analysis_snapshot(self, ticker):
+        self.calls.append(("load_analysis_snapshot", ticker))
+        if self.failure is not None:
+            raise self.failure
+        if not isinstance(ticker, str) or not ticker or any(
+            character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
+            for character in ticker
+        ):
+            raise InvalidTicker("unsafe detail /Users/alice/env.sh")
+        if ticker not in self.histories:
+            raise UnknownTicker("unsafe detail /Users/alice/prices.db")
+        observation = self.histories[ticker].index[-1]
+        histories = {
+            symbol: history.loc[history.index <= observation].copy()
+            for symbol, history in self.histories.items()
+        }
+        summaries = self.list_summaries()
+        return SimpleNamespace(
+            histories=histories,
+            summaries=summaries,
+            observation_date=observation.date().isoformat(),
+        )
+
 
 class FalseyRepository(FakeRepository):
     def __bool__(self):
@@ -167,6 +190,16 @@ class MappedFactor:
 
     def format(self, value):
         return str(value)
+
+
+class CountingMappedFactor(MappedFactor):
+    def __init__(self, key, group, direction, values):
+        super().__init__(key, group, direction, values)
+        self.calls = []
+
+    def compute(self, context):
+        self.calls.append(context.ticker)
+        return super().compute(context)
 
 
 class UniverseCohortRepository(FakeRepository):
@@ -446,19 +479,14 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(
             payload["scenarios"]["observation_date"], payload["observation_date"]
         )
-        selected_loads = [
-            call
-            for call in self.repository.calls
-            if call[0] == "load_history" and call[1] == "AAA"
-        ]
-        self.assertEqual(len(selected_loads), 1)
-        bulk_loads = [call for call in self.repository.calls if call[0] == "load_universe_histories"]
-        self.assertEqual(len(bulk_loads), 1)
-        peer_loads = [
-            call for call in self.repository.calls
-            if call[0] == "load_history" and call[1] != "AAA"
-        ]
-        self.assertEqual(peer_loads, [])
+        self.assertEqual(
+            self.repository.calls.count(("load_analysis_snapshot", "AAA")),
+            1,
+        )
+        self.assertFalse(any(call[0] == "load_history" for call in self.repository.calls))
+        self.assertFalse(
+            any(call[0] == "load_universe_histories" for call in self.repository.calls)
+        )
         self.assertEqual(payload["summary"]["daily_return_unit"], "fraction")
         self.assertIn("strict_vcp_pivot", payload["structures"]["key_levels"])
         self.assertIn("tight_platform_pivot", payload["structures"]["key_levels"])
@@ -485,12 +513,31 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(result["observation_date"], "2026-07-21")
         self.assertEqual(result["peer_count"], 4)
         self.assertIsNone(result["percentile"])
-        self.assertEqual(
-            repository.calls.count(
-                ("load_universe_histories", pd.Timestamp("2026-07-21"))
-            ),
-            1,
+        self.assertEqual(repository.calls.count(("load_analysis_snapshot", "AAA")), 1)
+
+    def test_stock_detail_evaluates_full_registry_only_for_selected_ticker(self):
+        repository = ExactDatePeerRepository()
+        numeric = CountingMappedFactor(
+            "numeric",
+            "momentum",
+            "higher",
+            {ticker: value for value, ticker in enumerate(repository.histories, start=1)},
         )
+        structured = CountingMappedFactor(
+            "structured",
+            "structure",
+            "neutral",
+            {ticker: {"state": ticker} for ticker in repository.histories},
+        )
+        response = create_app(
+            {"TESTING": True, "FACTOR_REGISTRY": FactorRegistry([numeric, structured])},
+            repository,
+            FakeManager(),
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(numeric.calls, ["AAA", "BBB", "CCC", "DDD"])
+        self.assertEqual(structured.calls, ["AAA"])
 
     def test_stock_structures_expose_shape_specific_pivots_and_annotations(self):
         repository = FakeRepository()
@@ -546,11 +593,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(factor["observation_date"], "2026-07-15")
         self.assertIsNotNone(factor["percentile"])
         self.assertIn("inactive_ticker", response.json["warnings"])
-        for ticker in ("P1", "P2", "P3", "P4", "P5"):
-            self.assertIn(
-                ("load_universe_histories", pd.Timestamp("2026-07-15")),
-                repository.calls,
-            )
+        self.assertEqual(repository.calls.count(("load_analysis_snapshot", "OLD")), 1)
 
     def test_stale_active_stock_has_distinct_summary_and_warning(self):
         repository = FakeRepository()
@@ -583,7 +626,7 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json["ticker"], "AAA")
-        self.assertIn(("load_history", "AAA", None), self.repository.calls)
+        self.assertIn(("load_analysis_snapshot", "AAA"), self.repository.calls)
 
     def test_missing_benchmark_degrades_to_warning(self):
         repository = FakeRepository(include_benchmark=False)

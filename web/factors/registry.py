@@ -105,6 +105,47 @@ class FactorRegistry:
         }
         return self._add_percentiles(rows)
 
+    def evaluate_selected_with_peers(self, selected_context, peer_contexts):
+        """Evaluate all selected factors and only eligible factors for exact-date peers."""
+        results = [
+            self.evaluate_one(factor, selected_context) for factor in self.factors
+        ]
+        selected_date = iso_date(selected_context.observation_date)
+        exact_date_peers = [
+            context
+            for context in peer_contexts
+            if context.ticker != selected_context.ticker
+            and iso_date(context.observation_date) == selected_date
+        ]
+
+        for index, (factor, selected_result) in enumerate(zip(self.factors, results)):
+            if (
+                selected_result.missing
+                or not _is_finite_number(selected_result.raw_value)
+                or not getattr(factor, "percentile_eligible", True)
+            ):
+                continue
+            values = [float(selected_result.raw_value)]
+            for peer_context in exact_date_peers:
+                peer_result = self.evaluate_one(factor, peer_context)
+                if not peer_result.missing and _is_finite_number(peer_result.raw_value):
+                    values.append(float(peer_result.raw_value))
+
+            peer_count = len(values)
+            results[index] = replace(selected_result, peer_count=peer_count)
+            if peer_count < MIN_PERCENTILE_PEERS:
+                continue
+            percentile = float(
+                pd.Series(values).rank(method="average", pct=True).iloc[0]
+            )
+            results[index] = replace(
+                selected_result,
+                peer_count=peer_count,
+                percentile=percentile,
+                display_score=_display_score(selected_result.direction, percentile),
+            )
+        return results
+
     @staticmethod
     def _add_percentiles(rows):
         positions = {}

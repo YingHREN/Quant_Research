@@ -105,14 +105,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     @flask_app.get("/api/stocks/<path:ticker>")
     def stock(ticker):
         normalized_ticker = ticker.strip().upper()
-        history = repository.load_history(normalized_ticker)
+        snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        history = snapshot.histories[normalized_ticker]
         if history.empty:
             raise MarketDataUnavailable()
 
         history = history.sort_index()
         observation_timestamp = pd.Timestamp(history.index[-1])
         observation_date = iso_date(observation_timestamp)
-        summaries = repository.list_summaries()
+        summaries = snapshot.summaries
         selected_summary = next(
             (
                 summary
@@ -122,17 +123,14 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             None,
         )
 
-        peer_histories = repository.load_universe_histories(
-            asof=observation_timestamp
-        )
-        peer_histories[normalized_ticker] = history
+        peer_histories = snapshot.histories
 
         warnings = []
         benchmark_history = peer_histories.get("SPY")
         if benchmark_history is None:
             warnings.append("missing_benchmark")
 
-        contexts = [
+        peer_contexts = [
             AnalysisContext(
                 ticker=peer_ticker,
                 observation_date=pd.Timestamp(peer_history.index[-1]),
@@ -142,10 +140,14 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             for peer_ticker, peer_history in peer_histories.items()
             if not peer_history.empty
         ]
-        context_by_ticker = {context.ticker: context for context in contexts}
-        factor_rows = factor_registry.evaluate_universe(contexts)[normalized_ticker]
+        context = next(
+            context for context in peer_contexts
+            if context.ticker == normalized_ticker
+        )
+        factor_rows = factor_registry.evaluate_selected_with_peers(
+            context, peer_contexts
+        )
         factor_payload = [result.to_dict() for result in factor_rows]
-        context = context_by_ticker[normalized_ticker]
         chart = build_chart_rows(context)
 
         if selected_summary is not None and selected_summary.inactive:
