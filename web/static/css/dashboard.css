@@ -290,10 +290,10 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .table-scroll { overflow-x: auto; }
 .factor-detail { margin-top: 12px; }
 .factor-detail summary { cursor: pointer; color: var(--muted); font-size: 0.76rem; font-weight: 700; }
-table { width: 100%; margin-top: 12px; border-collapse: collapse; text-align: left; }
-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-size: 0.69rem; letter-spacing: 0.04em; text-transform: uppercase; }
+#factor-table { width: 100%; margin-top: 12px; border-collapse: collapse; text-align: left; }
+#factor-table caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+#factor-table th, #factor-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); }
+#factor-table th { color: var(--muted); font-size: 0.69rem; letter-spacing: 0.04em; text-transform: uppercase; }
 
 .factor-groups {
   display: grid;

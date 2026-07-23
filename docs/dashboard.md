@@ -105,18 +105,34 @@ deliberately excluded from the regression feature matrix.
 
 The price chart renders the point-in-time descending resistance series. Hover
 or lock any date to inspect the then-known resistance, event states, condition
-count, and the two source high dates. The price and volume panels reserve a
-20-pixel vertical gap so both time axes remain readable.
+count, and the two source high dates. The price and volume panels reduce the
+chart canvas by a dedicated bottom gutter so both time axes remain readable
+instead of being clipped by the following panel.
 
 Historical model projections are loaded lazily. Hovering or locking a date
 without a forecast calls
 `GET /api/stocks/<ticker>/forecasts/<YYYY-MM-DD>` for that trading session
 only. The service reuses revision-scoped model artifacts and caches the
 single-date result; the browser also deduplicates requests for dates already
-visited. A dashed `Model forecast` line starts at the selected close and ends
-at the model-implied close on the selected 5/20/60-session target date. This
+visited. A solid, highlighted `Model forecast` line starts at the selected
+close and ends at the model-implied close on the selected 5/20/60-session
+target date. The start marker includes the selected direction so a historical
+projection remains visible even when the crosshair leaves the candle. This
 line is distinct from the descending structural resistance line and does not
 represent a guaranteed path between its two endpoints.
+
+The detail panel also evaluates point-in-time evidence for two independent
+questions: which conditions would strengthen an advance, and which conditions
+would accelerate a decline. Each condition is `met`, `near`, `not met`, or
+`unavailable`, and displays the observation, threshold, and distance when the
+inputs permit it. The checks include prior-high and descending-trendline
+breakouts, higher lows, trend support, support loss, lower-low risk,
+distribution volume, volatility expansion, failed breakouts, and same-date
+momentum. They only read rows through the selected date. Momentum is explicitly
+unavailable unless a factor observation for that exact date is present; a
+future or latest-only factor value is never backfilled into history. These are
+diagnostic conditions for comparing the model with realized prices, not
+trading instructions.
 
 ## Direction forecasts
 

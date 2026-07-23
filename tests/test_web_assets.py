@@ -1057,13 +1057,19 @@ class WebAssetTest(unittest.TestCase):
             function chart(name) {{
               const scale = {{range: null, subscribeVisibleLogicalRangeChange() {{}},
                 unsubscribeVisibleLogicalRangeChange() {{}},
+                getVisibleLogicalRange() {{ return this.range; }},
                 setVisibleLogicalRange(next) {{ this.range = next; }}, fitContent() {{}}}};
               const value = {{name, series: [], crosshairHandler: null, clickHandler: null,
                 crosshairPositions: [], programmaticEvents: 0, forecastDataEvents: 0,
+                forecastAutoScrolls: 0,
                 timeScale: () => scale,
                 addSeries(type, options) {{
                   const series = {{type, options, data: [], setData(data) {{
                     this.data = data;
+                    if (options.lineWidth === 3 && data.length && scale.range) {{
+                      value.forecastAutoScrolls += 1;
+                      scale.range = {{from: 999, to: 1000}};
+                    }}
                     if (options.title === '模型预测线' && value.crosshairHandler
                         && value.forecastDataEvents < 8) {{
                       value.forecastDataEvents += 1;
@@ -1111,7 +1117,9 @@ class WebAssetTest(unittest.TestCase):
                       training_cutoff: '2026-07-09', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
                     '20': {{direction: 'up', predicted_return: 0.034, up_probability: 0.64,
                       confidence_status: 'calibrated', confidence_reason: null, training_sample_count: 105,
-                      training_cutoff: '2026-06-19', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                      training_cutoff: '2026-06-19', target_date: '2026-08-14',
+                      projection_dates: ['2026-07-20', '2026-08-14'],
+                      model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
                     '60': {{direction: 'down', predicted_return: -0.051, up_probability: null,
                       confidence_status: 'uncalibrated',
                       confidence_reason: 'calibration_requires_both_classes', training_sample_count: 101,
@@ -1159,8 +1167,11 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
 
+            const rangeBeforeForecastHover = structuredClone(created[0].timeScale().range);
             created[0].crosshairHandler({{time: '2026-07-17'}});
             await new Promise((resolve) => setTimeout(resolve, 0));
+            assert.ok(created[0].forecastAutoScrolls > 0);
+            assert.deepEqual(created[0].timeScale().range, rangeBeforeForecastHover);
             assert.equal(
               created[0].crosshairPositions.length + created[1].crosshairPositions.length,
               1,
@@ -1421,6 +1432,10 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("height: chartHeight(volumeEl)", chart_source)
         self.assertIn("--chart-axis-gutter: 12px", css)
         self.assertIn(".trend-evidence", css)
+        self.assertNotRegex(css, r"(?m)^table \{")
+        self.assertNotRegex(css, r"(?m)^th, td \{")
+        self.assertIn("#factor-table {", css)
+        self.assertIn("#factor-table th, #factor-table td {", css)
         self.assertIn('"forecast.marker": "预测起点 · {direction}"', i18n)
         self.assertIn('"forecast.marker": "Forecast start · {direction}"', i18n)
 

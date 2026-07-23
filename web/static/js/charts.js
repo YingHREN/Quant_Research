@@ -300,6 +300,20 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let forecastMarkerData = null;
   let paintingDetail = false;
 
+  function setForecastProjectionData(points) {
+    const visibleRange = typeof priceScale.getVisibleLogicalRange === "function"
+      ? priceScale.getVisibleLogicalRange()
+      : null;
+    forecastProjectionSeries.setData(points);
+    if (
+      visibleRange
+      && finite(visibleRange.from)
+      && finite(visibleRange.to)
+    ) {
+      priceScale.setVisibleLogicalRange(visibleRange);
+    }
+  }
+
   function updateForecastProjection(row, forecast) {
     if (
       !row
@@ -307,7 +321,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       || !finite(forecast.predicted_return)
       || typeof forecast.target_date !== "string"
     ) {
-      forecastProjectionSeries.setData([]);
+      setForecastProjectionData([]);
       return;
     }
     const projectionDates = Array.isArray(forecast.projection_dates)
@@ -324,7 +338,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         time: forecast.target_date,
         value: row.close * (1 + forecast.predicted_return),
       }];
-    forecastProjectionSeries.setData([
+    setForecastProjectionData([
       { time: row.time, value: row.close },
       ...futurePoints,
     ]);
