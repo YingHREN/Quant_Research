@@ -652,6 +652,20 @@ function structureLabel(key, locale) {
   return localized === translationKey ? humanize(key) : localized;
 }
 
+function structureValueText(value, locale) {
+  if (value == null) return "—";
+  if (typeof value === "boolean") {
+    return t(value ? "common.yes" : "common.no", {}, locale);
+  }
+  if (finite(value)) {
+    return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+  }
+  if (Array.isArray(value)) {
+    return value.length ? rawValueText(value) : "—";
+  }
+  return String(value);
+}
+
 function appendStructure(parent, key, value, locale) {
   const item = document.createElement("div");
   item.className = "structure-item";
@@ -675,7 +689,7 @@ function appendStructure(parent, key, value, locale) {
     else appendText(nested, "span", "", "—");
     detail.append(nested);
   } else {
-    detail.textContent = value == null ? "—" : Array.isArray(value) ? rawValueText(value) : String(value);
+    detail.textContent = structureValueText(value, locale);
   }
   item.append(detail);
   parent.append(item);

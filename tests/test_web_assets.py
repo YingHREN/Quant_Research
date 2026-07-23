@@ -444,6 +444,11 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(structure.textContent, '没有可用的结构诊断。');
             renderStructures({{future_metric: 42}}, structure, 'zh-CN');
             assert.equal(structure.children[0].children[0].children[0].textContent, 'Future Metric');
+            renderStructures({{price: 12.627995, active: false, marks: []}}, structure, 'zh-CN');
+            const structureItems = structure.children[0].children;
+            assert.equal(structureItems[0].children[1].textContent, '12.63');
+            assert.equal(structureItems[1].children[1].textContent, '否');
+            assert.equal(structureItems[2].children[1].textContent, '—');
         """
         subprocess.run(
             ["node", "--input-type=module", "-e", script],
@@ -1054,15 +1059,31 @@ class WebAssetTest(unittest.TestCase):
                 unsubscribeVisibleLogicalRangeChange() {{}},
                 setVisibleLogicalRange(next) {{ this.range = next; }}, fitContent() {{}}}};
               const value = {{name, series: [], crosshairHandler: null, clickHandler: null,
+                crosshairPositions: [], programmaticEvents: 0, forecastDataEvents: 0,
                 timeScale: () => scale,
                 addSeries(type, options) {{
-                  const series = {{type, options, data: [], setData(data) {{ this.data = data; }},
+                  const series = {{type, options, data: [], setData(data) {{
+                    this.data = data;
+                    if (options.title === '模型预测线' && value.crosshairHandler
+                        && value.forecastDataEvents < 8) {{
+                      value.forecastDataEvents += 1;
+                      value.crosshairHandler({{time: '2026-07-17'}});
+                    }}
+                  }},
                     createPriceLine() {{ return {{}}; }}, removePriceLine() {{}}, applyOptions() {{}}}};
                   this.series.push(series); return series;
                 }},
                 subscribeCrosshairMove(handler) {{ this.crosshairHandler = handler; }},
                 unsubscribeCrosshairMove() {{}}, subscribeClick(handler) {{ this.clickHandler = handler; }},
-                unsubscribeClick() {{}}, setCrosshairPosition() {{}}, clearCrosshairPosition() {{}},
+                unsubscribeClick() {{}},
+                setCrosshairPosition(value, time, series) {{
+                  this.crosshairPositions.push({{value, time, series}});
+                  if (this.crosshairHandler && this.programmaticEvents < 8) {{
+                    this.programmaticEvents += 1;
+                    queueMicrotask(() => this.crosshairHandler({{}}));
+                  }}
+                }},
+                clearCrosshairPosition() {{}},
                 applyOptions() {{}}, remove() {{}}}};
               created.push(value); return value;
             }}
@@ -1134,10 +1155,16 @@ class WebAssetTest(unittest.TestCase):
             controller.setChartData({{...payload, chart: rows, structures: {{annotations: [{{
               time: '2026-07-18', type: 'strict_vcp', label: 'Strict VCP',
             }}]}}}});
+            assert.equal(created[0].forecastDataEvents, 1);
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
 
             created[0].crosshairHandler({{time: '2026-07-17'}});
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            assert.equal(
+              created[0].crosshairPositions.length + created[1].crosshairPositions.length,
+              1,
+            );
             const forecastMarkers = markerControllers[0];
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'belowBar',
               color: '#35c6a5', shape: 'arrowUp', text: '预测方向：上涨'}});
@@ -1175,6 +1202,12 @@ class WebAssetTest(unittest.TestCase):
             created[0].crosshairHandler({{time: '2026-07-18'}});
             assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
             assert.match(textTree(detail), /已锁定/);
+            const lockedPositionsBeforeSwitch = created[0].crosshairPositions.length;
+            controller.setForecastHorizon(20);
+            assert.equal(created[0].crosshairPositions.length, lockedPositionsBeforeSwitch + 1);
+            assert.deepEqual(created[0].crosshairPositions.at(-1),
+              {{value: 102, time: '2026-07-17', series: created[0].series[0]}});
+            controller.setForecastHorizon(60);
             controller.setRange('3m');
             controller.setLocale('en');
             assert.equal(controller.getForecastHorizon(), 60);

@@ -279,6 +279,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let selectedRange = "1y";
   let syncing = false;
   let syncingCrosshair = false;
+  const pendingCrosshairEvents = new Map();
   let destroyed = false;
   let lastPayload = null;
   let displayedRow = null;
@@ -289,6 +290,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let forecastHorizon = DEFAULT_FORECAST_HORIZON;
   let shapeMarkerData = [];
   let forecastMarkerData = null;
+  let paintingDetail = false;
 
   function updateForecastProjection(row, forecast) {
     if (
@@ -330,50 +332,56 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   }
 
   function paintDetail(row, locked) {
-    displayedRow = row;
-    const date = row ? timeKey(row.time) : null;
-    const selectedForecastIndex = date === null
-      ? forecastIndex
-      : fetchedForecastIndexes.get(date) || forecastIndex;
-    const forecast = date === null ? null : forecastFor(selectedForecastIndex, date, forecastHorizon);
-    updateForecastProjection(row, forecast);
-    forecastMarkerData = forecastMarker(forecast, date, locale);
-    refreshMarkers();
-    renderDetail(detailEl, row, locked, locale, {
-      forecast,
-      evaluation: evaluationFor(selectedForecastIndex, forecastHorizon),
-      horizon: forecastHorizon,
-      model: selectedForecastIndex.model,
-      dateCoverage: selectedForecastIndex.dateCoverage,
-      date,
-    });
-    if (forecastRequestTimer !== null) {
-      clearTimeout(forecastRequestTimer);
-      forecastRequestTimer = null;
-    }
-    if (
-      date !== null
-      && (!forecast || typeof forecast.target_date !== "string")
-      && typeof options.onForecastDate === "function"
-      && !requestedForecastDates.has(date)
-    ) {
-      forecastRequestTimer = setTimeout(() => {
+    if (paintingDetail) return;
+    paintingDetail = true;
+    try {
+      displayedRow = row;
+      const date = row ? timeKey(row.time) : null;
+      const selectedForecastIndex = date === null
+        ? forecastIndex
+        : fetchedForecastIndexes.get(date) || forecastIndex;
+      const forecast = date === null ? null : forecastFor(selectedForecastIndex, date, forecastHorizon);
+      updateForecastProjection(row, forecast);
+      forecastMarkerData = forecastMarker(forecast, date, locale);
+      refreshMarkers();
+      renderDetail(detailEl, row, locked, locale, {
+        forecast,
+        evaluation: evaluationFor(selectedForecastIndex, forecastHorizon),
+        horizon: forecastHorizon,
+        model: selectedForecastIndex.model,
+        dateCoverage: selectedForecastIndex.dateCoverage,
+        date,
+      });
+      if (forecastRequestTimer !== null) {
+        clearTimeout(forecastRequestTimer);
         forecastRequestTimer = null;
-        requestedForecastDates.add(date);
-        Promise.resolve(options.onForecastDate(date))
-          .then((payload) => {
-            if (!payload || destroyed) return;
-            const computed = payload?.forecasts?.date_coverage?.computed_dates;
-            if (!Array.isArray(computed) || !computed.includes(date)) {
+      }
+      if (
+        date !== null
+        && (!forecast || typeof forecast.target_date !== "string")
+        && typeof options.onForecastDate === "function"
+        && !requestedForecastDates.has(date)
+      ) {
+        forecastRequestTimer = setTimeout(() => {
+          forecastRequestTimer = null;
+          requestedForecastDates.add(date);
+          Promise.resolve(options.onForecastDate(date))
+            .then((payload) => {
+              if (!payload || destroyed) return;
+              const computed = payload?.forecasts?.date_coverage?.computed_dates;
+              if (!Array.isArray(computed) || !computed.includes(date)) {
+                requestedForecastDates.delete(date);
+                return;
+              }
+              setForecasts(payload);
+            })
+            .catch(() => {
               requestedForecastDates.delete(date);
-              return;
-            }
-            setForecasts(payload);
-          })
-          .catch(() => {
-            requestedForecastDates.delete(date);
-          });
-      }, forecastRequestDelayMs);
+            });
+        }, forecastRequestDelayMs);
+      }
+    } finally {
+      paintingDetail = false;
     }
   }
 
@@ -404,11 +412,19 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     syncingCrosshair = true;
     try {
       if (!row) {
-        if (source !== priceChart) priceChart.clearCrosshairPosition();
-        if (source !== volumeChart) volumeChart.clearCrosshairPosition();
+        if (source !== priceChart) {
+          pendingCrosshairEvents.set(priceChart, null);
+          priceChart.clearCrosshairPosition();
+        }
+        if (source !== volumeChart) {
+          pendingCrosshairEvents.set(volumeChart, null);
+          volumeChart.clearCrosshairPosition();
+        }
       } else if (source === priceChart) {
+        pendingCrosshairEvents.set(volumeChart, timeKey(row.time));
         volumeChart.setCrosshairPosition(row.volume, row.time, volumeSeries);
       } else {
+        pendingCrosshairEvents.set(priceChart, timeKey(row.time));
         priceChart.setCrosshairPosition(row.close, row.time, candleSeries);
       }
     } finally {
@@ -418,7 +434,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function handleCrosshair(source) {
     return (param) => {
-      if (syncingCrosshair || destroyed) return;
+      if (destroyed || paintingDetail) return;
+      if (pendingCrosshairEvents.has(source)) {
+        pendingCrosshairEvents.delete(source);
+        return;
+      }
+      if (syncingCrosshair) return;
       const row = rowForParam(param);
       synchronizeCrosshair(source, row);
       if (lockedTime !== null) return;
@@ -596,6 +617,18 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     forecastHorizon = normalized;
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
     setRange(selectedRange);
+    const lockedRow = lockedTime === null ? null : rowByTime.get(lockedTime);
+    if (lockedRow) {
+      syncingCrosshair = true;
+      try {
+        pendingCrosshairEvents.set(priceChart, timeKey(lockedRow.time));
+        priceChart.setCrosshairPosition(lockedRow.close, lockedRow.time, candleSeries);
+        pendingCrosshairEvents.set(volumeChart, timeKey(lockedRow.time));
+        volumeChart.setCrosshairPosition(lockedRow.volume, lockedRow.time, volumeSeries);
+      } finally {
+        syncingCrosshair = false;
+      }
+    }
     return forecastHorizon;
   }
 
