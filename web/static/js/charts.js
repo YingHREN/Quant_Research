@@ -17,6 +17,8 @@ const RANGE_BARS = Object.freeze({
   "2y": 504,
 });
 
+const FORECAST_LAYOUT_PADDING = DEFAULT_FORECAST_HORIZON;
+
 const AXIS_GUTTER_PX = 12;
 
 const COLORS = Object.freeze({
@@ -281,6 +283,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     crosshairMarkerVisible: false,
     priceLineVisible: false,
     lastValueVisible: true,
+    autoscaleInfoProvider: () => null,
   });
   const volumeMa20Series = volumeChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.volumeMa20", {}, locale),
@@ -607,7 +610,10 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     }
     const last = rows.length - 1;
     const first = Math.max(0, rows.length - RANGE_BARS[range]);
-    priceScale.setVisibleLogicalRange({ from: first, to: last + forecastHorizon });
+    priceScale.setVisibleLogicalRange({
+      from: first,
+      to: last + FORECAST_LAYOUT_PADDING,
+    });
   }
 
   function renderDecorations(payload) {

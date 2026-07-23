@@ -833,7 +833,9 @@ class WebAssetTest(unittest.TestCase):
             "higher_low_confirmed",
             "reversal_signal_count",
             "whitespaceSeriesPoints",
+            "timelineAnchorSeries",
             "forecastProjectionSeries",
+            "autoscaleInfoProvider",
             "onForecastDate",
             "forecastRequestDelayMs",
         ):
@@ -841,7 +843,7 @@ class WebAssetTest(unittest.TestCase):
 
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
-        self.assertEqual(source.count("LightweightCharts.LineSeries"), 7)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 8)
         for title_key in (
             "chart.pivot.strictVcp",
             "chart.pivot.tightPlatform",
@@ -1183,6 +1185,17 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].forecastDataEvents, 1);
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
+            const forecastSeries = created[0].series.find(
+              (series) => series.options.title === '模型预测线',
+            );
+            assert.ok(forecastSeries);
+            assert.equal(typeof forecastSeries.options.autoscaleInfoProvider, 'function');
+            assert.equal(forecastSeries.options.autoscaleInfoProvider(), null);
+            assert.equal(created[0].series[0].options.autoscaleInfoProvider, undefined);
+            const emaSeries = created[0].series.find(
+              (series) => series.options.title === 'EMA20',
+            );
+            assert.equal(emaSeries.options.autoscaleInfoProvider, undefined);
 
             const sharedTimesBeforeHover = created[0].sharedTimes();
             const selectedIndexBeforeHover = sharedTimesBeforeHover.indexOf('2026-07-17');
@@ -1233,8 +1246,12 @@ class WebAssetTest(unittest.TestCase):
             assert.match(zhUp, /仅供研究/);
 
             const callsBeforeSwitch = forecastMarkers.calls;
+            const rangeBeforeHorizonSwitch = structuredClone(
+              created[0].timeScale().range,
+            );
             assert.equal(controller.setForecastHorizon(5), 5);
             assert.equal(controller.getForecastHorizon(), 5);
+            assert.deepEqual(created[0].timeScale().range, rangeBeforeHorizonSwitch);
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
               color: '#91a3b0', shape: 'circle', text: '预测起点 · 中性'}});
             const zhNeutral = textTree(detail);
@@ -1242,6 +1259,7 @@ class WebAssetTest(unittest.TestCase):
             assert.match(zhNeutral, /置信度说明 校准样本不足/);
 
             assert.equal(controller.setForecastHorizon(60), 60);
+            assert.deepEqual(created[0].timeScale().range, rangeBeforeHorizonSwitch);
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
               color: '#ff7a7a', shape: 'arrowDown', text: '预测起点 · 下跌'}});
             assert.equal(markerControllers.length, 1);
