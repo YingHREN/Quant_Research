@@ -1,3 +1,5 @@
+import { getLocale, t } from "./i18n.js";
+
 export const TREND_EVIDENCE_STATES = Object.freeze({
   MET: "met",
   NEAR: "near",
@@ -187,4 +189,71 @@ export function trendEvidence(row, options = {}) {
       item("negative_momentum", momentumState(momentum, "down"), momentum, 0),
     ],
   };
+}
+
+function valueText(value, locale) {
+  return finite(value)
+    ? new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value)
+    : "—";
+}
+
+function renderEvidenceColumn(section, direction, items, locale) {
+  const column = document.createElement("div");
+  column.className = `trend-evidence-column trend-evidence-${direction}`;
+  const heading = document.createElement("strong");
+  heading.className = "trend-evidence-heading";
+  heading.textContent = t(`trendEvidence.${direction}Heading`, {}, locale);
+  const list = document.createElement("ul");
+  list.className = "trend-evidence-list";
+  (Array.isArray(items) ? items : []).forEach((entry) => {
+    const listItem = document.createElement("li");
+    listItem.className = `trend-evidence-item trend-evidence-state-${entry.state}`;
+    const line = document.createElement("div");
+    const label = document.createElement("strong");
+    label.textContent = t(`trendEvidence.condition.${entry.key}`, {}, locale);
+    const state = document.createElement("span");
+    state.className = "trend-evidence-state";
+    state.textContent = t(`trendEvidence.state.${entry.state}`, {}, locale);
+    line.append(label, state);
+    listItem.append(line);
+    if (finite(entry.evidence)) {
+      const evidence = document.createElement("small");
+      evidence.textContent = t(
+        "trendEvidence.currentValue",
+        { value: valueText(entry.evidence, locale) },
+        locale,
+      );
+      listItem.append(evidence);
+    }
+    if (finite(entry.threshold)) {
+      const threshold = document.createElement("small");
+      threshold.textContent = t(
+        "trendEvidence.threshold",
+        { value: valueText(entry.threshold, locale) },
+        locale,
+      );
+      listItem.append(threshold);
+    }
+    list.append(listItem);
+  });
+  column.append(heading, list);
+  section.append(column);
+}
+
+export function renderTrendEvidence(
+  container,
+  evidence,
+  locale = getLocale(),
+) {
+  if (!container || !evidence) return;
+  const section = document.createElement("section");
+  section.className = "trend-evidence";
+  section.setAttribute?.("aria-label", t("trendEvidence.aria", {}, locale));
+  renderEvidenceColumn(section, "up", evidence.upward, locale);
+  renderEvidenceColumn(section, "down", evidence.downward, locale);
+  const disclaimer = document.createElement("p");
+  disclaimer.className = "trend-evidence-disclaimer";
+  disclaimer.textContent = t("trendEvidence.disclaimer", {}, locale);
+  section.append(disclaimer);
+  container.append(section);
 }

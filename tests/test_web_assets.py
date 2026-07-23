@@ -1170,6 +1170,9 @@ class WebAssetTest(unittest.TestCase):
               color: '#35c6a5', shape: 'arrowUp', text: '预测起点 · 上涨'}});
             assert.equal(forecastMarkers.markers[1].time, '2026-07-18');
             const zhUp = textTree(detail);
+            assert.match(zhUp, /上涨强化条件/);
+            assert.match(zhUp, /下跌加速条件/);
+            assert.match(zhUp, /正向动量 不可用/);
             assert.match(zhUp, /上涨概率 64\.0%/);
             assert.match(zhUp, /预测收益率 \+3\.40%/);
             assert.match(zhUp, /训练样本 105/);
@@ -1417,6 +1420,7 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("height: chartHeight(priceEl)", chart_source)
         self.assertIn("height: chartHeight(volumeEl)", chart_source)
         self.assertIn("--chart-axis-gutter: 12px", css)
+        self.assertIn(".trend-evidence", css)
         self.assertIn('"forecast.marker": "预测起点 · {direction}"', i18n)
         self.assertIn('"forecast.marker": "Forecast start · {direction}"', i18n)
 
@@ -1468,6 +1472,61 @@ class WebAssetTest(unittest.TestCase):
               causal.upward.find(item => item.key === 'momentum').state,
               'unavailable',
             );
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_trend_evidence_rendering_is_localized(self):
+        module_uri = (STATIC / "js/trend_evidence.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{ renderTrendEvidence }} from {json.dumps(module_uri)};
+
+            function node(tagName = 'div') {{
+              return {{tagName, textContent: '', className: '', children: [],
+                attributes: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }}}};
+            }}
+            function textTree(value) {{
+              return [value.textContent, ...value.children.map(textTree)]
+                .join(' ').replace(/\\s+/g, ' ').trim();
+            }}
+            globalThis.document = {{createElement: node}};
+            const container = node();
+            renderTrendEvidence(container, {{
+              upward: [
+                {{key: 'prior_high_breakout', state: 'met',
+                  evidence: 102, threshold: 101}},
+              ],
+              downward: [
+                {{key: 'support_loss', state: 'near',
+                  evidence: 99, threshold: 100}},
+              ],
+            }}, 'zh-CN');
+            const text = textTree(container);
+            assert.match(text, /上涨强化条件/);
+            assert.match(text, /突破前高 已满足/);
+            assert.match(text, /下跌加速条件/);
+            assert.match(text, /跌破趋势支撑 接近/);
+            assert.match(text, /当前值 102/);
+            assert.match(text, /关键阈值 101/);
+            assert.equal(container.children[0].attributes['aria-label'], '趋势强化证据');
+
+            const english = node();
+            renderTrendEvidence(english, {{
+              upward: [{{key: 'momentum', state: 'unavailable',
+                evidence: null, threshold: null}}],
+              downward: [],
+            }}, 'en');
+            assert.match(textTree(english), /Uptrend strengthening/);
+            assert.match(textTree(english), /Positive momentum Unavailable/);
         """
         result = subprocess.run(
             ["node", "--input-type=module", "-e", script],

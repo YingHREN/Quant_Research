@@ -263,6 +263,27 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .forecast-values dd, .forecast-evidence dd { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--text); font-variant-numeric: tabular-nums; }
 .forecast-evidence-title { display: block; margin-top: 10px; color: var(--muted); font-size: 0.7rem; }
 .forecast-disclaimer { margin: 9px 0 0; color: var(--muted); font-size: 0.68rem; }
+.trend-evidence {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.trend-evidence-column { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(9, 16, 22, 0.45); }
+.trend-evidence-up { border-top-color: var(--accent); }
+.trend-evidence-down { border-top-color: var(--danger); }
+.trend-evidence-heading { display: block; margin-bottom: 8px; color: var(--text); font-size: 0.76rem; }
+.trend-evidence-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.trend-evidence-item { min-width: 0; padding-top: 7px; border-top: 1px solid var(--line); }
+.trend-evidence-item > div { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; justify-content: space-between; }
+.trend-evidence-item strong { color: var(--text); font-size: 0.7rem; }
+.trend-evidence-item small { display: block; margin-top: 2px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trend-evidence-state { font-size: 0.66rem; font-weight: 750; }
+.trend-evidence-state-met .trend-evidence-state { color: var(--accent); }
+.trend-evidence-state-near .trend-evidence-state { color: var(--warning); }
+.trend-evidence-state-not_met .trend-evidence-state,
+.trend-evidence-state-unavailable .trend-evidence-state { color: var(--muted); }
+.trend-evidence-disclaimer { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 0.66rem; }
 
 .analysis-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(240px, 0.7fr); gap: 16px; }
 .safety-copy { margin-top: 5px; font-size: 0.76rem; }
@@ -395,6 +416,7 @@ footer a:hover { color: var(--text); }
   .forecast-static-disclaimer { text-align: left; }
   .crosshair-values { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
   .forecast-values, .forecast-evidence { grid-template-columns: minmax(0, 1fr); }
+  .trend-evidence { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 390px) {

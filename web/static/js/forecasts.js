@@ -1,4 +1,5 @@
 import { getLocale, t } from "./i18n.js";
+import { renderTrendEvidence } from "./trend_evidence.js";
 
 export const FORECAST_HORIZONS = Object.freeze([5, 20, 60]);
 export const DEFAULT_FORECAST_HORIZON = 20;
@@ -192,6 +193,7 @@ export function renderForecastDetail(container, options = {}) {
   disclaimer.className = "forecast-disclaimer";
   disclaimer.textContent = t("forecast.disclaimer", {}, locale);
   section.append(heading, values);
+  renderTrendEvidence(section, options.trendEvidence, locale);
   renderEvidence(section, options.evaluation, locale);
   section.append(disclaimer);
   container.append(section);

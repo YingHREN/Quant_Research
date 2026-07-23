@@ -8,6 +8,7 @@ import {
   indexForecasts,
   renderForecastDetail,
 } from "./forecasts.js";
+import { trendEvidence } from "./trend_evidence.js";
 
 const RANGE_BARS = Object.freeze({
   "3m": 63,
@@ -348,6 +349,10 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         ? forecastIndex
         : fetchedForecastIndexes.get(date) || forecastIndex;
       const forecast = date === null ? null : forecastFor(selectedForecastIndex, date, forecastHorizon);
+      const selectedRowIndex = date === null
+        ? -1
+        : rows.findIndex((candidate) => timeKey(candidate.time) === date);
+      const evidence = trendEvidence(row, { rows, index: selectedRowIndex });
       updateForecastProjection(row, forecast);
       forecastMarkerData = forecastMarker(forecast, date, locale);
       refreshMarkers();
@@ -358,6 +363,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         model: selectedForecastIndex.model,
         dateCoverage: selectedForecastIndex.dateCoverage,
         date,
+        trendEvidence: evidence,
       });
       if (forecastRequestTimer !== null) {
         clearTimeout(forecastRequestTimer);
