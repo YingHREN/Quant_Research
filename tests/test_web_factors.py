@@ -234,6 +234,23 @@ class BuiltinFactorTest(unittest.TestCase):
                 "crossed_sma50",
                 "ema20_cross",
                 "sma50_cross",
+                "prior_high_resistance",
+                "prior_high_breakout_pct",
+                "prior_high_breakout",
+                "descending_trendline",
+                "trendline_breakout",
+                "trendline_high_1_date",
+                "trendline_high_2_date",
+                "latest_confirmed_high_date",
+                "latest_confirmed_high_confirmed_date",
+                "higher_low_confirmed",
+                "higher_low_previous_date",
+                "higher_low_previous_price",
+                "higher_low_latest_date",
+                "higher_low_latest_price",
+                "higher_low_confirmation_date",
+                "reversal_signal_count",
+                "reversal_candidate",
             },
         )
         self.assertEqual(last["time"], "2026-07-21")
@@ -256,6 +273,11 @@ class BuiltinFactorTest(unittest.TestCase):
         self.assertIsInstance(last["crossed_sma50"], bool)
         self.assertIn(last["ema20_cross"], (None, "above", "below"))
         self.assertIn(last["sma50_cross"], (None, "above", "below"))
+        self.assertIsInstance(last["prior_high_breakout"], bool)
+        self.assertIsInstance(last["trendline_breakout"], bool)
+        self.assertIsInstance(last["higher_low_confirmed"], bool)
+        self.assertIsInstance(last["reversal_candidate"], bool)
+        self.assertIn(last["reversal_signal_count"], (0, 1, 2, 3))
 
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()
@@ -264,6 +286,13 @@ class BuiltinFactorTest(unittest.TestCase):
             {"trend", "momentum", "structure", "volume", "risk", "legacy"},
         )
         by_key = {factor.key: factor for factor in registry.factors}
+        for key in (
+            "prior_high_breakout",
+            "trendline_breakout",
+            "higher_low_confirmed",
+            "reversal_signal_count",
+        ):
+            self.assertIn(key, by_key)
         ctx = context_from_history(price_history(40))
 
         strict_vcp = registry.evaluate_one(by_key["strict_vcp"], ctx)

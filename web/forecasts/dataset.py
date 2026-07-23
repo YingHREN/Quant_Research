@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from factors.compute import _ema, _sma, _zigzag_pivots
+from research.reversal import build_reversal_rows
 from web.forecasts.base import SUPPORTED_HORIZONS
 
 
@@ -26,6 +27,9 @@ FEATURE_COLUMNS = (
     "volume_change",
     "atr20_pct",
     "realized_vol_63",
+    "prior_high_breakout",
+    "trendline_breakout",
+    "higher_low_confirmed",
 )
 REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 INDEX_NAMES = ("ticker", "observation_date")
@@ -198,6 +202,13 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
     strict_vcp, platform = _fast_structure_features(history)
     features["strict_vcp"] = strict_vcp
     features["tight_platform"] = platform
+    reversal = pd.DataFrame(build_reversal_rows(history), index=history.index)
+    for key in (
+        "prior_high_breakout",
+        "trendline_breakout",
+        "higher_low_confirmed",
+    ):
+        features[key] = reversal[key].astype(float)
     features = features.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
     features = features.where(np.isfinite(features), np.nan)
     features.index = pd.MultiIndex.from_arrays(

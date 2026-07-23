@@ -647,6 +647,29 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("strict_vcp_pivot", payload["structures"]["key_levels"])
         self.assertIn("tight_platform_pivot", payload["structures"]["key_levels"])
         self.assertIn("annotations", payload["structures"])
+        reversal_keys = (
+            "prior_high_resistance",
+            "prior_high_breakout_pct",
+            "prior_high_breakout",
+            "descending_trendline",
+            "trendline_breakout",
+            "trendline_high_1_date",
+            "trendline_high_2_date",
+            "latest_confirmed_high_date",
+            "latest_confirmed_high_confirmed_date",
+            "higher_low_confirmed",
+            "higher_low_previous_date",
+            "higher_low_previous_price",
+            "higher_low_latest_date",
+            "higher_low_latest_price",
+            "higher_low_confirmation_date",
+            "reversal_signal_count",
+            "reversal_candidate",
+        )
+        for row in payload["chart"]:
+            for key in reversal_keys:
+                self.assertIn(key, row)
+            self.assertIn(row["reversal_signal_count"], (0, 1, 2, 3))
 
     def test_injected_forecast_service_receives_existing_snapshot_and_chart_dates(self):
         service = InjectedForecastService()

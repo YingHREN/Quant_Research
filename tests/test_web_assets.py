@@ -822,12 +822,18 @@ class WebAssetTest(unittest.TestCase):
             "volume_ma20",
             "atr20",
             "pivot_distance_pct",
+            "descending_trendline",
+            "prior_high_breakout",
+            "trendline_breakout",
+            "higher_low_confirmed",
+            "reversal_signal_count",
+            "whitespaceSeriesPoints",
         ):
             self.assertIn(marker, source)
 
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
-        self.assertEqual(source.count("LightweightCharts.LineSeries"), 5)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 6)
         for title_key in (
             "chart.pivot.strictVcp",
             "chart.pivot.tightPlatform",
@@ -1275,13 +1281,25 @@ class WebAssetTest(unittest.TestCase):
               volume: 1200, volume_ma20: 1000, volume_ratio: 1.2, volume_ratio_change: 0.15,
               ema20: 100, sma50: 95, sma200: 90, daily_return: 0.01, true_range_pct: 4,
               volume_change: 0.1, atr20: 3, pivot: 100, pivot_distance_pct: 1,
-              pivot_distance_change_pct: 0.75, ema20_cross: 'above', sma50_cross: null}};
+              pivot_distance_change_pct: 0.75, ema20_cross: 'above', sma50_cross: null,
+              prior_high_resistance: 100, prior_high_breakout_pct: 1,
+              prior_high_breakout: true, descending_trendline: 100.5,
+              trendline_breakout: true, higher_low_confirmed: false,
+              reversal_signal_count: 2, reversal_candidate: true,
+              trendline_high_1_date: '2026-07-01', trendline_high_2_date: '2026-07-15',
+              latest_confirmed_high_date: '2026-07-15',
+              latest_confirmed_high_confirmed_date: '2026-07-18',
+              higher_low_previous_date: '2026-06-10', higher_low_previous_price: 90,
+              higher_low_latest_date: '2026-07-10', higher_low_latest_price: 94,
+              higher_low_confirmation_date: '2026-07-14'}};
             controller.setChartData({{chart: [row], structures: {{key_levels: {{
               strict_vcp_pivot: 103, tight_platform_pivot: 104,
             }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
             console.log(JSON.stringify({{
               priceLines: created[0].priceLines.map(line => line.title),
               volumeLines: created[1].series.filter(series => series.type === 'line')
+                .map(series => [series.options.title, series.data]),
+              priceLineSeries: created[0].series.filter(series => series.type === 'line')
                 .map(series => [series.options.title, series.data]),
               markers: markerSets.at(-1),
               emptyDetail,
@@ -1304,10 +1322,23 @@ class WebAssetTest(unittest.TestCase):
             ["Volume MA20", "Volume ratio"],
         )
         self.assertEqual(actual["markers"][0]["text"], "Strict VCP")
+        self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
+        self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
+        self.assertIn("Reversal candidate 2/3", [marker["text"] for marker in actual["markers"]])
+        self.assertEqual(
+            actual["priceLineSeries"][-1],
+            ["Descending resistance", [{"time": "2026-07-22", "value": 100.5}]],
+        )
         details = dict(actual["detail"])
         self.assertEqual(details["Volume ratio change"], "+0.15×")
         self.assertEqual(details["Pivot-distance change"], "+0.75 pp")
         self.assertEqual(details["EMA20 cross"], "Crossed above")
+        self.assertEqual(details["Prior-high breakout"], "Yes")
+        self.assertEqual(details["Trendline breakout"], "Yes")
+        self.assertEqual(details["Reversal conditions"], "2/3")
+        self.assertEqual(details["Latest high confirmed"], "2026-07-18")
+        self.assertEqual(details["Higher-low confirmation"], "2026-07-14")
+        self.assertEqual(details["Higher-low pivots"], "2026-06-10 90 → 2026-07-10 94")
 
     def test_chart_panels_contain_canvas_intrinsic_width_on_mobile(self):
         css = (STATIC / "css/dashboard.css").read_text()
@@ -1326,6 +1357,19 @@ class WebAssetTest(unittest.TestCase):
         for selector in selectors[:2]:
             match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
             self.assertIn("overflow: hidden", match.group(1))
+
+    def test_price_and_volume_charts_reserve_space_for_the_date_axis(self):
+        css = (STATIC / "css/dashboard.css").read_text()
+
+        volume = re.search(r"\.volume-placeholder\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(volume)
+        gap = re.search(r"margin-top:\s*(\d+)px", volume.group(1))
+        self.assertIsNotNone(gap)
+        self.assertGreaterEqual(
+            int(gap.group(1)),
+            20,
+            "The lower chart must not visually cover the price chart's date labels.",
+        )
 
     def test_research_grid_track_has_zero_intrinsic_minimum(self):
         css = (STATIC / "css/dashboard.css").read_text()

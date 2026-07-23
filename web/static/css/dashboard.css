@@ -238,7 +238,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   background: repeating-linear-gradient(135deg, rgba(255,255,255,0.014) 0 8px, transparent 8px 16px);
 }
 .chart-placeholder { height: 380px; margin-top: 14px; }
-.volume-placeholder { height: 130px; margin-top: 8px; }
+.volume-placeholder { height: 130px; margin-top: 20px; }
 .scenario-placeholder { height: 260px; margin-top: 14px; }
 .detail-strip, .empty-state { margin-top: 10px; padding: 11px; border-radius: 8px; background: #0b141c; color: var(--muted); font-size: 0.78rem; }
 .detail-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }

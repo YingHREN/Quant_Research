@@ -28,6 +28,8 @@ const COLORS = Object.freeze({
   pivot: "#ff9f43",
   strictPivot: "#ff9f43",
   platformPivot: "#f472b6",
+  trendline: "#ff8ccf",
+  reversal: "#f7d154",
   volumeMa20: "#5cc8ff",
   volumeRatio: "#f2bd5d",
 });
@@ -40,6 +42,14 @@ function seriesPoints(rows, field) {
   return rows
     .filter((row) => finite(row[field]))
     .map((row) => ({ time: row.time, value: row[field] }));
+}
+
+function whitespaceSeriesPoints(rows, field) {
+  return rows.map((row) => (
+    finite(row[field])
+      ? { time: row.time, value: row[field] }
+      : { time: row.time }
+  ));
 }
 
 function timeKey(time) {
@@ -77,6 +87,10 @@ function crossText(value, locale) {
     : value === "below" ? t("chart.cross.below", {}, locale) : "—";
 }
 
+function booleanText(value, locale) {
+  return t(value ? "common.yes" : "common.no", {}, locale);
+}
+
 export function detailItems(row, locale = getLocale()) {
   return [
     { label: t("chart.field.open", {}, locale), value: numberText(row.open) },
@@ -99,6 +113,16 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.pivotDistanceChange", {}, locale), value: pointDeltaText(row.pivot_distance_change_pct) },
     { label: t("chart.field.ema20Cross", {}, locale), value: crossText(row.ema20_cross, locale) },
     { label: t("chart.field.sma50Cross", {}, locale), value: crossText(row.sma50_cross, locale) },
+    { label: t("chart.field.priorHighResistance", {}, locale), value: numberText(row.prior_high_resistance) },
+    { label: t("chart.field.priorHighBreakout", {}, locale), value: booleanText(row.prior_high_breakout, locale) },
+    { label: t("chart.field.descendingTrendline", {}, locale), value: numberText(row.descending_trendline) },
+    { label: t("chart.field.trendlineBreakout", {}, locale), value: booleanText(row.trendline_breakout, locale) },
+    { label: t("chart.field.higherLowConfirmed", {}, locale), value: booleanText(row.higher_low_confirmed, locale) },
+    { label: t("chart.field.reversalConditions", {}, locale), value: `${Number(row.reversal_signal_count) || 0}/3` },
+    { label: t("chart.field.trendlinePivots", {}, locale), value: row.trendline_high_1_date && row.trendline_high_2_date ? `${row.trendline_high_1_date} → ${row.trendline_high_2_date}` : "—" },
+    { label: t("chart.field.latestHighConfirmed", {}, locale), value: row.latest_confirmed_high_confirmed_date || "—" },
+    { label: t("chart.field.higherLowConfirmation", {}, locale), value: row.higher_low_confirmation_date || "—" },
+    { label: t("chart.field.higherLowPivots", {}, locale), value: row.higher_low_previous_date && row.higher_low_latest_date ? `${row.higher_low_previous_date} ${numberText(row.higher_low_previous_price)} → ${row.higher_low_latest_date} ${numberText(row.higher_low_latest_price)}` : "—" },
   ];
 }
 
@@ -201,6 +225,14 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     lineWidth: 1,
     priceLineVisible: false,
     lastValueVisible: false,
+  });
+  const trendlineSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
+    title: t("chart.series.descendingResistance", {}, locale),
+    color: COLORS.trendline,
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false,
+    lastValueVisible: true,
   });
   const volumeMa20Series = volumeChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.volumeMa20", {}, locale),
@@ -390,7 +422,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     ));
 
     const annotations = payload && payload.structures && payload.structures.annotations;
-    shapeMarkerData = (Array.isArray(annotations) ? annotations : []).map((annotation) => ({
+    const structureMarkers = (Array.isArray(annotations) ? annotations : []).map((annotation) => ({
       time: annotation.time,
       position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
       color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
@@ -401,6 +433,35 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         return localized === key ? annotation.label || t("chart.shape.default", {}, locale) : localized;
       })(),
     }));
+    const reversalMarkers = rows.flatMap((row) => {
+      const markers = [];
+      if (row.prior_high_breakout) {
+        markers.push({
+          time: row.time, position: "belowBar", color: COLORS.up, shape: "arrowUp",
+          text: t("chart.reversal.priorHighBreakout", {}, locale),
+        });
+      }
+      if (row.trendline_breakout) {
+        markers.push({
+          time: row.time, position: "belowBar", color: COLORS.trendline, shape: "arrowUp",
+          text: t("chart.reversal.trendlineBreakout", {}, locale),
+        });
+      }
+      if (row.higher_low_confirmed) {
+        markers.push({
+          time: row.time, position: "belowBar", color: COLORS.sma50, shape: "circle",
+          text: t("chart.reversal.higherLow", {}, locale),
+        });
+      }
+      if (row.reversal_candidate) {
+        markers.push({
+          time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "circle",
+          text: t("chart.reversal.candidate", { count: row.reversal_signal_count }, locale),
+        });
+      }
+      return markers;
+    });
+    shapeMarkerData = [...structureMarkers, ...reversalMarkers];
     refreshMarkers();
   }
 
@@ -427,6 +488,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     ema20Series.setData(seriesPoints(rows, "ema20"));
     sma50Series.setData(seriesPoints(rows, "sma50"));
     sma200Series.setData(seriesPoints(rows, "sma200"));
+    trendlineSeries.setData(whitespaceSeriesPoints(rows, "descending_trendline"));
     volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
     volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
@@ -466,6 +528,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     volumeChart.applyOptions(dateOptions);
     volumeMa20Series.applyOptions?.({ title: t("chart.series.volumeMa20", {}, locale) });
     volumeRatioSeries.applyOptions?.({ title: t("chart.series.volumeRatio", {}, locale) });
+    trendlineSeries.applyOptions?.({ title: t("chart.series.descendingResistance", {}, locale) });
     renderDecorations(lastPayload);
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
   }

@@ -80,6 +80,19 @@ class ForecastDatasetTest(unittest.TestCase):
 
         self.assertEqual(len(frame), len(history))
 
+    def test_reversal_events_are_numeric_model_features(self):
+        frame = build_feature_frame({"AAA": price_history(periods=280)})
+
+        for key in (
+            "prior_high_breakout",
+            "trendline_breakout",
+            "higher_low_confirmed",
+        ):
+            self.assertIn(key, FEATURE_COLUMNS)
+            self.assertIn(key, frame.columns)
+            self.assertTrue(frame[key].dropna().isin((0.0, 1.0, 2.0, 3.0)).all())
+        self.assertNotIn("reversal_signal_count", FEATURE_COLUMNS)
+
     def test_forward_target_uses_ticker_local_session_positions(self):
         histories = {
             "AAA": price_history(periods=80),

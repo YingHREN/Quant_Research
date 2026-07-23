@@ -77,6 +77,37 @@ such as ticker symbols, VCP, EMA20, SMA50, SMA200, ATR20, and OHLCV unchanged.
 Extend `tests/test_web_factors.py` to require complete metadata and
 `tests/test_web_assets.py` when the popover rendering or interaction changes.
 
+## Causal reversal factors
+
+The dashboard exposes three event factors on every historical chart date:
+
+- `prior_high_breakout`: close crosses above the highest close in the previous
+  20 sessions, excluding the observation session.
+- `trendline_breakout`: close crosses above a descending resistance line formed
+  by the latest two lower confirmed swing highs.
+- `higher_low_confirmed`: a newly confirmed swing low is higher than the
+  preceding confirmed low by at least `0.25 * ATR20`.
+
+Swing extrema are not visible on their pivot dates. They become usable only
+after a later move confirms the reversal threshold, and the API retains both
+the pivot date and confirmation date. This delay is intentional: drawing a
+historical trendline from pivots discovered with later prices would leak future
+information.
+
+`reversal_signal_count` is the number of these events occurring on the same
+session; `reversal_candidate` becomes true at two or more. These fields are
+descriptive research markers, not validated entry signals. The three numeric
+component columns are also included in `web.forecasts.dataset.FEATURE_COLUMNS`
+so the existing purged 5/20/60-session ridge workflow can estimate their
+incremental value. They must remain separate during evaluation so a weak
+component is not hidden inside the composite; the redundant composite count is
+deliberately excluded from the regression feature matrix.
+
+The price chart renders the point-in-time descending resistance series. Hover
+or lock any date to inspect the then-known resistance, event states, condition
+count, and the two source high dates. The price and volume panels reserve a
+20-pixel vertical gap so both time axes remain readable.
+
 ## Direction forecasts
 
 The chart direction model is separate from the descriptive 20/40/60-session

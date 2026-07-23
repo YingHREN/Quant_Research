@@ -22,6 +22,7 @@ from factors.compute import (
     volume_stats,
 )
 from research.momentum import momentum_features
+from research.reversal import build_reversal_rows
 from run import market_uptrend
 from scoring.engine import evaluate
 from web.contracts import iso_date
@@ -251,6 +252,26 @@ FACTOR_ZH = {
         "收盘价除以前 20 个交易日的最高收盘价再减一，以百分比表示。",
         "前 20 个交易日", "中性诊断；正值表示高于枢轴点，负值表示低于枢轴点。",
     ),
+    "prior_high_breakout": _zh(
+        "突破前高", "收盘价首次上穿此前 20 日最高收盘价。",
+        "当前收盘价上穿不含当日的 20 日最高收盘价；只在交叉发生日为真。",
+        "前 20 个交易日", "事件因子；需通过走步样本外检验预测能力。",
+    ),
+    "trendline_breakout": _zh(
+        "突破下降趋势线", "收盘价上穿两个已确认下降摆动高点形成的阻力线。",
+        "仅使用观察日之前已经确认的最近两个递减摆动高点外推阻力线。",
+        "自适应摆动窗口", "事件因子；需通过走步样本外检验预测能力。",
+    ),
+    "higher_low_confirmed": _zh(
+        "更高低点确认", "最新确认低点高于上一确认低点并超过 ATR 容差。",
+        "摆动低点须经后续反弹确认，且高出上一低点至少 0.25 倍 ATR20。",
+        "自适应摆动窗口", "事件因子；需通过走步样本外检验预测能力。",
+    ),
+    "reversal_signal_count": _zh(
+        "反转条件数", "观察日同时触发的三个反转条件数量。",
+        "对突破前高、突破下降趋势线和更高低点确认三个布尔事件求和。",
+        "观察日", "描述性组合；达到两个仅标记候选，不代表买入建议。",
+    ),
     "volume_ratio": _zh(
         "成交量比率", "当前成交量除以时点一致的 20 日平均成交量。",
         "当日成交量除以过去 20 日简单平均成交量。",
@@ -289,6 +310,10 @@ FACTOR_WINDOWS = {
     "strict_vcp": "Up to 250 sessions; candidate bases span 20 to 80 sessions",
     "tight_platform": "20 sessions",
     "pivot_distance_pct": "Prior 20 sessions",
+    "prior_high_breakout": "Prior 20 sessions",
+    "trendline_breakout": "Adaptive confirmed swings",
+    "higher_low_confirmed": "Adaptive confirmed swings",
+    "reversal_signal_count": "Observation session",
     "volume_ratio": "20 sessions",
     "atr20_pct": "20 sessions",
     "realized_vol_63": "Up to 63 sessions",
@@ -346,6 +371,22 @@ def build_default_registry():
                       "Close distance from the prior 20-session pivot.",
                       _chart_value("pivot_distance_pct"), _percent,
                       methodology="Close divided by the highest close in the prior 20 sessions, minus one, expressed in percent."),
+        BuiltinFactor("prior_high_breakout", "Prior-high breakout", "structure", "neutral",
+                      "Crossing above the prior 20-session closing high.",
+                      _chart_value("prior_high_breakout"), lambda v: "Yes" if v else "No",
+                      methodology="True only when close crosses from at-or-below to above the trailing 20-session high, excluding the observation session."),
+        BuiltinFactor("trendline_breakout", "Descending-trendline breakout", "structure", "neutral",
+                      "Crossing above resistance fitted through two confirmed lower swing highs.",
+                      _chart_value("trendline_breakout"), lambda v: "Yes" if v else "No",
+                      methodology="Uses only swing highs whose reversal confirmation date is not later than the observation date."),
+        BuiltinFactor("higher_low_confirmed", "Confirmed higher low", "structure", "neutral",
+                      "A newly confirmed swing low above its predecessor by an ATR tolerance.",
+                      _chart_value("higher_low_confirmed"), lambda v: "Yes" if v else "No",
+                      methodology="Emitted on confirmation when the latest swing low exceeds the previous low by at least 0.25 ATR20."),
+        BuiltinFactor("reversal_signal_count", "Reversal condition count", "structure", "neutral",
+                      "Number of same-session causal reversal events.",
+                      _chart_value("reversal_signal_count"), lambda v: f"{int(v)}/3",
+                      methodology="Sum of prior-high breakout, descending-trendline breakout, and confirmed higher-low event flags."),
         BuiltinFactor("volume_ratio", "Volume ratio", "volume", "higher",
                       "Current volume divided by its point-in-time 20-session average.",
                       _chart_value("volume_ratio"), _ratio,
@@ -442,6 +483,7 @@ def build_chart_rows(context: AnalysisContext):
         pivot.iloc[:21] = float("nan")
         above_ema20 = close >= ema20
         above_sma50 = close >= sma50
+        reversal_rows = build_reversal_rows(history)
 
         rows = []
         for position, (timestamp, source) in enumerate(history.iterrows()):
@@ -495,6 +537,7 @@ def build_chart_rows(context: AnalysisContext):
                     "sma50_cross": (
                         "above" if above_sma50.iloc[position] else "below"
                     ) if crossed_sma50 else None,
+                    **reversal_rows[position],
                 }
             )
         return rows

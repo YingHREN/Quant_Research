@@ -13,7 +13,7 @@ from web.forecasts.evaluation import (
     calibrate_up_probability,
     walk_forward_evaluate,
 )
-from web.forecasts.ridge import RidgeForecastProvider
+from web.forecasts.ridge import MODEL_VERSION, RidgeForecastProvider
 
 
 EVALUATION_DATE = pd.Timestamp("2025-01-10")
@@ -336,7 +336,7 @@ class CalibrationTest(unittest.TestCase):
                 "predicted_return": history_predictions,
                 "actual_return": np.where(history_predictions > 0.0, 0.02, -0.01),
                 "model_key": "ridge_direction_v1",
-                "model_version": "v1",
+                "model_version": MODEL_VERSION,
             }
         )
         poisoned = pd.DataFrame(
@@ -349,7 +349,7 @@ class CalibrationTest(unittest.TestCase):
                 "predicted_return": [1.0],
                 "actual_return": [-1.0],
                 "model_key": ["ridge_direction_v1"],
-                "model_version": ["v1"],
+                "model_version": [MODEL_VERSION],
             }
         )
 
