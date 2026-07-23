@@ -20,6 +20,9 @@ to follow the pointer.
   remain identical.
 - Loading a historical forecast must only change the forecast line, marker, and
   detail content.
+- A forecast path must not expand or contract the candle price scale. Candles,
+  moving averages, and structural levels must keep the same vertical position
+  while the pointer moves.
 - Switching between 5-, 20-, and 60-session forecasts must preserve zoom,
   scroll position, and a locked crosshair.
 - Price and volume charts must remain synchronized.
@@ -43,6 +46,13 @@ The anchor series will have no visible line, price line, last-value label, or
 crosshair marker. It is an implementation detail and must not appear in the
 legend.
 
+Keep the visible forecast line on the candle price scale so its prices use the
+same coordinates as the candles, but configure its `autoscaleInfoProvider` to
+return no autoscale contribution. Forecast points will therefore be drawn at
+their correct price coordinates without changing the price range. The forecast
+line's last-value label remains visible when it falls inside the candle-derived
+scale; an off-scale target may be clipped rather than compressing the candles.
+
 The existing logical-range preservation around forecast `setData()` remains as
 defensive compatibility, but correctness must no longer depend on it.
 
@@ -57,6 +67,8 @@ defensive compatibility, but correctness must no longer depend on it.
 4. Hovering selects a row and may fetch its point-in-time forecast.
 5. The visible forecast series is replaced, but every forecast date is already
    represented by the anchor series, so the time index remains stable.
+6. The candle, moving-average, and structure series determine vertical
+   autoscaling; the forecast line is excluded from that calculation.
 
 If a fetched forecast unexpectedly includes a date outside the anchor, the
 anchor may be extended monotonically. Existing anchor dates must never be
@@ -73,7 +85,9 @@ shared time index:
 - an asynchronously fetched forecast may extend the anchor but may not remove
   existing dates;
 - horizon switching preserves the visible logical range and locked crosshair;
-- the anchor series has invisible presentation options.
+- the anchor series has invisible presentation options;
+- a large positive or negative forecast does not change the candle price
+  scale's autoscale range.
 
 After automated tests pass, verify in the live dashboard with NBIS:
 
@@ -81,7 +95,9 @@ After automated tests pass, verify in the live dashboard with NBIS:
 2. lock 2025-10-20 and wait for the downward forecast;
 3. confirm the axis and detail panel both remain on 2025-10-20;
 4. unlock and move the pointer right across multiple dates;
-5. confirm the candles, axis labels, and volume bars stay fixed.
+5. confirm the candles, axis labels, and volume bars stay fixed horizontally;
+6. hover forecasts with materially different targets and confirm candles,
+   moving averages, and price levels do not move vertically.
 
 ## Scope
 
