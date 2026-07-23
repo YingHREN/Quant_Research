@@ -1062,6 +1062,11 @@ class WebAssetTest(unittest.TestCase):
               const value = {{name, series: [], crosshairHandler: null, clickHandler: null,
                 crosshairPositions: [], programmaticEvents: 0, forecastDataEvents: 0,
                 forecastAutoScrolls: 0,
+                sharedTimes() {{
+                  return [...new Set(this.series.flatMap(
+                    (series) => series.data.map((point) => point.time),
+                  ))].sort();
+                }},
                 timeScale: () => scale,
                 addSeries(type, options) {{
                   const series = {{type, options, data: [], setData(data) {{
@@ -1179,11 +1184,28 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
 
+            const sharedTimesBeforeHover = created[0].sharedTimes();
+            const selectedIndexBeforeHover = sharedTimesBeforeHover.indexOf('2026-07-17');
             const rangeBeforeForecastHover = structuredClone(created[0].timeScale().range);
             created[0].crosshairHandler({{time: '2026-07-17'}});
             await new Promise((resolve) => setTimeout(resolve, 0));
             assert.ok(created[0].forecastAutoScrolls > 0);
             assert.deepEqual(created[0].timeScale().range, rangeBeforeForecastHover);
+            const sharedTimesAfterHover = created[0].sharedTimes();
+            assert.deepEqual(sharedTimesAfterHover, sharedTimesBeforeHover);
+            assert.equal(
+              sharedTimesAfterHover.indexOf('2026-07-17'),
+              selectedIndexBeforeHover,
+            );
+            const timelineAnchor = created[0].series.find(
+              (series) => series.options.title === '',
+            );
+            assert.ok(timelineAnchor);
+            const timelineAnchorTimes = timelineAnchor.data.map((point) => point.time);
+            ['2026-07-17', '2026-07-18', '2026-07-20', '2026-08-14', '2026-08-17']
+              .forEach((date) => assert.ok(timelineAnchorTimes.includes(date), date));
+            assert.equal(new Set(timelineAnchorTimes).size, timelineAnchorTimes.length);
+            assert.ok(timelineAnchor.data.every((point) => !('value' in point)));
             assert.equal(
               created[0].crosshairPositions.length + created[1].crosshairPositions.length,
               1,
