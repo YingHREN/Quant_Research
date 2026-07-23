@@ -304,11 +304,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       ? forecast.projection_dates.filter((value) => typeof value === "string")
       : [];
     const futurePoints = projectionDates.length
-      ? projectionDates.map((time, index) => (
-        index === projectionDates.length - 1
-          ? { time, value: row.close * (1 + forecast.predicted_return) }
-          : { time }
-      ))
+      ? projectionDates.map((time, index) => ({
+        time,
+        value: row.close * (
+          1 + forecast.predicted_return * ((index + 1) / projectionDates.length)
+        ),
+      }))
       : [{
         time: forecast.target_date,
         value: row.close * (1 + forecast.predicted_return),
