@@ -17,7 +17,11 @@ import {
   store,
 } from "./store.js";
 import { filterTickers, renderUniverse, sortTickers } from "./universe.js";
-import { createUpdateController, shouldReloadSelectedTicker } from "./update.js";
+import {
+  createUpdateController,
+  shouldReloadAfterUpdate,
+  shouldReloadSelectedTicker,
+} from "./update.js";
 
 const elements = {};
 let stockRequestSequence = 0;
@@ -232,7 +236,7 @@ async function loadUniverse() {
   }
 }
 
-async function refreshUniverseAfterUpdate() {
+async function refreshUniverseAfterUpdate(updateSnapshot = {}) {
   const previous = store.getState();
   const previousTicker = previous.selectedTicker;
   const previousObservationDate = previous.stockPayload?.observation_date || null;
@@ -252,7 +256,10 @@ async function refreshUniverseAfterUpdate() {
       previousObservationDate,
       rows,
     );
-    if (selectedTicker && (selectionChanged || observationChanged)) {
+    if (
+      selectedTicker
+      && shouldReloadAfterUpdate(updateSnapshot, selectionChanged, observationChanged)
+    ) {
       await selectTicker(selectedTicker);
     }
   } catch (error) {
@@ -395,7 +402,19 @@ export async function initializeDashboard() {
     elements.priceChart,
     elements.volumeChart,
     elements.crosshairDetail,
-    { locale: getLocale() },
+    {
+      locale: getLocale(),
+      onForecastDate: async (date) => {
+        const requestGeneration = stockRequestSequence;
+        const ticker = store.getState().selectedTicker;
+        if (!ticker) return null;
+        const payload = await api.getStockForecast(ticker, date);
+        return (
+          stockRequestSequence === requestGeneration
+          && store.getState().selectedTicker === ticker
+        ) ? payload : null;
+      },
+    },
   );
   updateController = createUpdateController({
     button: elements.updateData,

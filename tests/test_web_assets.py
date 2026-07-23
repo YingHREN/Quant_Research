@@ -828,12 +828,15 @@ class WebAssetTest(unittest.TestCase):
             "higher_low_confirmed",
             "reversal_signal_count",
             "whitespaceSeriesPoints",
+            "forecastProjectionSeries",
+            "onForecastDate",
+            "forecastRequestDelayMs",
         ):
             self.assertIn(marker, source)
 
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
-        self.assertEqual(source.count("LightweightCharts.LineSeries"), 6)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 7)
         for title_key in (
             "chart.pivot.strictVcp",
             "chart.pivot.tightPlatform",
@@ -982,6 +985,7 @@ class WebAssetTest(unittest.TestCase):
             controller.setChartData({{chart: chartRows}});
             controller.setRange('3m');
             assert.ok(created[0].timeScale().visibleLogicalRange.from > 0);
+            assert.equal(created[0].timeScale().visibleLogicalRange.to, chartRows.length - 1 + 20);
             created[0].crosshairHandler({{time: lockedRow.time}});
             const visualState = {{
               priceRange: structuredClone(created[0].timeScale().visibleLogicalRange),
@@ -1270,10 +1274,24 @@ class WebAssetTest(unittest.TestCase):
             const chartModule = await import({json.dumps(module_uri)});
             const {{ createLinkedCharts }} = chartModule;
             const detail = node();
+            const requestedForecastDates = [];
             const controller = createLinkedCharts(
               {{name: 'price', clientWidth: 800, clientHeight: 400}},
               {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
-              {{locale: 'en'}},
+              {{locale: 'en', forecastRequestDelayMs: 0, onForecastDate: async (date) => {{
+                requestedForecastDates.push(date);
+                return {{forecasts: {{model: {{key: 'ridge', version: 'v2'}},
+                  date_coverage: {{computed_dates: [date]}},
+                  by_date: {{[date]: {{'20': {{direction: 'up', predicted_return: 0.1,
+                    target_date: '2026-08-19',
+                    projection_dates: ['2026-07-23', '2026-07-24', '2026-07-27',
+                      '2026-07-28', '2026-07-29', '2026-07-30', '2026-07-31',
+                      '2026-08-03', '2026-08-04', '2026-08-05', '2026-08-06',
+                      '2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12',
+                      '2026-08-13', '2026-08-14', '2026-08-17', '2026-08-18',
+                      '2026-08-19'],
+                    model_key: 'ridge', model_version: 'v2'}}}}}}}}}};
+              }}}},
             );
             controller.setChartData({{chart: []}});
             const emptyDetail = detail.textContent;
@@ -1295,6 +1313,8 @@ class WebAssetTest(unittest.TestCase):
             controller.setChartData({{chart: [row], structures: {{key_levels: {{
               strict_vcp_pivot: 103, tight_platform_pivot: 104,
             }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await Promise.resolve();
             console.log(JSON.stringify({{
               priceLines: created[0].priceLines.map(line => line.title),
               volumeLines: created[1].series.filter(series => series.type === 'line')
@@ -1302,6 +1322,7 @@ class WebAssetTest(unittest.TestCase):
               priceLineSeries: created[0].series.filter(series => series.type === 'line')
                 .map(series => [series.options.title, series.data]),
               markers: markerSets.at(-1),
+              requestedForecastDates,
               emptyDetail,
               detail: chartModule.detailItems
                 ? chartModule.detailItems(row, 'en').map(item => [item.label, item.value]) : [],
@@ -1322,13 +1343,19 @@ class WebAssetTest(unittest.TestCase):
             ["Volume MA20", "Volume ratio"],
         )
         self.assertEqual(actual["markers"][0]["text"], "Strict VCP")
+        self.assertEqual(actual["requestedForecastDates"], ["2026-07-22"])
         self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Reversal candidate 2/3", [marker["text"] for marker in actual["markers"]])
         self.assertEqual(
-            actual["priceLineSeries"][-1],
+            next(line for line in actual["priceLineSeries"] if line[0] == "Descending resistance"),
             ["Descending resistance", [{"time": "2026-07-22", "value": 100.5}]],
         )
+        projection = next(line for line in actual["priceLineSeries"] if line[0] == "Model forecast")
+        self.assertEqual(projection[1][0], {"time": "2026-07-22", "value": 101})
+        self.assertEqual(len(projection[1]), 21)
+        self.assertEqual(projection[1][1], {"time": "2026-07-23"})
+        self.assertAlmostEqual(projection[1][-1]["value"], 111.1)
         details = dict(actual["detail"])
         self.assertEqual(details["Volume ratio change"], "+0.15×")
         self.assertEqual(details["Pivot-distance change"], "+0.75 pp")
@@ -1561,7 +1588,8 @@ class WebAssetTest(unittest.TestCase):
         script = f"""
             import {{ setLocale }} from {json.dumps(i18n_uri)};
             import {{
-              createUpdateController, shouldReloadSelectedTicker, updateRetryDelay
+              createUpdateController, shouldReloadSelectedTicker,
+              shouldReloadAfterUpdate, updateRetryDelay
             }} from {json.dumps(module_uri)};
             setLocale('en');
             const button = {{disabled: false, textContent: '', dataset: {{}},
@@ -1628,6 +1656,11 @@ class WebAssetTest(unittest.TestCase):
                 ])
               ],
               retryDelays: [1, 2, 3, 4, 20].map(updateRetryDelay),
+              reloadAfterUpdate: [
+                shouldReloadAfterUpdate({{updated: 1}}, false, false),
+                shouldReloadAfterUpdate({{updated: 0}}, false, false),
+                shouldReloadAfterUpdate({{updated: 0}}, false, true),
+              ],
             }}));
         """
         result = subprocess.run(
@@ -1651,6 +1684,7 @@ class WebAssetTest(unittest.TestCase):
         )
         self.assertNotIn("/Users/", actual["retryState"]["text"])
         self.assertEqual(actual["buttonText"], "Resume price update")
+        self.assertEqual(actual["reloadAfterUpdate"], [True, False, True])
         self.assertFalse(actual["buttonDisabled"])
         self.assertIn("Rate limited after 1/3", actual["statusText"])
         self.assertNotIn("complete", actual["statusText"].lower())

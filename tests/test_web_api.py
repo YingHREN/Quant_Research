@@ -12,7 +12,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from web.app import create_app
+from web.app import _attach_forecast_target_dates, create_app
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
 from web.forecasts.dataset import build_feature_frame
@@ -670,6 +670,77 @@ class WebApiTest(unittest.TestCase):
             for key in reversal_keys:
                 self.assertIn(key, row)
             self.assertIn(row["reversal_signal_count"], (0, 1, 2, 3))
+
+    def test_historical_forecast_endpoint_computes_only_requested_date(self):
+        requested = self.repository.histories["AAA"].index[-20].date().isoformat()
+
+        response = self.client.get(f"/api/stocks/AAA/forecasts/{requested}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json), {"forecasts", "forecast_evaluation"})
+        ticker, dates, histories = self.app.config["FORECAST_SERVICE"].calls[-1]
+        self.assertEqual(ticker, "AAA")
+        self.assertEqual(dates, (requested,))
+        pd.testing.assert_frame_equal(histories["AAA"], self.repository.histories["AAA"])
+
+    def test_forecast_target_dates_include_each_projected_session(self):
+        payload = {
+            "forecasts": {
+                "by_date": {
+                    "2026-07-02": {"5": {"predicted_return": 0.02}},
+                },
+            },
+        }
+
+        _attach_forecast_target_dates(
+            payload, pd.DatetimeIndex(["2026-07-01", "2026-07-02"])
+        )
+
+        forecast = payload["forecasts"]["by_date"]["2026-07-02"]["5"]
+        self.assertEqual(
+            forecast["projection_dates"],
+            ["2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10"],
+        )
+        self.assertEqual(forecast["target_date"], "2026-07-10")
+
+    def test_historical_forecast_endpoint_rejects_non_session_date(self):
+        response = self.client.get("/api/stocks/AAA/forecasts/2026-07-19")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_historical_forecast_rejects_snapshot_from_prior_revision(self):
+        class RacingService(InjectedForecastService):
+            database_revision = 3
+
+            def build(self, ticker, chart_dates, histories, *, expected_revision=None):
+                if expected_revision != self.database_revision:
+                    raise ForecastRevisionChanged("revision changed")
+                return super().build(ticker, chart_dates, histories)
+
+        service = RacingService()
+
+        class RacingRepository(FakeRepository):
+            def load_analysis_snapshot(self, ticker):
+                snapshot = super().load_analysis_snapshot(ticker)
+                service.database_revision += 1
+                return snapshot
+
+        app = create_app(
+            {"TESTING": True, "FORECAST_SERVICE": service},
+            RacingRepository(),
+            FakeManager(),
+        )
+        requested = price_history().index[-20].date().isoformat()
+
+        response = app.test_client().get(
+            f"/api/stocks/AAA/forecasts/{requested}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json["forecasts"]["model"]["unavailable_reason"],
+            "update_in_progress",
+        )
 
     def test_injected_forecast_service_receives_existing_snapshot_and_chart_dates(self):
         service = InjectedForecastService()

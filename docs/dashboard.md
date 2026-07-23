@@ -108,6 +108,16 @@ or lock any date to inspect the then-known resistance, event states, condition
 count, and the two source high dates. The price and volume panels reserve a
 20-pixel vertical gap so both time axes remain readable.
 
+Historical model projections are loaded lazily. Hovering or locking a date
+without a forecast calls
+`GET /api/stocks/<ticker>/forecasts/<YYYY-MM-DD>` for that trading session
+only. The service reuses revision-scoped model artifacts and caches the
+single-date result; the browser also deduplicates requests for dates already
+visited. A dashed `Model forecast` line starts at the selected close and ends
+at the model-implied close on the selected 5/20/60-session target date. This
+line is distinct from the descending structural resistance line and does not
+represent a guaranteed path between its two endpoints.
+
 ## Direction forecasts
 
 The chart direction model is separate from the descriptive 20/40/60-session

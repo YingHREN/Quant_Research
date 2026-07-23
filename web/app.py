@@ -21,13 +21,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, abort, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import UnavailableReason
+from web.market_calendar import session_offset
 from web.services.analysis import AnalysisContext
 from web.services.forecasts import (
     ForecastRevisionChanged,
@@ -210,6 +211,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 getattr(forecast_service, "model_version", "v1"),
             )
 
+        _attach_forecast_target_dates(
+            forecast_payload, snapshot.histories[normalized_ticker].index
+        )
         payload = {
             "ticker": normalized_ticker,
             "observation_date": observation_date,
@@ -222,6 +226,57 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "forecasts": forecast_payload["forecasts"],
             "forecast_evaluation": forecast_payload["forecast_evaluation"],
         }
+        return _json_response(payload)
+
+    @flask_app.get("/api/stocks/<ticker>/forecasts/<forecast_date>")
+    def historical_forecast(ticker, forecast_date):
+        normalized_ticker = ticker.strip().upper()
+        revision = getattr(forecast_service, "database_revision", None)
+        snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        try:
+            timestamp = pd.Timestamp(forecast_date)
+        except (TypeError, ValueError):
+            abort(404)
+        if (
+            pd.isna(timestamp)
+            or timestamp.tz is not None
+            or timestamp.date().isoformat() != forecast_date
+            or timestamp not in snapshot.histories[normalized_ticker].index
+        ):
+            abort(404)
+
+        update_snapshot = update_manager.snapshot()
+        if getattr(update_snapshot, "state", None) == "running":
+            return _json_response(
+                unavailable_forecast_bundle(
+                    getattr(forecast_service, "model_key", "ridge_direction_v1"),
+                    getattr(forecast_service, "model_version", "v1"),
+                    UnavailableReason.UPDATE_IN_PROGRESS,
+                )
+            )
+
+        arguments = (
+            normalized_ticker,
+            (forecast_date,),
+            snapshot.histories,
+        )
+        try:
+            payload = (
+                forecast_service.build(*arguments)
+                if revision is None
+                else forecast_service.build(
+                    *arguments, expected_revision=revision
+                )
+            )
+        except ForecastRevisionChanged:
+            payload = unavailable_forecast_bundle(
+                getattr(forecast_service, "model_key", "ridge_direction_v1"),
+                getattr(forecast_service, "model_version", "v1"),
+                UnavailableReason.UPDATE_IN_PROGRESS,
+            )
+        _attach_forecast_target_dates(
+            payload, snapshot.histories[normalized_ticker].index
+        )
         return _json_response(payload)
 
     @flask_app.post("/api/update")
@@ -272,6 +327,30 @@ def _json_response(payload, status=200):
 
 def _safe_error(code, message, status):
     return _json_response(ErrorPayload(code, message).to_dict(), status=status)
+
+
+def _attach_forecast_target_dates(payload, known_sessions):
+    by_date = payload.get("forecasts", {}).get("by_date", {})
+    for raw_date, horizons in by_date.items():
+        if not isinstance(horizons, dict):
+            continue
+        for raw_horizon, forecast in horizons.items():
+            if not isinstance(forecast, dict):
+                continue
+            try:
+                horizon = int(raw_horizon)
+                projection_dates = [
+                    session_offset(
+                        pd.Timestamp(raw_date),
+                        offset,
+                        known_sessions=pd.DatetimeIndex(known_sessions),
+                    ).date().isoformat()
+                    for offset in range(1, horizon + 1)
+                ]
+            except (TypeError, ValueError):
+                continue
+            forecast["projection_dates"] = projection_dates
+            forecast["target_date"] = projection_dates[-1] if projection_dates else raw_date
 
 
 def _summary_dict(summary):

@@ -68,6 +68,14 @@ export function shouldReloadSelectedTicker(selectedTicker, observationDate, rows
   return (selected.latest_date || null) !== (observationDate || null);
 }
 
+export function shouldReloadAfterUpdate(snapshot, selectionChanged, observationChanged) {
+  return Boolean(
+    selectionChanged
+    || observationChanged
+    || (snapshot && Number.isFinite(snapshot.updated) && snapshot.updated > 0)
+  );
+}
+
 function setTone(element, tone) {
   if (!element) return;
   if (tone) element.dataset.tone = tone;
