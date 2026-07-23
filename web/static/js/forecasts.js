@@ -139,6 +139,7 @@ export function renderForecastDetail(container, options = {}) {
   const locale = options.locale || getLocale();
   const forecast = options.forecast || null;
   const available = forecast && forecast.direction && forecast.direction !== "unavailable";
+  const requestState = options.requestState || null;
   const section = document.createElement("section");
   section.className = "forecast-detail";
   section.setAttribute?.("aria-label", t("forecast.detailAria", {}, locale));
@@ -147,11 +148,15 @@ export function renderForecastDetail(container, options = {}) {
   heading.className = "forecast-signal-heading";
   const direction = document.createElement("strong");
   direction.className = `forecast-direction forecast-direction-${available ? forecast.direction : "unavailable"}`;
-  direction.textContent = available
-    ? t("forecast.value.direction", {
+  direction.textContent = requestState === "loading"
+    ? t("forecast.request.loading", { date: options.date }, locale)
+    : requestState === "error"
+      ? t("forecast.request.error", { date: options.date }, locale)
+      : available
+        ? t("forecast.value.direction", {
       direction: localizedCode("forecast.direction", forecast.direction, locale),
-    }, locale)
-    : t("forecast.value.unavailable", {}, locale);
+        }, locale)
+        : t("forecast.value.unavailable", {}, locale);
   const horizon = document.createElement("span");
   horizon.textContent = t("forecast.value.horizon", { sessions: options.horizon }, locale);
   heading.append(direction, horizon);
@@ -172,7 +177,7 @@ export function renderForecastDetail(container, options = {}) {
     appendItem(values, t("forecast.field.trainingSamples", {}, locale), String(forecast.training_sample_count ?? "—"));
     appendItem(values, t("forecast.field.trainingCutoff", {}, locale), forecast.training_cutoff || "—");
     appendItem(values, t("forecast.field.model", {}, locale), modelText(forecast, options.model));
-  } else {
+  } else if (requestState === null) {
     const computedDates = options.dateCoverage?.computed_dates;
     const dateWasComputed = Array.isArray(computedDates)
       && computedDates.includes(String(options.date));

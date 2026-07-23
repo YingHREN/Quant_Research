@@ -121,6 +121,11 @@ projection remains visible even when the crosshair leaves the candle. This
 line is distinct from the descending structural resistance line and does not
 represent a guaranteed path between its two endpoints.
 
+While a missing historical forecast is being computed, the selected-date
+panel shows an explicit calculating state. A failed request becomes a visible
+date-specific error while OHLCV and causal trend evidence remain available;
+the previous date's forecast is never left on the chart.
+
 The detail panel also evaluates point-in-time evidence for two independent
 questions: which conditions would strengthen an advance, and which conditions
 would accelerate a decline. Each condition is `met`, `near`, `not met`, or

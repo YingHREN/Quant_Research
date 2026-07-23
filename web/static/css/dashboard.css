@@ -272,7 +272,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .trend-evidence-column { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(9, 16, 22, 0.45); }
 .trend-evidence-up { border-top-color: var(--accent); }
 .trend-evidence-down { border-top-color: var(--danger); }
-.trend-evidence-heading { display: block; margin-bottom: 8px; color: var(--text); font-size: 0.76rem; }
+.trend-evidence-heading { display: block; margin: 0 0 8px; color: var(--text); font-size: 0.76rem; }
 .trend-evidence-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .trend-evidence-item { min-width: 0; padding-top: 7px; border-top: 1px solid var(--line); }
 .trend-evidence-item > div { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; justify-content: space-between; }

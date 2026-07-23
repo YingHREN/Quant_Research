@@ -1124,6 +1124,11 @@ class WebAssetTest(unittest.TestCase):
                       confidence_status: 'uncalibrated',
                       confidence_reason: 'calibration_requires_both_classes', training_sample_count: 101,
                       training_cutoff: '2026-04-24', model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                  }},
+                  '2026-07-18': {{
+                    '20': {{direction: 'up', predicted_return: 0.2, target_date: '2026-08-17',
+                      asof_date: '2026-07-17', model_key: 'ridge_direction_v1',
+                      model_version: 'ridge-v1'}},
                   }}
                 }}}},
               forecast_evaluation: {{
@@ -1142,10 +1147,17 @@ class WebAssetTest(unittest.TestCase):
               payload.forecasts.by_date['2026-07-17']['20']);
             assert.equal(forecasts.forecastFor(index, {{year: 2026, month: 7, day: 17}}, '60'),
               payload.forecasts.by_date['2026-07-17']['60']);
-            assert.equal(forecasts.forecastFor('2026-07-18', 20), null);
+            assert.equal(
+              forecasts.forecastFor('2026-07-18', 20),
+              payload.forecasts.by_date['2026-07-18']['20'],
+            );
             const directIndex = forecasts.indexForecasts(payload.forecasts);
             assert.equal(forecasts.forecastFor(directIndex, '2026-07-17', 5),
               payload.forecasts.by_date['2026-07-17']['5']);
+            payload.factors = [
+              {{key: 'mom_6_1', observation_date: '2026-07-17',
+                raw_value: 0.14, missing: false}},
+            ];
 
             const {{createLinkedCharts}} = await import({json.dumps(chart_uri)});
             const detail = node();
@@ -1183,7 +1195,8 @@ class WebAssetTest(unittest.TestCase):
             const zhUp = textTree(detail);
             assert.match(zhUp, /上涨强化条件/);
             assert.match(zhUp, /下跌加速条件/);
-            assert.match(zhUp, /正向动量 不可用/);
+            assert.match(zhUp, /正向动量 已满足/);
+            assert.match(zhUp, /当前值 0\.14/);
             assert.match(zhUp, /上涨概率 64\.0%/);
             assert.match(zhUp, /预测收益率 \+3\.40%/);
             assert.match(zhUp, /训练样本 105/);
@@ -1246,6 +1259,17 @@ class WebAssetTest(unittest.TestCase):
               evaluation: payload.forecast_evaluation['20']}});
             assert.match(textTree(failureDetail), /Unavailable reason Insufficient training samples/);
 
+            const loadingDetail = node();
+            forecasts.renderForecastDetail(loadingDetail, {{locale: 'en', horizon: 20,
+              date: '2026-07-16', forecast: null, requestState: 'loading'}});
+            assert.match(textTree(loadingDetail), /Calculating forecast for 2026-07-16/);
+            assert.doesNotMatch(textTree(loadingDetail), /Historical point not precomputed/);
+
+            const requestFailureDetail = node();
+            forecasts.renderForecastDetail(requestFailureDetail, {{locale: 'zh-CN', horizon: 20,
+              date: '2026-07-16', forecast: null, requestState: 'error'}});
+            assert.match(textTree(requestFailureDetail), /2026-07-16 的历史预测计算失败/);
+
             const mixedZh = node();
             forecasts.renderForecastDetail(mixedZh, {{locale: 'zh-CN', horizon: 20,
               date: '2026-07-17', forecast: null,
@@ -1282,6 +1306,85 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn(".quiet-button, .range-controls button, .forecast-controls button", css)
         self.assertNotIn("var(--up)", css)
         self.assertNotIn("var(--down)", css)
+
+    def test_historical_forecast_request_states_are_visible(self):
+        chart_uri = (STATIC / "js/charts.js").as_uri()
+        script = rf"""
+            import assert from 'node:assert/strict';
+            function node() {{
+              return {{textContent: '', className: '', children: [], dataset: {{}},
+                attributes: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }}}};
+            }}
+            function textTree(value) {{
+              return [value.textContent, ...value.children.map(textTree)]
+                .join(' ').replace(/\s+/g, ' ').trim();
+            }}
+            globalThis.document = {{createElement: () => node()}};
+            function chart() {{
+              const scale = {{range: {{from: 0, to: 20}},
+                subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}},
+                getVisibleLogicalRange() {{ return this.range; }},
+                setVisibleLogicalRange(next) {{ this.range = next; }},
+                fitContent() {{}}}};
+              return {{series: [], timeScale: () => scale,
+                addSeries(type, options) {{
+                  const series = {{type, options, setData() {{}},
+                    createPriceLine() {{ return {{}}; }}, removePriceLine() {{}},
+                    applyOptions() {{}}}};
+                  this.series.push(series);
+                  return series;
+                }},
+                subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
+                subscribeClick() {{}}, unsubscribeClick() {{}},
+                setCrosshairPosition() {{}}, clearCrosshairPosition() {{}},
+                applyOptions() {{}}, remove() {{}},
+              }};
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Solid: 0, Dashed: 2}},
+              createChart: () => chart(),
+              createSeriesMarkers: () => ({{setMarkers() {{}}}}),
+            }};
+            const {{createLinkedCharts}} = await import({json.dumps(chart_uri)});
+            let rejectRequest;
+            let requestCount = 0;
+            const detail = node();
+            const controller = createLinkedCharts(
+              {{clientWidth: 800, clientHeight: 400}},
+              {{clientWidth: 800, clientHeight: 180}},
+              detail,
+              {{locale: 'en', forecastRequestDelayMs: 0, onForecastDate: () => {{
+                requestCount += 1;
+                return new Promise((_resolve, reject) => {{ rejectRequest = reject; }});
+              }}}},
+            );
+            controller.setChartData({{chart: [{{
+              time: '2026-07-16', open: 99, high: 102, low: 98, close: 101,
+              volume: 1000, daily_return: 0.01,
+            }}]}});
+            assert.match(textTree(detail), /Calculating forecast for 2026-07-16/);
+            assert.doesNotMatch(textTree(detail), /Historical point not precomputed/);
+            await new Promise(resolve => setTimeout(resolve, 0));
+            assert.equal(requestCount, 1);
+            rejectRequest(new Error('offline'));
+            await Promise.resolve();
+            await Promise.resolve();
+            assert.match(textTree(detail), /Forecast calculation failed for 2026-07-16/);
+            assert.equal(requestCount, 1);
+            controller.destroy();
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_chart_adapter_plots_shape_levels_annotations_and_volume_diagnostics(self):
         module_uri = (STATIC / "js/charts.js").as_uri()
@@ -1443,7 +1546,7 @@ class WebAssetTest(unittest.TestCase):
         module_uri = (STATIC / "js/trend_evidence.js").as_uri()
         script = f"""
             import assert from 'node:assert/strict';
-            import {{ trendEvidence }} from {json.dumps(module_uri)};
+            import {{ factorValuesByDate, trendEvidence }} from {json.dumps(module_uri)};
 
             const row = {{
               time: '2026-07-10', close: 102, daily_return: 0.018,
@@ -1476,9 +1579,13 @@ class WebAssetTest(unittest.TestCase):
               failed.downward.find(item => item.key === 'failed_breakout').state,
               'met',
             );
+            assert.equal(
+              failed.downward.find(item => item.key === 'failed_breakout').threshold,
+              103,
+            );
 
             const futureOnlyMomentum = new Map([
-              ['2026-07-03', {{momentum_6_1m: 0.25}}],
+              ['2026-07-03', {{mom_6_1: 0.25}}],
             ]);
             const causal = trendEvidence(rows[1], {{
               rows, index: 1, factorsByDate: futureOnlyMomentum,
@@ -1486,6 +1593,26 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(
               causal.upward.find(item => item.key === 'momentum').state,
               'unavailable',
+            );
+
+            const factorsByDate = factorValuesByDate({{factors: [
+              {{key: 'mom_6_1', observation_date: '2026-07-02',
+                raw_value: 0.12, missing: false}},
+              {{key: 'mom_3_1', observation_date: '2026-07-02',
+                raw_value: 0.08, missing: false}},
+              {{key: 'mom_12_1', observation_date: '2026-07-03',
+                raw_value: -0.2, missing: false}},
+            ]}});
+            const withMomentum = trendEvidence(rows[1], {{
+              rows, index: 1, factorsByDate,
+            }});
+            assert.equal(
+              withMomentum.upward.find(item => item.key === 'momentum').state,
+              'met',
+            );
+            assert.equal(
+              withMomentum.upward.find(item => item.key === 'momentum').evidence,
+              0.12,
             );
         """
         result = subprocess.run(
@@ -1533,6 +1660,8 @@ class WebAssetTest(unittest.TestCase):
             assert.match(text, /当前值 102/);
             assert.match(text, /关键阈值 101/);
             assert.equal(container.children[0].attributes['aria-label'], '趋势强化证据');
+            assert.equal(container.children[0].children[0].children[0].tagName, 'h3');
+            assert.equal(container.children[0].children[1].children[0].tagName, 'h3');
 
             const english = node();
             renderTrendEvidence(english, {{

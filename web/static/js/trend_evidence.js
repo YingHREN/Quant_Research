@@ -71,24 +71,49 @@ function volatilityState(row) {
 }
 
 function failedBreakoutState(row, rows, index) {
-  if (!finite(row?.close) || !Array.isArray(rows) || index < 0) return UNAVAILABLE;
+  if (!finite(row?.close) || !Array.isArray(rows) || index < 0) {
+    return { state: UNAVAILABLE, threshold: null };
+  }
   const priorRows = rows.slice(Math.max(0, index - 10), index + 1);
   const breakout = [...priorRows].reverse().find(
     (candidate) => candidate?.prior_high_breakout === true
       && finite(candidate.prior_high_resistance),
   );
-  if (!breakout) return NOT_MET;
-  return row.close < breakout.prior_high_resistance ? MET : NOT_MET;
+  if (!breakout) return { state: NOT_MET, threshold: null };
+  return {
+    state: row.close < breakout.prior_high_resistance ? MET : NOT_MET,
+    threshold: breakout.prior_high_resistance,
+  };
 }
 
 function dateMomentum(factorsByDate, date) {
   if (!(factorsByDate instanceof Map)) return null;
   const value = factorsByDate.get(date);
   if (!value || typeof value !== "object") return null;
-  for (const key of ["momentum_6_1m", "momentum_3_1m", "momentum_12_1m"]) {
+  for (const key of ["mom_6_1", "mom_3_1", "mom_12_1"]) {
     if (finite(value[key])) return value[key];
   }
   return null;
+}
+
+export function factorValuesByDate(payload) {
+  const indexed = new Map();
+  const factors = Array.isArray(payload?.factors) ? payload.factors : [];
+  factors.forEach((factor) => {
+    const date = factor?.observation_date;
+    if (
+      typeof date !== "string"
+      || typeof factor?.key !== "string"
+      || factor?.missing === true
+      || !finite(factor?.raw_value)
+    ) {
+      return;
+    }
+    const values = indexed.get(date) || {};
+    values[factor.key] = factor.raw_value;
+    indexed.set(date, values);
+  });
+  return indexed;
 }
 
 function momentumState(value, direction) {
@@ -108,6 +133,7 @@ export function trendEvidence(row, options = {}) {
   const index = Number.isInteger(options.index) ? options.index : -1;
   const momentum = dateMomentum(options.factorsByDate, row?.time);
   const volatility = volatilityState(row);
+  const failedBreakout = failedBreakoutState(row, rows, index);
 
   return {
     upward: [
@@ -182,9 +208,9 @@ export function trendEvidence(row, options = {}) {
       ),
       item(
         "failed_breakout",
-        failedBreakoutState(row, rows, index),
+        failedBreakout.state,
         row?.close,
-        row?.prior_high_resistance,
+        failedBreakout.threshold,
       ),
       item("negative_momentum", momentumState(momentum, "down"), momentum, 0),
     ],
@@ -200,7 +226,7 @@ function valueText(value, locale) {
 function renderEvidenceColumn(section, direction, items, locale) {
   const column = document.createElement("div");
   column.className = `trend-evidence-column trend-evidence-${direction}`;
-  const heading = document.createElement("strong");
+  const heading = document.createElement("h3");
   heading.className = "trend-evidence-heading";
   heading.textContent = t(`trendEvidence.${direction}Heading`, {}, locale);
   const list = document.createElement("ul");

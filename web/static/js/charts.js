@@ -8,7 +8,7 @@ import {
   indexForecasts,
   renderForecastDetail,
 } from "./forecasts.js";
-import { trendEvidence } from "./trend_evidence.js";
+import { factorValuesByDate, trendEvidence } from "./trend_evidence.js";
 
 const RANGE_BARS = Object.freeze({
   "3m": 63,
@@ -291,10 +291,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let destroyed = false;
   let lastPayload = null;
   let displayedRow = null;
+  let factorsByDate = new Map();
   let forecastIndex = indexForecasts(null);
   let fetchedForecastIndexes = new Map();
   let requestedForecastDates = new Set();
+  let forecastRequestStates = new Map();
   let forecastRequestTimer = null;
+  let forecastRequestTimerDate = null;
   let forecastHorizon = DEFAULT_FORECAST_HORIZON;
   let shapeMarkerData = [];
   let forecastMarkerData = null;
@@ -362,11 +365,35 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       const selectedForecastIndex = date === null
         ? forecastIndex
         : fetchedForecastIndexes.get(date) || forecastIndex;
-      const forecast = date === null ? null : forecastFor(selectedForecastIndex, date, forecastHorizon);
+      const indexedForecast = date === null
+        ? null
+        : forecastFor(selectedForecastIndex, date, forecastHorizon);
+      const forecast = (
+        indexedForecast
+        && typeof indexedForecast.asof_date === "string"
+        && indexedForecast.asof_date !== date
+      ) ? null : indexedForecast;
       const selectedRowIndex = date === null
         ? -1
         : rows.findIndex((candidate) => timeKey(candidate.time) === date);
-      const evidence = trendEvidence(row, { rows, index: selectedRowIndex });
+      const evidence = trendEvidence(row, {
+        rows,
+        index: selectedRowIndex,
+        factorsByDate,
+      });
+      if (forecast && date !== null) forecastRequestStates.delete(date);
+      const canRequestForecast = (
+        date !== null
+        && (!forecast || typeof forecast.target_date !== "string")
+        && typeof options.onForecastDate === "function"
+      );
+      if (
+        canRequestForecast
+        && !requestedForecastDates.has(date)
+        && forecastRequestStates.get(date) !== "error"
+      ) {
+        forecastRequestStates.set(date, "loading");
+      }
       updateForecastProjection(row, forecast);
       forecastMarkerData = forecastMarker(forecast, date, locale);
       refreshMarkers();
@@ -378,32 +405,49 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         dateCoverage: selectedForecastIndex.dateCoverage,
         date,
         trendEvidence: evidence,
+        requestState: date === null ? null : forecastRequestStates.get(date) || null,
       });
       if (forecastRequestTimer !== null) {
         clearTimeout(forecastRequestTimer);
+        if (
+          forecastRequestTimerDate !== null
+          && forecastRequestTimerDate !== date
+          && forecastRequestStates.get(forecastRequestTimerDate) === "loading"
+        ) {
+          forecastRequestStates.delete(forecastRequestTimerDate);
+        }
         forecastRequestTimer = null;
+        forecastRequestTimerDate = null;
       }
       if (
-        date !== null
-        && (!forecast || typeof forecast.target_date !== "string")
-        && typeof options.onForecastDate === "function"
+        canRequestForecast
         && !requestedForecastDates.has(date)
+        && forecastRequestStates.get(date) === "loading"
       ) {
+        forecastRequestTimerDate = date;
         forecastRequestTimer = setTimeout(() => {
           forecastRequestTimer = null;
+          forecastRequestTimerDate = null;
           requestedForecastDates.add(date);
           Promise.resolve(options.onForecastDate(date))
             .then((payload) => {
               if (!payload || destroyed) return;
               const computed = payload?.forecasts?.date_coverage?.computed_dates;
               if (!Array.isArray(computed) || !computed.includes(date)) {
-                requestedForecastDates.delete(date);
+                forecastRequestStates.set(date, "error");
+                if (timeKey(displayedRow?.time) === date) {
+                  paintDetail(displayedRow, lockedTime !== null);
+                }
                 return;
               }
+              forecastRequestStates.delete(date);
               setForecasts(payload);
             })
             .catch(() => {
-              requestedForecastDates.delete(date);
+              forecastRequestStates.set(date, "error");
+              if (timeKey(displayedRow?.time) === date) {
+                paintDetail(displayedRow, lockedTime !== null);
+              }
             });
         }, forecastRequestDelayMs);
       }
@@ -597,10 +641,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
     lockedTime = null;
     forecastIndex = indexForecasts(payload);
+    factorsByDate = factorValuesByDate(payload);
     fetchedForecastIndexes = new Map();
     requestedForecastDates = new Set();
+    forecastRequestStates = new Map();
     if (forecastRequestTimer !== null) clearTimeout(forecastRequestTimer);
     forecastRequestTimer = null;
+    forecastRequestTimerDate = null;
 
     candleSeries.setData(rows.map((row) => ({
       time: row.time,
@@ -632,7 +679,11 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     const nextIndex = indexForecasts(payload);
     const computedDates = nextIndex.dateCoverage?.computed_dates;
     if (Array.isArray(computedDates)) {
-      computedDates.forEach((date) => fetchedForecastIndexes.set(String(date), nextIndex));
+      computedDates.forEach((date) => {
+        const key = String(date);
+        fetchedForecastIndexes.set(key, nextIndex);
+        forecastRequestStates.delete(key);
+      });
     }
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
   }
@@ -684,6 +735,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     if (destroyed) return;
     destroyed = true;
     if (forecastRequestTimer !== null) clearTimeout(forecastRequestTimer);
+    forecastRequestTimerDate = null;
     priceScale.unsubscribeVisibleLogicalRangeChange(priceRangeHandler);
     volumeScale.unsubscribeVisibleLogicalRangeChange(volumeRangeHandler);
     priceChart.unsubscribeCrosshairMove(priceCrosshairHandler);
