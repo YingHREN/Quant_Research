@@ -1420,6 +1420,63 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('"forecast.marker": "预测起点 · {direction}"', i18n)
         self.assertIn('"forecast.marker": "Forecast start · {direction}"', i18n)
 
+    def test_trend_evidence_is_causal_and_stateful(self):
+        module_uri = (STATIC / "js/trend_evidence.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{ trendEvidence }} from {json.dumps(module_uri)};
+
+            const row = {{
+              time: '2026-07-10', close: 102, daily_return: 0.018,
+              true_range_pct: 3.2, volume_ratio: 1.35,
+              ema20: 100, sma50: 99, atr20: 2,
+              prior_high_resistance: 101, prior_high_breakout: true,
+              descending_trendline: 103, trendline_breakout: false,
+              higher_low_confirmed: true, higher_low_latest_price: 96,
+            }};
+            const evidence = trendEvidence(row, {{rows: [row], index: 0}});
+            const upward = Object.fromEntries(evidence.upward.map(item => [item.key, item]));
+            const downward = Object.fromEntries(evidence.downward.map(item => [item.key, item]));
+            assert.equal(upward.prior_high_breakout.state, 'met');
+            assert.equal(upward.trendline_breakout.state, 'near');
+            assert.equal(upward.volume_confirmation.state, 'met');
+            assert.equal(downward.support_loss.state, 'not_met');
+            assert.equal(upward.momentum.state, 'unavailable');
+            assert.equal(downward.negative_momentum.state, 'unavailable');
+
+            const rows = [
+              {{time: '2026-07-01', close: 105, prior_high_breakout: true,
+                prior_high_resistance: 103}},
+              {{time: '2026-07-02', close: 101, ema20: 102, sma50: 100, atr20: 2,
+                daily_return: -0.02, volume_ratio: 1.3}},
+              {{time: '2026-07-03', close: 120, prior_high_breakout: true,
+                prior_high_resistance: 119}},
+            ];
+            const failed = trendEvidence(rows[1], {{rows, index: 1}});
+            assert.equal(
+              failed.downward.find(item => item.key === 'failed_breakout').state,
+              'met',
+            );
+
+            const futureOnlyMomentum = new Map([
+              ['2026-07-03', {{momentum_6_1m: 0.25}}],
+            ]);
+            const causal = trendEvidence(rows[1], {{
+              rows, index: 1, factorsByDate: futureOnlyMomentum,
+            }});
+            assert.equal(
+              causal.upward.find(item => item.key === 'momentum').state,
+              'unavailable',
+            );
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_chart_panels_contain_canvas_intrinsic_width_on_mobile(self):
         css = (STATIC / "css/dashboard.css").read_text()
 
