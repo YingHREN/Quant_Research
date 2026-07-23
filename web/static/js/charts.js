@@ -16,6 +16,8 @@ const RANGE_BARS = Object.freeze({
   "2y": 504,
 });
 
+const AXIS_GUTTER_PX = 12;
+
 const COLORS = Object.freeze({
   background: "#111b24",
   text: "#91a3b0",
@@ -37,6 +39,10 @@ const COLORS = Object.freeze({
 
 function finite(value) {
   return Number.isFinite(value);
+}
+
+function chartHeight(element) {
+  return Math.max(1, element.clientHeight - AXIS_GUTTER_PX);
 }
 
 function seriesPoints(rows, field) {
@@ -163,7 +169,7 @@ function renderDetail(detailEl, row, locked, locale, forecastOptions = {}) {
 function chartOptions(element) {
   return {
     width: element.clientWidth,
-    height: element.clientHeight,
+    height: chartHeight(element),
     layout: {
       background: { type: "solid", color: COLORS.background },
       textColor: COLORS.text,
@@ -241,8 +247,9 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   const forecastProjectionSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.forecastProjection", {}, locale),
     color: COLORS.forecast,
-    lineWidth: 2,
-    lineStyle: LightweightCharts.LineStyle.Dashed,
+    lineWidth: 3,
+    lineStyle: LightweightCharts.LineStyle.Solid,
+    crosshairMarkerVisible: false,
     priceLineVisible: false,
     lastValueVisible: true,
   });
@@ -469,8 +476,8 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function resizeCharts() {
     if (destroyed) return;
-    priceChart.applyOptions({ width: priceEl.clientWidth, height: priceEl.clientHeight });
-    volumeChart.applyOptions({ width: volumeEl.clientWidth, height: volumeEl.clientHeight });
+    priceChart.applyOptions({ width: priceEl.clientWidth, height: chartHeight(priceEl) });
+    volumeChart.applyOptions({ width: volumeEl.clientWidth, height: chartHeight(volumeEl) });
   }
 
   let resizeObserver = null;

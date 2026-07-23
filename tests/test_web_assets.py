@@ -1167,7 +1167,7 @@ class WebAssetTest(unittest.TestCase):
             );
             const forecastMarkers = markerControllers[0];
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'belowBar',
-              color: '#35c6a5', shape: 'arrowUp', text: '预测方向：上涨'}});
+              color: '#35c6a5', shape: 'arrowUp', text: '预测起点 · 上涨'}});
             assert.equal(forecastMarkers.markers[1].time, '2026-07-18');
             const zhUp = textTree(detail);
             assert.match(zhUp, /上涨概率 64\.0%/);
@@ -1187,14 +1187,14 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(controller.setForecastHorizon(5), 5);
             assert.equal(controller.getForecastHorizon(), 5);
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
-              color: '#91a3b0', shape: 'circle', text: '预测方向：中性'}});
+              color: '#91a3b0', shape: 'circle', text: '预测起点 · 中性'}});
             const zhNeutral = textTree(detail);
             assert.doesNotMatch(zhNeutral, /上涨概率/);
             assert.match(zhNeutral, /置信度说明 校准样本不足/);
 
             assert.equal(controller.setForecastHorizon(60), 60);
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
-              color: '#ff7a7a', shape: 'arrowDown', text: '预测方向：下跌'}});
+              color: '#ff7a7a', shape: 'arrowDown', text: '预测起点 · 下跌'}});
             assert.equal(markerControllers.length, 1);
             assert.ok(forecastMarkers.calls > callsBeforeSwitch);
 
@@ -1212,7 +1212,7 @@ class WebAssetTest(unittest.TestCase):
             controller.setLocale('en');
             assert.equal(controller.getForecastHorizon(), 60);
             assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
-            assert.equal(forecastMarkers.markers[0].text, 'Forecast direction: Down');
+            assert.equal(forecastMarkers.markers[0].text, 'Forecast start · Down');
             assert.match(textTree(detail), /Locked/);
             assert.match(textTree(detail), /Confidence note Both outcome classes are required/);
             assert.match(textTree(detail), /Evidence status Not precomputed/);
@@ -1297,7 +1297,7 @@ class WebAssetTest(unittest.TestCase):
             }}
             globalThis.LightweightCharts = {{
               CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
-              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Solid: 0, Dashed: 2}},
               createChart(element) {{ return chart(element.name); }},
               createSeriesMarkers(_series, markers) {{
                 const controller = {{markers, setMarkers(next) {{ this.markers = next; markerSets.push(next); }}}};
@@ -1354,6 +1354,9 @@ class WebAssetTest(unittest.TestCase):
                 .map(series => [series.options.title, series.data]),
               priceLineSeries: created[0].series.filter(series => series.type === 'line')
                 .map(series => [series.options.title, series.data]),
+              forecastOptions: created[0].series.find(
+                series => series.options.title === 'Model forecast',
+              ).options,
               markers: markerSets.at(-1),
               requestedForecastDates,
               emptyDetail,
@@ -1385,6 +1388,8 @@ class WebAssetTest(unittest.TestCase):
             ["Descending resistance", [{"time": "2026-07-22", "value": 100.5}]],
         )
         projection = next(line for line in actual["priceLineSeries"] if line[0] == "Model forecast")
+        self.assertEqual(actual["forecastOptions"]["lineWidth"], 3)
+        self.assertEqual(actual["forecastOptions"]["lineStyle"], 0)
         self.assertEqual(projection[1][0], {"time": "2026-07-22", "value": 101})
         self.assertEqual(len(projection[1]), 21)
         self.assertAlmostEqual(projection[1][1]["value"], 101.505)
@@ -1401,6 +1406,19 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["Latest high confirmed"], "2026-07-18")
         self.assertEqual(details["Higher-low confirmation"], "2026-07-14")
         self.assertEqual(details["Higher-low pivots"], "2026-06-10 90 → 2026-07-10 94")
+
+    def test_dashboard_css_reserves_chart_axis_gutter(self):
+        chart_source = (STATIC / "js/charts.js").read_text()
+        css = (STATIC / "css/dashboard.css").read_text()
+        i18n = (STATIC / "js/i18n.js").read_text()
+
+        self.assertIn("const AXIS_GUTTER_PX = 12", chart_source)
+        self.assertIn("height: chartHeight(element)", chart_source)
+        self.assertIn("height: chartHeight(priceEl)", chart_source)
+        self.assertIn("height: chartHeight(volumeEl)", chart_source)
+        self.assertIn("--chart-axis-gutter: 12px", css)
+        self.assertIn('"forecast.marker": "预测起点 · {direction}"', i18n)
+        self.assertIn('"forecast.marker": "Forecast start · {direction}"', i18n)
 
     def test_chart_panels_contain_canvas_intrinsic_width_on_mobile(self):
         css = (STATIC / "css/dashboard.css").read_text()
