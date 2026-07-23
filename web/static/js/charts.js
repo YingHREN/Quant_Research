@@ -207,6 +207,7 @@ function chartOptions(element) {
     timeScale: {
       borderColor: COLORS.grid,
       timeVisible: false,
+      shiftVisibleRangeOnNewBar: false,
       tickMarkFormatter: formatChartTickDate,
     },
     localization: { timeFormatter: formatFullDate },

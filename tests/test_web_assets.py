@@ -1056,12 +1056,16 @@ class WebAssetTest(unittest.TestCase):
                 .replace(/\\s+/g, ' ').trim();
             }}
             globalThis.document = {{createElement: () => node()}};
-            function chart(name) {{
-              const scale = {{range: null, subscribeVisibleLogicalRangeChange() {{}},
-                unsubscribeVisibleLogicalRangeChange() {{}},
+            function chart(name, chartOptions) {{
+              const scale = {{range: null, rangeHandler: null,
+                subscribeVisibleLogicalRangeChange(handler) {{ this.rangeHandler = handler; }},
+                unsubscribeVisibleLogicalRangeChange() {{ this.rangeHandler = null; }},
                 getVisibleLogicalRange() {{ return this.range; }},
-                setVisibleLogicalRange(next) {{ this.range = next; }}, fitContent() {{}}}};
-              const value = {{name, series: [], crosshairHandler: null, clickHandler: null,
+                setVisibleLogicalRange(next) {{
+                  this.range = next;
+                  this.rangeHandler?.(next);
+                }}, fitContent() {{}}}};
+              const value = {{name, chartOptions, series: [], crosshairHandler: null, clickHandler: null,
                 crosshairPositions: [], programmaticEvents: 0, forecastDataEvents: 0,
                 forecastAutoScrolls: 0,
                 sharedTimes() {{
@@ -1073,9 +1077,12 @@ class WebAssetTest(unittest.TestCase):
                 addSeries(type, options) {{
                   const series = {{type, options, data: [], setData(data) {{
                     this.data = data;
-                    if (options.lineWidth === 3 && data.length && scale.range) {{
+                    if (options.lineWidth === 3 && data.length && scale.range
+                        && chartOptions.timeScale.shiftVisibleRangeOnNewBar !== false) {{
                       value.forecastAutoScrolls += 1;
-                      scale.range = {{from: 999, to: 1000}};
+                      queueMicrotask(() => {{
+                        scale.setVisibleLogicalRange({{from: 999, to: 1000}});
+                      }});
                     }}
                     if (options.title === '模型预测线' && value.crosshairHandler
                         && value.forecastDataEvents < 8) {{
@@ -1103,7 +1110,7 @@ class WebAssetTest(unittest.TestCase):
             globalThis.LightweightCharts = {{
               CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
               CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
-              createChart(element) {{ return chart(element.name); }},
+              createChart(element, options) {{ return chart(element.name, options); }},
               createSeriesMarkers(_series, markers) {{
                 const controller = {{markers, calls: 1, setMarkers(next) {{
                   this.markers = next; this.calls += 1;
@@ -1117,6 +1124,11 @@ class WebAssetTest(unittest.TestCase):
                 horizons: [5, 20, 60], date_coverage: {{requested_date_count: 70,
                   computed_date_count: 1, policy: 'latest_only_synchronous',
                   computed_dates: ['2026-07-17'], omitted_reason: 'not_precomputed'}}, by_date: {{
+                  '2026-07-16': {{
+                    '20': {{direction: 'up', predicted_return: 0.025, target_date: '2026-08-13',
+                      projection_dates: ['2026-07-17', '2026-08-13'],
+                      model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
+                  }},
                   '2026-07-17': {{
                     '5': {{direction: 'neutral', predicted_return: 0.001, up_probability: null,
                       confidence_status: 'uncalibrated',
@@ -1200,10 +1212,17 @@ class WebAssetTest(unittest.TestCase):
             const sharedTimesBeforeHover = created[0].sharedTimes();
             const selectedIndexBeforeHover = sharedTimesBeforeHover.indexOf('2026-07-17');
             const rangeBeforeForecastHover = structuredClone(created[0].timeScale().range);
+            created[0].crosshairHandler({{time: '2026-07-16'}});
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            assert.deepEqual(created[0].timeScale().range, rangeBeforeForecastHover);
+            assert.deepEqual(created[1].timeScale().range, rangeBeforeForecastHover);
             created[0].crosshairHandler({{time: '2026-07-17'}});
             await new Promise((resolve) => setTimeout(resolve, 0));
-            assert.ok(created[0].forecastAutoScrolls > 0);
             assert.deepEqual(created[0].timeScale().range, rangeBeforeForecastHover);
+            assert.deepEqual(created[1].timeScale().range, rangeBeforeForecastHover);
+            assert.equal(created[0].forecastAutoScrolls, 0);
+            assert.equal(created[0].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
+            assert.equal(created[1].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
             const sharedTimesAfterHover = created[0].sharedTimes();
             assert.deepEqual(sharedTimesAfterHover, sharedTimesBeforeHover);
             assert.equal(
@@ -1221,7 +1240,7 @@ class WebAssetTest(unittest.TestCase):
             assert.ok(timelineAnchor.data.every((point) => !('value' in point)));
             assert.equal(
               created[0].crosshairPositions.length + created[1].crosshairPositions.length,
-              1,
+              2,
             );
             const forecastMarkers = markerControllers[0];
             assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'belowBar',
