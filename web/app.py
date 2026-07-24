@@ -29,6 +29,7 @@ from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import UnavailableReason
 from web.market_calendar import session_offset
+from web.market_groups import REFERENCE_TICKERS
 from web.services.analysis import AnalysisContext
 from web.services.forecasts import (
     ForecastRevisionChanged,
@@ -86,6 +87,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             repository,
             PriceProvider(),
             on_success=getattr(forecast_service, "invalidate", None),
+            reference_tickers=REFERENCE_TICKERS,
         )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:

@@ -123,6 +123,27 @@ def wait_until_terminal(manager, timeout=2.0):
 
 
 class UpdateJobManagerTest(unittest.TestCase):
+    def test_reference_tickers_are_updated_when_absent_from_local_summaries(self):
+        repository = FakeRepository(("AMD",))
+        provider = FakeProvider(
+            {
+                "AMD": history(10),
+                "QQQ": history(20),
+                "SOXX": history(30),
+            }
+        )
+        manager = UpdateJobManager(
+            repository,
+            provider,
+            reference_tickers=("QQQ", "SOXX"),
+        )
+
+        snapshot = manager.run_synchronously_for_test()
+
+        self.assertEqual(snapshot.state, "completed")
+        self.assertEqual(provider.calls, ["AMD", "QQQ", "SOXX"])
+        self.assertEqual(snapshot.total, 3)
+
     def test_completed_update_invokes_success_callback_once(self):
         callbacks = []
         manager = UpdateJobManager(

@@ -76,12 +76,29 @@ class UpdateJobManager:
         "failed": frozenset({"running"}),
     }
 
-    def __init__(self, repository, provider, on_success=None):
+    def __init__(
+        self,
+        repository,
+        provider,
+        on_success=None,
+        reference_tickers=(),
+    ):
         if on_success is not None and not callable(on_success):
             raise TypeError("on_success must be callable")
+        checked_references = tuple(
+            str(value).strip().upper() for value in reference_tickers
+        )
+        if (
+            any(not value for value in checked_references)
+            or len(set(checked_references)) != len(checked_references)
+        ):
+            raise ValueError(
+                "reference_tickers must be unique non-empty symbols"
+            )
         self._repository = repository
         self._provider = provider
         self._on_success = on_success
+        self._reference_tickers = checked_references
         self._lock = threading.Lock()
         self._thread = None
         self._state = "idle"
@@ -220,9 +237,12 @@ class UpdateJobManager:
             for summary in summaries
             if not getattr(summary, "inactive", False)
         ]
+        ordered_tickers = tuple(
+            dict.fromkeys((*active_tickers, *self._reference_tickers))
+        )
         with self._lock:
-            self._remaining_tickers = active_tickers
-            self._total = len(active_tickers)
+            self._remaining_tickers = list(ordered_tickers)
+            self._total = len(ordered_tickers)
 
     def _finish_locked(self, state, error, resumable):
         self._transition_locked(state)
