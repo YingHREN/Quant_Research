@@ -10,6 +10,9 @@ class SubscriptionChange:
 
 
 def build_pool(selected, peers, candidates, fixed=("SPY", "QQQ", "SOXX"), limit=30):
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+        raise ValueError("limit must be a positive integer at most 30")
+
     ordered = []
 
     def append_unique(values, group_limit):

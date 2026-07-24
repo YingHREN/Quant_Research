@@ -19,6 +19,15 @@ class DynamicSubscriptionPoolTest(unittest.TestCase):
         self.assertEqual(change.subscribe, ("NVDA",))
         self.assertEqual(change.unsubscribe, ("AMD",))
 
+    def test_pool_rejects_invalid_limits(self):
+        for limit in (0, -1, 31, True, 1.5):
+            with self.subTest(limit=limit):
+                with self.assertRaises(ValueError):
+                    build_pool("AMD", (), (), limit=limit)
+
+    def test_pool_with_small_limit_keeps_highest_priority_symbol(self):
+        self.assertEqual(build_pool("AMD", ("NVDA",), ("MSFT",), limit=1), ("SPY",))
+
 
 if __name__ == "__main__":
     unittest.main()
