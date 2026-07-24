@@ -255,6 +255,45 @@ class RestartableProvider(FakeProvider):
             self.stream_releases[-1].set()
 
 
+class SlowCloseProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.release_close = asyncio.Event()
+
+    async def close(self):
+        self.close_calls += 1
+        self.close_started.set()
+        await self.release_close.wait()
+
+
+class CloseCancelsStreamProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.stream_started = asyncio.Event()
+        self.stream_task = None
+
+    async def stream_events(self, request, emit):
+        self.requests.append(request.symbols)
+        self.stream_task = asyncio.current_task()
+        self.stream_started.set()
+        await asyncio.Event().wait()
+
+    async def close(self):
+        self.close_calls += 1
+        stream_task = self.stream_task
+        if (
+            stream_task is not None
+            and stream_task is not asyncio.current_task()
+            and not stream_task.done()
+        ):
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+
+
 class FailOnceUpdateProvider(FakeProvider):
     async def update_subscription(self, request):
         self.updated.append(request.symbols)
@@ -682,6 +721,65 @@ class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
             run_task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await run_task
+
+    async def test_late_cancelled_stop_waits_for_inline_run_cleanup(self):
+        provider, store = SlowCloseProvider(), FakeStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await eventually(lambda: collector.snapshot()["state"] == "running")
+
+        run_task.cancel()
+        await provider.close_started.wait()
+        stop_task = asyncio.create_task(collector.stop())
+        await asyncio.sleep(0)
+        stop_task.cancel()
+        await asyncio.sleep(0)
+        stop_done_before_release = stop_task.done()
+        state_before_release = collector.snapshot()["state"]
+        provider.release_close.set()
+
+        run_cancelled = False
+        try:
+            await run_task
+        except asyncio.CancelledError:
+            run_cancelled = True
+        stop_cancelled = False
+        try:
+            await stop_task
+        except asyncio.CancelledError:
+            stop_cancelled = True
+
+        self.assertFalse(stop_done_before_release)
+        self.assertNotEqual(state_before_release, "stopped")
+        self.assertTrue(run_cancelled)
+        self.assertTrue(stop_cancelled)
+        self.assertEqual(provider.close_calls, 1)
+        self.assertEqual(
+            store.closed,
+            [("fake", ("SPY", "QQQ", "SOXX", "AMD"))],
+        )
+        self.assertEqual(collector.snapshot()["state"], "stopped")
+        self.assertEqual(collector.snapshot()["subscribed_symbols"], [])
+
+    async def test_stop_owned_cleanup_does_not_deadlock_run_finally(self):
+        provider, store = CloseCancelsStreamProvider(), FakeStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await provider.stream_started.wait()
+
+        await asyncio.wait_for(collector.stop(), 0.2)
+
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
+        self.assertEqual(provider.close_calls, 1)
+        self.assertEqual(
+            store.closed,
+            [("fake", ("SPY", "QQQ", "SOXX", "AMD"))],
+        )
+        self.assertEqual(collector.snapshot()["state"], "stopped")
+        self.assertEqual(collector.snapshot()["subscribed_symbols"], [])
 
 
 if __name__ == "__main__":

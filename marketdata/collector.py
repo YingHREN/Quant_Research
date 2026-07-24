@@ -28,7 +28,8 @@ class IntradayCollector:
         self._update_task = None
         self._provider_closed = False
         self._run_owner = None
-        self._stop_cleanup_task = None
+        self._cleanup_owner = None
+        self._cleanup_completion = None
 
     @staticmethod
     def _now():
@@ -110,13 +111,33 @@ class IntradayCollector:
             max_symbols=self._active.max_symbols,
         )
 
-    async def _cleanup(self):
-        await self._cancel_update_worker()
-        self._close_active()
-        if not self._provider_closed:
-            self._provider_closed = True
-            await self._provider.close()
-        self._state = "stopped"
+    async def _perform_cleanup(self, completion):
+        error = None
+        try:
+            await self._cancel_update_worker()
+            self._close_active()
+            if not self._provider_closed:
+                self._provider_closed = True
+                await self._provider.close()
+            self._state = "stopped"
+        except BaseException as caught:
+            error = caught
+        finally:
+            if self._cleanup_owner is asyncio.current_task():
+                self._cleanup_owner = None
+            if not completion.done():
+                completion.set_result(error)
+
+    async def _cleanup_from_run(self):
+        if self._cleanup_completion is not None:
+            return
+        completion = asyncio.get_running_loop().create_future()
+        self._cleanup_completion = completion
+        self._cleanup_owner = asyncio.current_task()
+        await self._perform_cleanup(completion)
+        error = completion.result()
+        if error is not None:
+            raise error
 
     async def _emit(self, event):
         self._store.write_event(event)
@@ -130,7 +151,8 @@ class IntradayCollector:
         self._stop_requested = False
         self._stop_event = asyncio.Event()
         self._update_error = None
-        self._stop_cleanup_task = None
+        self._cleanup_owner = None
+        self._cleanup_completion = None
         try:
             await self._run_owned()
         finally:
@@ -185,25 +207,28 @@ class IntradayCollector:
                         except asyncio.TimeoutError:
                             pass
         finally:
-            if not (
-                self._stop_requested
-                and self._stop_cleanup_task is not None
-            ):
-                await self._cleanup()
+            await self._cleanup_from_run()
 
     async def stop(self):
         self._stop_requested = True
         self._stop_event.set()
-        if self._stop_cleanup_task is None:
-            self._stop_cleanup_task = asyncio.create_task(self._cleanup())
-        cleanup_task = self._stop_cleanup_task
+        completion = self._cleanup_completion
+        if completion is None:
+            completion = asyncio.get_running_loop().create_future()
+            self._cleanup_completion = completion
+            cleanup_task = asyncio.create_task(
+                self._perform_cleanup(completion)
+            )
+            self._cleanup_owner = cleanup_task
         cancelled = False
-        while not cleanup_task.done():
+        while not completion.done():
             try:
-                await asyncio.shield(cleanup_task)
+                await asyncio.shield(completion)
             except asyncio.CancelledError:
                 cancelled = True
-        cleanup_task.result()
+        error = completion.result()
+        if error is not None:
+            raise error
         if cancelled:
             raise asyncio.CancelledError
 
