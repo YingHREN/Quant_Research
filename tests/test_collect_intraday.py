@@ -5,7 +5,10 @@ from pathlib import Path
 from unittest import mock
 
 import collect_intraday
-from web.app import DEFAULT_DATABASE as FLASK_DEFAULT_DATABASE
+from web.app import (
+    DEFAULT_DATABASE as FLASK_DEFAULT_DATABASE,
+    create_app,
+)
 
 
 class CollectIntradayCliTest(unittest.TestCase):
@@ -17,10 +20,56 @@ class CollectIntradayCliTest(unittest.TestCase):
         self.loop.close()
         asyncio.set_event_loop(None)
 
-    def test_missing_credentials_exits_without_printing_secret(self):
+    def test_missing_credentials_persist_for_separate_flask_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "market.db"
+            argv = ["--selected", "AMD", "--database", str(database)]
+            with mock.patch.dict("os.environ", {}, clear=True):
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    "Alpaca credentials",
+                ) as error:
+                    collect_intraday.main(argv)
+            app = create_app(
+                {
+                    "TESTING": True,
+                    "MARKET_DATA_DATABASE": str(database),
+                }
+            )
+            payload = app.test_client().get(
+                "/api/market-data/status"
+            ).get_json()
+        self.assertEqual(payload["state"], "unavailable")
+        self.assertEqual(payload["error"], "missing_credentials")
+        self.assertEqual(payload["provider"], "alpaca")
+        self.assertNotIn("secret", str(error.exception).lower())
+
+    def test_build_allows_unavailable_collector_without_connecting(self):
         with mock.patch.dict("os.environ", {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "Alpaca credentials") as error:
-                collect_intraday.build_collector(["--selected", "AMD"])
+            collector = collect_intraday.build_collector(
+                ["--selected", "AMD"]
+            )
+        self.assertEqual(
+            collector.snapshot()["desired_symbols"][:4],
+            ["SPY", "QQQ", "SOXX", "AMD"],
+        )
+        self.assertEqual(collector.snapshot()["error"], None)
+        self.assertEqual(
+            collector._provider.capabilities().unavailable_reason,
+            "missing_credentials",
+        )
+
+    def test_missing_credentials_error_does_not_print_secret(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "market.db"
+            with mock.patch.dict("os.environ", {}, clear=True):
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    "Alpaca credentials",
+                ) as error:
+                    collect_intraday.main(
+                        ["--selected", "AMD", "--database", str(database)]
+                    )
         self.assertNotIn("secret", str(error.exception).lower())
 
     def test_arguments_build_expected_initial_pool(self):

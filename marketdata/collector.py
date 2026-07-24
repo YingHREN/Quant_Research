@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import threading
 import uuid
 
-from marketdata.base import SubscriptionRequest
-from marketdata.subscriptions import build_pool, plan_change
+from marketdata.base import SubscriptionConfirmation, SubscriptionRequest
+from marketdata.subscriptions import build_pool
 
 
 DEFAULT_EVENT_QUEUE_SIZE = 4096
@@ -82,6 +83,7 @@ class IntradayCollector:
         self._dropped_event_count = 0
         self._undrained_event_count = 0
         self._accepting_events = False
+        self._status_write_lock = threading.Lock()
 
     @staticmethod
     def _now():
@@ -111,13 +113,21 @@ class IntradayCollector:
             ):
                 desired = self._desired
                 confirmation = await self._provider.update_subscription(
-                    desired
+                    desired,
+                    self._reconcile_confirmation,
                 )
                 if confirmation is None:
                     raise RuntimeError("provider_confirmation_missing")
                 if self._state != "running" or self._stop_requested:
                     return
-                self._record_confirmation(confirmation, desired)
+                final = SubscriptionRequest(
+                    confirmation.symbols,
+                    max_symbols=desired.max_symbols,
+                )
+                if set(final.symbols) != set(desired.symbols):
+                    raise RuntimeError("provider_confirmation_mismatch")
+                if set(self._active.symbols) != set(final.symbols):
+                    self._reconcile_confirmation(confirmation)
                 self._update_error = None
                 self._publish_status()
         except asyncio.CancelledError:
@@ -132,48 +142,48 @@ class IntradayCollector:
             )
             self._publish_status_safely()
 
-    def _record_confirmation(self, confirmation, desired):
+    def _reconcile_confirmation(self, confirmation, state=None):
         confirmed = SubscriptionRequest(
             confirmation.symbols,
-            max_symbols=desired.max_symbols,
+            max_symbols=self._desired.max_symbols,
         )
-        if set(confirmed.symbols) != set(desired.symbols):
-            raise RuntimeError("provider_confirmation_mismatch")
-        previous = self._active
-        change = plan_change(previous.symbols, confirmed.symbols)
-        changed_at = self._now()
-        try:
-            if change.subscribe:
-                self._store.open_subscription(
-                    self._provider.capabilities().provider,
-                    change.subscribe,
-                    changed_at,
+        with self._status_write_lock:
+            changed_at = self._now()
+            target_state = self._state if state is None else state
+            try:
+                self._store.reconcile_collector_subscription(
                     session_id=self._session_id,
+                    provider=self._provider.capabilities().provider,
+                    coverage=self._provider.capabilities().coverage,
+                    state=target_state,
+                    confirmed_symbols=confirmed.symbols,
+                    reconciled_at=changed_at,
+                    last_event_received_at=self._last_event_received_at,
+                    disconnect_count=self._disconnect_count,
+                    error=self._current_error(),
+                    queue_depth=(
+                        0
+                        if self._event_queue is None
+                        else self._event_queue.qsize()
+                    ),
+                    queue_high_water=self._queue_high_water,
+                    dropped_event_count=self._dropped_event_count,
+                    undrained_event_count=self._undrained_event_count,
+                    lease_seconds=self._stale_after_seconds,
                 )
-            if change.unsubscribe:
-                self._store.close_subscription(
-                    self._provider.capabilities().provider,
-                    change.unsubscribe,
-                    changed_at,
-                    session_id=self._session_id,
-                )
-        except Exception as error:
-            raise _CollectorStorageError from error
-        self._active = confirmed
+            except Exception as error:
+                raise _CollectorStorageError from error
+            self._active = confirmed
+            self._state = target_state
+            self._heartbeat_at = changed_at
 
     async def _initial_confirmation(self, confirmation):
         if self._stop_requested:
             return
-        desired = SubscriptionRequest(
-            confirmation.symbols,
-            max_symbols=self._desired.max_symbols,
-        )
-        self._record_confirmation(confirmation, desired)
-        self._state = "running"
         self._stream_error = None
         self._update_error = None
+        self._reconcile_confirmation(confirmation, state="running")
         self._accepting_events = True
-        self._publish_status()
         if self._desired != self._active and (
             self._update_task is None or self._update_task.done()
         ):
@@ -198,49 +208,65 @@ class IntradayCollector:
     def _close_active(self):
         if not self._active.symbols:
             return
-        self._store.close_subscription(
-            self._provider.capabilities().provider,
-            self._active.symbols,
-            self._now(),
-            session_id=self._session_id,
-        )
-        self._active = SubscriptionRequest(
-            (),
-            max_symbols=self._active.max_symbols,
+        self._reconcile_confirmation(
+            SubscriptionConfirmation((), ()),
         )
 
     async def _perform_cleanup(self, completion):
-        result = None
+        storage_failed = False
+        provider_failed = False
+        cancelled = False
         try:
             await self._cancel_update_worker()
             self._accepting_events = False
             await self._stop_writer()
+        except asyncio.CancelledError:
+            cancelled = True
+        except _CollectorStorageError:
+            storage_failed = True
+        except Exception:
+            storage_failed = True
+        try:
             self._close_active()
+        except _CollectorStorageError:
+            storage_failed = True
+        try:
             if not self._provider_closed:
                 await self._provider.close()
                 self._provider_closed = True
-            await self._stop_heartbeat()
-            if self._storage_error is None:
-                self._state = "stopped"
-                self._cleanup_error = None
-                self._stream_error = None
-                self._update_error = None
-            else:
-                self._state = "collector_error"
-            self._publish_status()
         except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            provider_failed = True
+        try:
+            await self._stop_heartbeat()
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
+            provider_failed = True
+
+        result = None
+        if storage_failed or self._storage_error is not None:
+            result = "storage_error"
+            self._mark_storage_error()
+        elif cancelled:
             result = "cancelled"
             self._state = "cleanup_failed"
             self._cleanup_error = "provider_error"
-            self._publish_status_safely()
-        except _CollectorStorageError:
-            result = "storage_error"
-            self._mark_storage_error()
-        except Exception:
+        elif provider_failed:
             result = "provider_error"
             self._state = "cleanup_failed"
             self._cleanup_error = "provider_error"
-            self._publish_status_safely()
+        else:
+            self._state = "stopped"
+            self._cleanup_error = None
+            self._stream_error = None
+            self._update_error = None
+        try:
+            self._publish_status()
+        except _CollectorStorageError:
+            result = "storage_error"
+            self._mark_storage_error()
         finally:
             if self._cleanup_owner is asyncio.current_task():
                 self._cleanup_owner = None
@@ -376,30 +402,32 @@ class IntradayCollector:
             "write_collector_status",
         ):
             return
-        heartbeat_at = self._now()
-        try:
-            self._store.write_collector_status(
-                session_id=self._session_id,
-                provider=self._provider.capabilities().provider,
-                coverage=self._provider.capabilities().coverage,
-                state=self._state,
-                confirmed_symbols=self._active.symbols,
-                last_event_received_at=self._last_event_received_at,
-                disconnect_count=self._disconnect_count,
-                error=self._current_error(),
-                heartbeat_at=heartbeat_at,
-                queue_depth=(
-                    0
-                    if self._event_queue is None
-                    else self._event_queue.qsize()
-                ),
-                queue_high_water=self._queue_high_water,
-                dropped_event_count=self._dropped_event_count,
-                undrained_event_count=self._undrained_event_count,
-            )
-            self._heartbeat_at = heartbeat_at
-        except Exception as error:
-            raise _CollectorStorageError from error
+        with self._status_write_lock:
+            heartbeat_at = self._now()
+            try:
+                self._store.write_collector_status(
+                    session_id=self._session_id,
+                    provider=self._provider.capabilities().provider,
+                    coverage=self._provider.capabilities().coverage,
+                    state=self._state,
+                    confirmed_symbols=self._active.symbols,
+                    last_event_received_at=self._last_event_received_at,
+                    disconnect_count=self._disconnect_count,
+                    error=self._current_error(),
+                    heartbeat_at=heartbeat_at,
+                    queue_depth=(
+                        0
+                        if self._event_queue is None
+                        else self._event_queue.qsize()
+                    ),
+                    queue_high_water=self._queue_high_water,
+                    dropped_event_count=self._dropped_event_count,
+                    undrained_event_count=self._undrained_event_count,
+                    lease_seconds=self._stale_after_seconds,
+                )
+                self._heartbeat_at = heartbeat_at
+            except Exception as error:
+                raise _CollectorStorageError from error
 
     def _publish_status_safely(self):
         try:
@@ -557,6 +585,13 @@ class IntradayCollector:
         if completion is None or (
             completion.done() and completion.result() is not None
         ):
+            if (
+                completion is not None
+                and completion.done()
+                and completion.result() == "storage_error"
+                and self._undrained_event_count == 0
+            ):
+                self._storage_error = None
             completion = asyncio.get_running_loop().create_future()
             self._cleanup_completion = completion
             cleanup_task = asyncio.create_task(

@@ -193,8 +193,9 @@ class AlpacaEventNormalizerTest(unittest.TestCase):
     def test_trade_correction_and_cancel_messages_are_normalized(self):
         correction = self.normalizer.ingest(
             {"T": "c", "S": "AMD", "t": "2026-07-24T14:30:01.000000100Z",
-             "oi": "trade-1", "i": "trade-2", "p": 151.0, "s": 20,
-             "x": "V", "c": ["@"]},
+             "oi": "trade-1", "op": 150.0, "os": 10, "oc": ["@"],
+             "ci": "trade-2", "cp": 151.0, "cs": 20, "cc": ["T"],
+             "x": "V"},
             NOW,
         )
         cancel = self.normalizer.ingest(
@@ -205,6 +206,13 @@ class AlpacaEventNormalizerTest(unittest.TestCase):
         self.assertIsInstance(correction, TradeCorrectionEvent)
         self.assertEqual(correction.provider_trade_id, "trade-1")
         self.assertEqual(correction.replacement_trade_id, "trade-2")
+        self.assertEqual(
+            (correction.original_price, correction.original_size),
+            (150.0, 10.0),
+        )
+        self.assertEqual(correction.original_conditions, ("@",))
+        self.assertEqual((correction.price, correction.size), (151.0, 20.0))
+        self.assertEqual(correction.conditions, ("T",))
         self.assertEqual(correction.event_ts_ns, 1784903401000000100)
         self.assertIsInstance(cancel, TradeCancelEvent)
         self.assertEqual(cancel.provider_trade_id, "trade-1")

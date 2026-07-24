@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import tempfile
 from pathlib import Path
 
@@ -34,8 +34,17 @@ class IntradayStatusApiTest(unittest.TestCase):
         self.assertEqual(service.calls, 1)
 
     def test_default_without_collector_is_typed_unavailable(self):
-        app = create_app({"TESTING": True})
-        payload = app.test_client().get("/api/market-data/status").get_json()
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "missing.db"
+            app = create_app(
+                {
+                    "TESTING": True,
+                    "MARKET_DATA_DATABASE": str(database),
+                }
+            )
+            payload = app.test_client().get(
+                "/api/market-data/status"
+            ).get_json()
         self.assertEqual(payload["state"], "unavailable")
         self.assertEqual(payload["error"], "collector_not_configured")
 
@@ -45,6 +54,13 @@ class IntradayStatusApiTest(unittest.TestCase):
             path = Path(directory) / "market.db"
             writer = IntradayStore(path)
             writer.initialize()
+            writer.begin_collector_session(
+                session_id="session-1",
+                provider="alpaca",
+                coverage="iex",
+                started_at=at,
+                stale_after_seconds=30,
+            )
             writer.write_collector_status(
                 session_id="session-1",
                 provider="alpaca",
@@ -73,22 +89,16 @@ class IntradayStatusApiTest(unittest.TestCase):
             self.assertEqual(running["subscribed_symbols"], ["SPY", "AMD"])
             self.assertEqual(running["session_id"], "session-1")
 
-            writer.write_collector_status(
-                session_id="session-1",
-                provider="alpaca",
-                coverage="iex",
-                state="running",
-                confirmed_symbols=("SPY", "AMD"),
-                last_event_received_at=at,
-                disconnect_count=1,
-                error=None,
-                heartbeat_at=at - timedelta(minutes=1),
-                queue_depth=0,
-                queue_high_water=4,
-                dropped_event_count=0,
-                undrained_event_count=0,
+            stale_app = create_app(
+                {
+                    "TESTING": True,
+                    "MARKET_DATA_DATABASE": str(path),
+                    "INTRADAY_STATUS_STALE_AFTER_SECONDS": 0,
+                }
             )
-            stale = client.get("/api/market-data/status").get_json()
+            stale = stale_app.test_client().get(
+                "/api/market-data/status"
+            ).get_json()
             self.assertEqual(stale["state"], "stale")
             self.assertEqual(stale["error"], "collector_stale")
 
@@ -117,6 +127,13 @@ class IntradayStatusApiTest(unittest.TestCase):
             writer = IntradayStore(path)
             writer.initialize()
             at = datetime.now(timezone.utc)
+            writer.begin_collector_session(
+                session_id="session-1",
+                provider="alpaca",
+                coverage="iex",
+                started_at=at,
+                stale_after_seconds=30,
+            )
             writer.write_collector_status(
                 session_id="session-1",
                 provider="alpaca",

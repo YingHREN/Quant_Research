@@ -180,28 +180,27 @@ class AlpacaEventNormalizer:
     def _correction(self, payload, received_ts):
         try:
             event_ts, event_ts_ns = _provider_timestamp(payload["t"])
-            provider_trade_id = payload.get("oi", payload.get("i"))
-            if provider_trade_id is None:
-                raise ValueError("missing provider trade id")
-            replacement_trade_id = (
-                None
-                if payload.get("oi") is None or payload.get("i") is None
-                else str(payload["i"])
-            )
             return TradeCorrectionEvent(
                 provider="alpaca",
                 symbol=payload["S"],
                 event_ts=event_ts,
                 received_ts=received_ts.astimezone(timezone.utc),
-                provider_trade_id=str(provider_trade_id),
-                replacement_trade_id=replacement_trade_id,
-                price=float(payload["p"]),
-                size=float(payload["s"]),
+                provider_trade_id=str(payload["oi"]),
+                replacement_trade_id=str(payload["ci"]),
+                price=float(payload["cp"]),
+                size=float(payload["cs"]),
                 exchange=payload.get("x"),
-                conditions=tuple(str(value) for value in payload.get("c", ())),
+                conditions=tuple(
+                    str(value) for value in payload["cc"]
+                ),
                 session=_session(event_ts),
                 event_ts_ns=event_ts_ns,
                 size_unit="shares",
+                original_price=float(payload["op"]),
+                original_size=float(payload["os"]),
+                original_conditions=tuple(
+                    str(value) for value in payload["oc"]
+                ),
             )
         except (KeyError, TypeError, ValueError):
             self.drop_counts["invalid_correction"] += 1

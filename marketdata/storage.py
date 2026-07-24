@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import hashlib
 import json
@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS intraday_trade_corrections (
     provider_trade_id TEXT NOT NULL, replacement_trade_id TEXT,
     price REAL NOT NULL, size REAL NOT NULL, size_unit TEXT NOT NULL,
     exchange_code TEXT, conditions TEXT NOT NULL, session TEXT NOT NULL,
+    original_price REAL, original_size REAL,
+    original_conditions TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (provider, symbol, event_identity)
 );
 CREATE TABLE IF NOT EXISTS intraday_trade_cancels (
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS collector_status (
     last_event_received_at TEXT, disconnect_count INTEGER NOT NULL,
     error TEXT, heartbeat_at TEXT NOT NULL, queue_depth INTEGER NOT NULL,
     queue_high_water INTEGER NOT NULL, dropped_event_count INTEGER NOT NULL,
-    undrained_event_count INTEGER NOT NULL
+    undrained_event_count INTEGER NOT NULL, lease_expires_at TEXT NOT NULL
 );
 """
 
@@ -89,6 +91,14 @@ MIGRATION_COLUMNS = {
         ("trading_date", "TEXT"),
         ("size_unit", "TEXT"),
         ("lot_size", "INTEGER"),
+    ),
+    "intraday_trade_corrections": (
+        ("original_price", "REAL"),
+        ("original_size", "REAL"),
+        ("original_conditions", "TEXT NOT NULL DEFAULT '[]'"),
+    ),
+    "collector_status": (
+        ("lease_expires_at", "TEXT"),
     ),
 }
 
@@ -174,6 +184,20 @@ class IntradayStore:
             "UPDATE intraday_quotes SET size_unit='shares' "
             "WHERE size_unit IS NULL"
         )
+        if "lease_expires_at" in added["collector_status"]:
+            rows = connection.execute(
+                "SELECT singleton_id, heartbeat_at FROM collector_status "
+                "WHERE lease_expires_at IS NULL"
+            ).fetchall()
+            for singleton_id, heartbeat_at in rows:
+                lease_expires_at = (
+                    _parse_utc(heartbeat_at) + timedelta(seconds=30)
+                )
+                connection.execute(
+                    "UPDATE collector_status SET lease_expires_at=? "
+                    "WHERE singleton_id=?",
+                    (lease_expires_at.isoformat(), singleton_id),
+                )
 
     @staticmethod
     def _canonical_identity(payload):
@@ -310,8 +334,9 @@ class IntradayStore:
                     provider, symbol, event_identity, event_ts, event_ts_ns,
                     received_ts, trading_date, provider_trade_id,
                     replacement_trade_id, price, size, size_unit, exchange_code,
-                    conditions, session
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conditions, session, original_price, original_size,
+                    original_conditions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event.provider,
@@ -329,6 +354,9 @@ class IntradayStore:
                     event.exchange,
                     json.dumps(event.conditions),
                     event.session,
+                    event.original_price,
+                    event.original_size,
+                    json.dumps(event.original_conditions),
                 ),
             )
         elif isinstance(event, TradeCancelEvent):
@@ -397,37 +425,58 @@ class IntradayStore:
         }
         effective = []
         for row in trades:
-            source_sequence = row["source_sequence"]
-            provider_trade_key = (
-                row["provider"],
-                row["symbol"],
-                source_sequence,
-            )
-            if provider_trade_key in cancelled_ids:
+            current_id = row["source_sequence"]
+            correction = None
+            visited = set()
+            cancelled = False
+            while True:
+                provider_trade_key = (
+                    row["provider"],
+                    row["symbol"],
+                    current_id,
+                )
+                if provider_trade_key in cancelled_ids:
+                    cancelled = True
+                    break
+                if provider_trade_key in visited:
+                    break
+                visited.add(provider_trade_key)
+                next_correction = latest_corrections.get(
+                    provider_trade_key
+                )
+                if next_correction is None:
+                    break
+                correction = next_correction
+                replacement_id = correction["replacement_trade_id"]
+                if not replacement_id or replacement_id == current_id:
+                    break
+                current_id = replacement_id
+            if cancelled:
                 continue
-            correction = latest_corrections.get(provider_trade_key)
             if correction is None:
                 effective.append(self._trade_from_row(row))
-            else:
-                effective.append(
-                    TradeEvent(
-                        provider=row["provider"],
-                        symbol=row["symbol"],
-                        event_ts=_parse_utc(correction["event_ts"]),
-                        received_ts=_parse_utc(correction["received_ts"]),
-                        price=correction["price"],
-                        size=correction["size"],
-                        exchange=correction["exchange_code"],
-                        conditions=tuple(json.loads(correction["conditions"])),
-                        direction="unknown",
-                        direction_source="unknown",
-                        source_sequence=source_sequence,
-                        session=correction["session"],
-                        event_ts_ns=correction["event_ts_ns"],
-                        trading_date=correction["trading_date"],
-                        size_unit=correction["size_unit"],
-                    )
+                continue
+            effective.append(
+                TradeEvent(
+                    provider=row["provider"],
+                    symbol=row["symbol"],
+                    event_ts=_parse_utc(correction["event_ts"]),
+                    received_ts=_parse_utc(correction["received_ts"]),
+                    price=correction["price"],
+                    size=correction["size"],
+                    exchange=correction["exchange_code"],
+                    conditions=tuple(
+                        json.loads(correction["conditions"])
+                    ),
+                    direction="unknown",
+                    direction_source="unknown",
+                    source_sequence=current_id,
+                    session=correction["session"],
+                    event_ts_ns=correction["event_ts_ns"],
+                    trading_date=correction["trading_date"],
+                    size_unit=correction["size_unit"],
                 )
+            )
         return effective
 
     @staticmethod
@@ -472,6 +521,9 @@ class IntradayStore:
     ):
         self._require_utc(started_at, "started_at")
         with self._connect() as connection:
+            if session_id is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                self._require_current_session(connection, session_id)
             connection.executemany(
                 "INSERT INTO subscription_intervals "
                 "(provider, symbol, started_at, finished_at, session_id) "
@@ -494,6 +546,9 @@ class IntradayStore:
             "" if session_id is None else " AND session_id=?"
         )
         with self._connect() as connection:
+            if session_id is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                self._require_current_session(connection, session_id)
             connection.executemany(
                 "UPDATE subscription_intervals SET finished_at=? "
                 "WHERE provider=? AND symbol=? AND finished_at IS NULL"
@@ -508,6 +563,25 @@ class IntradayStore:
                     for symbol in symbols
                 ],
             )
+
+    @staticmethod
+    def _require_current_session(connection, session_id):
+        row = connection.execute(
+            "SELECT session_id, heartbeat_at FROM collector_status "
+            "WHERE singleton_id=1"
+        ).fetchone()
+        if row is None or row[0] != session_id:
+            raise RuntimeError("collector_session_fenced")
+        return _parse_utc(row[1])
+
+    @staticmethod
+    def _validate_lease_seconds(lease_seconds):
+        if (
+            isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, (int, float))
+            or lease_seconds <= 0
+        ):
+            raise ValueError("lease_seconds must be positive")
 
     @staticmethod
     def _never_configured_status():
@@ -539,9 +613,15 @@ class IntradayStore:
         self._require_utc(started_at, "started_at")
         if not str(session_id).strip():
             raise ValueError("session_id is required")
+        self._validate_lease_seconds(stale_after_seconds)
+        lease_expires_at = started_at + timedelta(
+            seconds=stale_after_seconds
+        )
         with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
-                "SELECT session_id, state, heartbeat_at FROM collector_status "
+                "SELECT session_id, state, heartbeat_at, lease_expires_at "
+                "FROM collector_status "
                 "WHERE singleton_id=1"
             ).fetchone()
             if existing is None:
@@ -550,15 +630,19 @@ class IntradayStore:
                     "WHERE finished_at IS NULL",
                     (started_at.isoformat(),),
                 )
-            elif existing[0] != session_id:
-                heartbeat = _parse_utc(existing[2])
-                age = (started_at - heartbeat).total_seconds()
+            elif existing[0] == session_id:
+                if started_at < _parse_utc(existing[2]):
+                    raise RuntimeError(
+                        "collector_status_time_regression"
+                    )
+            else:
                 active = existing[1] in (
                     "connecting",
                     "running",
                     "retrying",
                 )
-                if active and age <= stale_after_seconds:
+                existing_expiry = _parse_utc(existing[3])
+                if active and started_at <= existing_expiry:
                     raise RuntimeError("collector_session_active")
                 connection.execute(
                     "UPDATE subscription_intervals SET finished_at=? "
@@ -566,7 +650,7 @@ class IntradayStore:
                     "(session_id IS NULL OR session_id != ?)",
                     (started_at.isoformat(), session_id),
                 )
-            self._write_collector_status_connection(
+            self._acquire_collector_status_connection(
                 connection,
                 session_id=session_id,
                 provider=provider,
@@ -581,6 +665,7 @@ class IntradayStore:
                 queue_high_water=0,
                 dropped_event_count=0,
                 undrained_event_count=0,
+                lease_expires_at=lease_expires_at,
             )
 
     def write_collector_status(
@@ -599,15 +684,18 @@ class IntradayStore:
         queue_high_water,
         dropped_event_count,
         undrained_event_count,
+        lease_seconds=30,
     ):
         self._require_utc(heartbeat_at, "heartbeat_at")
+        self._validate_lease_seconds(lease_seconds)
         if last_event_received_at is not None:
             self._require_utc(
                 last_event_received_at,
                 "last_event_received_at",
             )
         with self._connect() as connection:
-            self._write_collector_status_connection(
+            connection.execute("BEGIN IMMEDIATE")
+            self._update_collector_status_connection(
                 connection,
                 session_id=session_id,
                 provider=provider,
@@ -622,10 +710,53 @@ class IntradayStore:
                 queue_high_water=queue_high_water,
                 dropped_event_count=dropped_event_count,
                 undrained_event_count=undrained_event_count,
+                lease_expires_at=heartbeat_at
+                + timedelta(seconds=lease_seconds),
             )
 
     @staticmethod
-    def _write_collector_status_connection(
+    def _status_values(
+        *,
+        session_id,
+        provider,
+        coverage,
+        state,
+        confirmed_symbols,
+        last_event_received_at,
+        disconnect_count,
+        error,
+        heartbeat_at,
+        queue_depth,
+        queue_high_water,
+        dropped_event_count,
+        undrained_event_count,
+        lease_expires_at,
+    ):
+        symbols = SubscriptionRequest(confirmed_symbols).symbols
+        return (
+            session_id,
+            provider,
+            coverage,
+            state,
+            json.dumps(symbols),
+            (
+                None
+                if last_event_received_at is None
+                else last_event_received_at.isoformat()
+            ),
+            int(disconnect_count),
+            error,
+            heartbeat_at.isoformat(),
+            int(queue_depth),
+            int(queue_high_water),
+            int(dropped_event_count),
+            int(undrained_event_count),
+            lease_expires_at.isoformat(),
+        )
+
+    @classmethod
+    def _acquire_collector_status_connection(
+        cls,
         connection,
         *,
         session_id,
@@ -641,37 +772,202 @@ class IntradayStore:
         queue_high_water,
         dropped_event_count,
         undrained_event_count,
+        lease_expires_at,
     ):
-        symbols = SubscriptionRequest(confirmed_symbols).symbols
         connection.execute(
             """
-            INSERT OR REPLACE INTO collector_status (
+            INSERT INTO collector_status (
                 singleton_id, session_id, provider, coverage, state,
                 confirmed_symbols, last_event_received_at, disconnect_count,
                 error, heartbeat_at, queue_depth, queue_high_water,
-                dropped_event_count, undrained_event_count
-            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                dropped_event_count, undrained_event_count, lease_expires_at
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(singleton_id) DO UPDATE SET
+                session_id=excluded.session_id,
+                provider=excluded.provider,
+                coverage=excluded.coverage,
+                state=excluded.state,
+                confirmed_symbols=excluded.confirmed_symbols,
+                last_event_received_at=excluded.last_event_received_at,
+                disconnect_count=excluded.disconnect_count,
+                error=excluded.error,
+                heartbeat_at=excluded.heartbeat_at,
+                queue_depth=excluded.queue_depth,
+                queue_high_water=excluded.queue_high_water,
+                dropped_event_count=excluded.dropped_event_count,
+                undrained_event_count=excluded.undrained_event_count,
+                lease_expires_at=excluded.lease_expires_at
             """,
-            (
-                session_id,
-                provider,
-                coverage,
-                state,
-                json.dumps(symbols),
-                (
-                    None
-                    if last_event_received_at is None
-                    else last_event_received_at.isoformat()
-                ),
-                int(disconnect_count),
-                error,
-                heartbeat_at.isoformat(),
-                int(queue_depth),
-                int(queue_high_water),
-                int(dropped_event_count),
-                int(undrained_event_count),
+            cls._status_values(
+                session_id=session_id,
+                provider=provider,
+                coverage=coverage,
+                state=state,
+                confirmed_symbols=confirmed_symbols,
+                last_event_received_at=last_event_received_at,
+                disconnect_count=disconnect_count,
+                error=error,
+                heartbeat_at=heartbeat_at,
+                queue_depth=queue_depth,
+                queue_high_water=queue_high_water,
+                dropped_event_count=dropped_event_count,
+                undrained_event_count=undrained_event_count,
+                lease_expires_at=lease_expires_at,
             ),
         )
+
+    @classmethod
+    def _update_collector_status_connection(
+        cls,
+        connection,
+        *,
+        session_id,
+        provider,
+        coverage,
+        state,
+        confirmed_symbols,
+        last_event_received_at,
+        disconnect_count,
+        error,
+        heartbeat_at,
+        queue_depth,
+        queue_high_water,
+        dropped_event_count,
+        undrained_event_count,
+        lease_expires_at,
+    ):
+        previous_heartbeat = cls._require_current_session(
+            connection,
+            session_id,
+        )
+        if heartbeat_at < previous_heartbeat:
+            raise RuntimeError("collector_status_time_regression")
+        values = cls._status_values(
+            session_id=session_id,
+            provider=provider,
+            coverage=coverage,
+            state=state,
+            confirmed_symbols=confirmed_symbols,
+            last_event_received_at=last_event_received_at,
+            disconnect_count=disconnect_count,
+            error=error,
+            heartbeat_at=heartbeat_at,
+            queue_depth=queue_depth,
+            queue_high_water=queue_high_water,
+            dropped_event_count=dropped_event_count,
+            undrained_event_count=undrained_event_count,
+            lease_expires_at=lease_expires_at,
+        )
+        cursor = connection.execute(
+            """
+            UPDATE collector_status SET
+                provider=?, coverage=?, state=?, confirmed_symbols=?,
+                last_event_received_at=?, disconnect_count=?, error=?,
+                heartbeat_at=?, queue_depth=?, queue_high_water=?,
+                dropped_event_count=?, undrained_event_count=?,
+                lease_expires_at=?
+            WHERE singleton_id=1 AND session_id=?
+            """,
+            values[1:] + (session_id,),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("collector_session_fenced")
+
+    def reconcile_collector_subscription(
+        self,
+        *,
+        session_id,
+        provider,
+        coverage,
+        state,
+        confirmed_symbols,
+        reconciled_at,
+        last_event_received_at,
+        disconnect_count,
+        error,
+        queue_depth,
+        queue_high_water,
+        dropped_event_count,
+        undrained_event_count,
+        lease_seconds=30,
+    ):
+        self._require_utc(reconciled_at, "reconciled_at")
+        self._validate_lease_seconds(lease_seconds)
+        if last_event_received_at is not None:
+            self._require_utc(
+                last_event_received_at,
+                "last_event_received_at",
+            )
+        confirmed = SubscriptionRequest(confirmed_symbols).symbols
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._require_current_session(connection, session_id)
+            open_symbols = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT symbol FROM subscription_intervals "
+                    "WHERE provider=? AND session_id=? "
+                    "AND finished_at IS NULL",
+                    (provider, session_id),
+                )
+            }
+            confirmed_set = set(confirmed)
+            closing = tuple(
+                sorted(open_symbols - confirmed_set)
+            )
+            opening = tuple(
+                symbol
+                for symbol in confirmed
+                if symbol not in open_symbols
+            )
+            if closing:
+                connection.executemany(
+                    "UPDATE subscription_intervals SET finished_at=? "
+                    "WHERE provider=? AND symbol=? AND session_id=? "
+                    "AND finished_at IS NULL",
+                    [
+                        (
+                            reconciled_at.isoformat(),
+                            provider,
+                            symbol,
+                            session_id,
+                        )
+                        for symbol in closing
+                    ],
+                )
+            if opening:
+                connection.executemany(
+                    "INSERT INTO subscription_intervals "
+                    "(provider, symbol, started_at, finished_at, session_id) "
+                    "VALUES (?, ?, ?, NULL, ?)",
+                    [
+                        (
+                            provider,
+                            symbol,
+                            reconciled_at.isoformat(),
+                            session_id,
+                        )
+                        for symbol in opening
+                    ],
+                )
+            self._update_collector_status_connection(
+                connection,
+                session_id=session_id,
+                provider=provider,
+                coverage=coverage,
+                state=state,
+                confirmed_symbols=confirmed,
+                last_event_received_at=last_event_received_at,
+                disconnect_count=disconnect_count,
+                error=error,
+                heartbeat_at=reconciled_at,
+                queue_depth=queue_depth,
+                queue_high_water=queue_high_water,
+                dropped_event_count=dropped_event_count,
+                undrained_event_count=undrained_event_count,
+                lease_expires_at=reconciled_at
+                + timedelta(seconds=lease_seconds),
+            )
 
     def read_collector_status(
         self,

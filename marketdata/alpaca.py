@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import inspect
 import json
+from math import isfinite
 
 from websockets.asyncio.client import connect as websocket_connect
 
@@ -17,13 +18,29 @@ from marketdata.subscriptions import plan_change
 
 
 STREAM_URL = "wss://stream.data.alpaca.markets/v2/iex"
+DEFAULT_ACK_TIMEOUT_SECONDS = 10.0
 
 
 class AlpacaIEXProvider:
-    def __init__(self, api_key, api_secret, connect=None):
+    def __init__(
+        self,
+        api_key,
+        api_secret,
+        connect=None,
+        *,
+        ack_timeout_seconds=DEFAULT_ACK_TIMEOUT_SECONDS,
+    ):
+        if (
+            isinstance(ack_timeout_seconds, bool)
+            or not isinstance(ack_timeout_seconds, (int, float))
+            or not isfinite(ack_timeout_seconds)
+            or ack_timeout_seconds <= 0
+        ):
+            raise ValueError("ack_timeout_seconds must be positive")
         self._api_key = api_key
         self._api_secret = api_secret
         self._connect = websocket_connect if connect is None else connect
+        self._ack_timeout_seconds = float(ack_timeout_seconds)
         self._socket = None
         self._symbols = ()
         self._desired_symbols = None
@@ -85,7 +102,27 @@ class AlpacaIEXProvider:
                         "secret": self._api_secret,
                     }
                 )
-                async for raw in socket:
+                iterator = socket.__aiter__()
+                while True:
+                    timeout_code = None
+                    if not self._authenticated:
+                        timeout_code = "alpaca_authentication_timeout"
+                    elif not self._initial_confirmed:
+                        timeout_code = "alpaca_subscription_timeout"
+                    try:
+                        next_message = iterator.__anext__()
+                        raw = (
+                            await next_message
+                            if timeout_code is None
+                            else await asyncio.wait_for(
+                                next_message,
+                                timeout=self._ack_timeout_seconds,
+                            )
+                        )
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(timeout_code) from None
                     messages = self._decode_messages(raw)
                     for payload in messages:
                         await self._handle_payload(
@@ -154,10 +191,10 @@ class AlpacaIEXProvider:
             if not self._initial_confirmed:
                 self._symbols = confirmation.symbols
                 self._initial_confirmed = True
-                if on_confirmed is not None:
-                    result = on_confirmed(confirmation)
-                    if inspect.isawaitable(result):
-                        await result
+                await self._notify_confirmation(
+                    on_confirmed,
+                    confirmation,
+                )
             return
 
         if message_type == "error":
@@ -186,48 +223,90 @@ class AlpacaIEXProvider:
         if event is not None:
             await emit(event)
 
-    async def update_subscription(self, request):
+    async def update_subscription(self, request, on_confirmed=None):
         self._set_desired(request.symbols)
         if not self._authenticated or not self._initial_confirmed:
             return None
-        return await self._apply_subscription()
+        return await self._apply_subscription(on_confirmed)
 
     def _set_desired(self, symbols):
         self._desired_symbols = tuple(symbols)
 
-    async def _apply_subscription(self):
+    async def _apply_subscription(self, on_confirmed):
         async with self._subscription_lock:
             desired = tuple(self._desired_symbols or ())
             change = plan_change(self._symbols, desired)
-            if change.subscribe:
-                expected_after_add = tuple(
-                    dict.fromkeys(self._symbols + change.subscribe)
+            free_slots = (
+                self.capabilities().max_symbols - len(self._symbols)
+            )
+            early_remove_count = max(
+                0,
+                len(change.subscribe) - free_slots,
+            )
+            early_removals = change.unsubscribe[:early_remove_count]
+            later_removals = change.unsubscribe[early_remove_count:]
+
+            if early_removals:
+                await self._apply_acknowledged_change(
+                    "unsubscribe",
+                    early_removals,
+                    on_confirmed,
                 )
-                confirmation = await self._send_and_wait_for_ack(
+            if change.subscribe:
+                await self._apply_acknowledged_change(
                     "subscribe",
                     change.subscribe,
-                    expected_after_add,
+                    on_confirmed,
                 )
-                self._symbols = confirmation.symbols
-            if change.unsubscribe:
-                expected_after_remove = tuple(
-                    symbol
-                    for symbol in self._symbols
-                    if symbol not in set(change.unsubscribe)
-                )
-                confirmation = await self._send_and_wait_for_ack(
+            if later_removals:
+                await self._apply_acknowledged_change(
                     "unsubscribe",
-                    change.unsubscribe,
-                    expected_after_remove,
+                    later_removals,
+                    on_confirmed,
                 )
-                self._symbols = confirmation.symbols
-                self._normalizer.clear_symbols(change.unsubscribe)
+            if set(self._symbols) != set(desired):
+                raise RuntimeError("alpaca_subscription_mismatch")
             final_confirmation = SubscriptionConfirmation(
                 desired,
                 desired,
             )
             self._symbols = final_confirmation.symbols
             return final_confirmation
+
+    async def _apply_acknowledged_change(
+        self,
+        action,
+        changed_symbols,
+        on_confirmed,
+    ):
+        if action == "subscribe":
+            expected = tuple(
+                dict.fromkeys(self._symbols + tuple(changed_symbols))
+            )
+        else:
+            removed = set(changed_symbols)
+            expected = tuple(
+                symbol
+                for symbol in self._symbols
+                if symbol not in removed
+            )
+        confirmation = await self._send_and_wait_for_ack(
+            action,
+            changed_symbols,
+            expected,
+        )
+        self._symbols = confirmation.symbols
+        if action == "unsubscribe":
+            self._normalizer.clear_symbols(changed_symbols)
+        await self._notify_confirmation(on_confirmed, confirmation)
+
+    @staticmethod
+    async def _notify_confirmation(callback, confirmation):
+        if callback is None:
+            return
+        result = callback(confirmation)
+        if inspect.isawaitable(result):
+            await result
 
     async def _send_and_wait_for_ack(
         self,
@@ -242,7 +321,16 @@ class AlpacaIEXProvider:
         self._pending_ack = pending
         try:
             await self._send_subscription_action(action, changed_symbols)
-            return await future
+            try:
+                return await asyncio.wait_for(
+                    future,
+                    timeout=self._ack_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                await self.close()
+                raise RuntimeError(
+                    "alpaca_subscription_timeout"
+                ) from None
         finally:
             if self._pending_ack is pending:
                 self._pending_ack = None

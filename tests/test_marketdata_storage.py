@@ -206,6 +206,65 @@ class IntradayStoreTest(unittest.TestCase):
         self.assertEqual(self.store.write_events((replayed_cancel,)), 0)
         self.assertEqual(self.store.read_effective_trades("alpaca", "AMD"), [])
 
+    def test_effective_replay_follows_correction_chain_and_corrected_cancel(self):
+        original = replace(
+            trade(sequence="trade-1"),
+            event_ts_ns=1784903400000000000,
+        )
+        first = TradeCorrectionEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=1),
+            received_ts=AT + timedelta(seconds=1),
+            event_ts_ns=1784903401000000000,
+            provider_trade_id="trade-1",
+            replacement_trade_id="trade-2",
+            price=151.0,
+            size=200.0,
+            exchange="V",
+            conditions=("@",),
+            session="regular",
+        )
+        second = TradeCorrectionEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=2),
+            received_ts=AT + timedelta(seconds=2),
+            event_ts_ns=1784903402000000000,
+            provider_trade_id="trade-2",
+            replacement_trade_id="trade-3",
+            price=152.0,
+            size=300.0,
+            exchange="V",
+            conditions=("T",),
+            session="regular",
+        )
+        self.store.write_events((original, first, second))
+
+        effective = self.store.read_effective_trades("alpaca", "AMD")
+        self.assertEqual(len(effective), 1)
+        self.assertEqual(effective[0].source_sequence, "trade-3")
+        self.assertEqual(
+            (effective[0].price, effective[0].size),
+            (152.0, 300.0),
+        )
+
+        cancel = TradeCancelEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=3),
+            received_ts=AT + timedelta(seconds=3),
+            event_ts_ns=1784903403000000000,
+            provider_trade_id="trade-3",
+            cancel_code="cancel",
+            session="regular",
+        )
+        self.store.write_event(cancel)
+        self.assertEqual(
+            self.store.read_effective_trades("alpaca", "AMD"),
+            [],
+        )
+
     def test_initialize_migrates_preceding_intraday_schema_without_touching_prices(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "legacy.db"
@@ -296,18 +355,26 @@ class IntradayStoreTest(unittest.TestCase):
 
     def test_new_session_closes_stale_crashed_session_intervals(self):
         old_heartbeat = AT - timedelta(minutes=1)
+        self.store.begin_collector_session(
+            session_id="old-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=old_heartbeat,
+            stale_after_seconds=30,
+        )
         self.store.open_subscription(
             "alpaca",
             ("AMD",),
             old_heartbeat,
             session_id="old-session",
         )
-        self.store.open_subscription(
-            "alpaca",
-            ("NVDA",),
-            old_heartbeat,
-            session_id="orphaned-session",
-        )
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "INSERT INTO subscription_intervals "
+                "(provider, symbol, started_at, finished_at, session_id) "
+                "VALUES ('alpaca', 'NVDA', ?, NULL, 'orphaned-session')",
+                (old_heartbeat.isoformat(),),
+            )
         self.store.write_collector_status(
             session_id="old-session",
             provider="alpaca",
@@ -359,6 +426,13 @@ class IntradayStoreTest(unittest.TestCase):
             never_configured["error"],
             "collector_not_configured",
         )
+        self.store.begin_collector_session(
+            session_id="session-1",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
         self.store.write_collector_status(
             session_id="session-1",
             provider="alpaca",
@@ -389,6 +463,188 @@ class IntradayStoreTest(unittest.TestCase):
         self.assertEqual(stale["state"], "stale")
         self.assertEqual(stale["error"], "collector_stale")
         self.assertEqual(stale["session_id"], "session-1")
+
+    def test_takeover_fences_old_status_heartbeat_and_interval_writes(self):
+        old_at = AT - timedelta(minutes=1)
+        self.store.begin_collector_session(
+            session_id="old-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=old_at,
+            stale_after_seconds=30,
+        )
+        self.store.open_subscription(
+            "alpaca",
+            ("AMD",),
+            old_at,
+            session_id="old-session",
+        )
+        self.store.begin_collector_session(
+            session_id="new-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
+
+        stale_status = {
+            "session_id": "old-session",
+            "provider": "alpaca",
+            "coverage": "iex",
+            "state": "running",
+            "confirmed_symbols": ("AMD",),
+            "last_event_received_at": None,
+            "disconnect_count": 0,
+            "error": None,
+            "heartbeat_at": AT + timedelta(seconds=1),
+            "queue_depth": 0,
+            "queue_high_water": 0,
+            "dropped_event_count": 0,
+            "undrained_event_count": 0,
+        }
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_session_fenced$",
+        ):
+            self.store.write_collector_status(**stale_status)
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_session_fenced$",
+        ):
+            self.store.open_subscription(
+                "alpaca",
+                ("NVDA",),
+                AT + timedelta(seconds=1),
+                session_id="old-session",
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_session_fenced$",
+        ):
+            self.store.close_subscription(
+                "alpaca",
+                ("AMD",),
+                AT + timedelta(seconds=1),
+                session_id="old-session",
+            )
+
+        status = self.store.read_collector_status(now=AT)
+        self.assertEqual(status["session_id"], "new-session")
+        self.assertEqual(status["state"], "connecting")
+        with sqlite3.connect(self.path) as connection:
+            open_rows = connection.execute(
+                "SELECT session_id, symbol FROM subscription_intervals "
+                "WHERE finished_at IS NULL"
+            ).fetchall()
+        self.assertEqual(open_rows, [])
+
+    def test_status_heartbeat_cannot_move_backward(self):
+        self.store.begin_collector_session(
+            session_id="session-1",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_status_time_regression$",
+        ):
+            self.store.begin_collector_session(
+                session_id="session-1",
+                provider="alpaca",
+                coverage="iex",
+                started_at=AT - timedelta(seconds=1),
+                stale_after_seconds=30,
+            )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_status_time_regression$",
+        ):
+            self.store.write_collector_status(
+                session_id="session-1",
+                provider="alpaca",
+                coverage="iex",
+                state="running",
+                confirmed_symbols=("AMD",),
+                last_event_received_at=None,
+                disconnect_count=0,
+                error=None,
+                heartbeat_at=AT - timedelta(seconds=1),
+                queue_depth=0,
+                queue_high_water=0,
+                dropped_event_count=0,
+                undrained_event_count=0,
+            )
+        self.assertEqual(
+            self.store.read_collector_status(now=AT)["heartbeat_at"],
+            AT.isoformat(),
+        )
+
+    def test_subscription_reconciliation_and_status_are_one_transaction(self):
+        self.store.begin_collector_session(
+            session_id="session-1",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
+        first_at = AT + timedelta(seconds=1)
+        self.store.reconcile_collector_subscription(
+            session_id="session-1",
+            provider="alpaca",
+            coverage="iex",
+            state="running",
+            confirmed_symbols=("AMD",),
+            reconciled_at=first_at,
+            last_event_received_at=None,
+            disconnect_count=0,
+            error=None,
+            queue_depth=0,
+            queue_high_water=0,
+            dropped_event_count=0,
+            undrained_event_count=0,
+        )
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """
+                CREATE TRIGGER reject_collector_status_update
+                BEFORE UPDATE ON collector_status
+                BEGIN
+                    SELECT RAISE(ABORT, 'forced status failure');
+                END
+                """
+            )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.reconcile_collector_subscription(
+                session_id="session-1",
+                provider="alpaca",
+                coverage="iex",
+                state="running",
+                confirmed_symbols=("AMD", "NVDA"),
+                reconciled_at=AT + timedelta(seconds=2),
+                last_event_received_at=None,
+                disconnect_count=0,
+                error=None,
+                queue_depth=0,
+                queue_high_water=0,
+                dropped_event_count=0,
+                undrained_event_count=0,
+            )
+
+        with sqlite3.connect(self.path) as connection:
+            open_symbols = connection.execute(
+                "SELECT symbol FROM subscription_intervals "
+                "WHERE finished_at IS NULL ORDER BY symbol"
+            ).fetchall()
+        self.assertEqual(open_symbols, [("AMD",)])
+        status = self.store.read_collector_status(
+            now=first_at,
+            stale_after_seconds=30,
+        )
+        self.assertEqual(status["subscribed_symbols"], ["AMD"])
+        self.assertEqual(status["heartbeat_at"], first_at.isoformat())
 
 
 if __name__ == "__main__":

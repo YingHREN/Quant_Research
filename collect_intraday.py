@@ -24,8 +24,6 @@ def build_collector(argv=None):
     args = parser.parse_args(argv)
     key = os.environ.get("ALPACA_API_KEY", "")
     secret = os.environ.get("ALPACA_API_SECRET", "")
-    if not key or not secret:
-        raise SystemExit("Alpaca credentials are required")
     collector = IntradayCollector(
         AlpacaIEXProvider(key, secret),
         IntradayStore(args.database),
@@ -34,11 +32,14 @@ def build_collector(argv=None):
     return collector
 
 
-def main():
+def main(argv=None):
+    collector = build_collector(argv)
     try:
-        asyncio.run(build_collector().run())
+        asyncio.run(collector.run())
     except KeyboardInterrupt:
-        pass
+        return
+    if collector.snapshot()["error"] == "missing_credentials":
+        raise SystemExit("Alpaca credentials are required")
 
 
 if __name__ == "__main__":

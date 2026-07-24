@@ -289,12 +289,20 @@ class TradeCorrectionEvent:
     event_ts_ns: int | None = None
     trading_date: str | None = None
     size_unit: str = "shares"
+    original_price: float | None = None
+    original_size: float | None = None
+    original_conditions: Tuple[str, ...] = ()
 
     def __post_init__(self):
         _require_utc(self.event_ts, "event_ts")
         _require_utc(self.received_ts, "received_ts")
         object.__setattr__(self, "symbol", _symbol(self.symbol))
         object.__setattr__(self, "conditions", tuple(self.conditions))
+        object.__setattr__(
+            self,
+            "original_conditions",
+            tuple(self.original_conditions),
+        )
         object.__setattr__(
             self,
             "event_ts_ns",
@@ -312,6 +320,19 @@ class TradeCorrectionEvent:
             raise ValueError("trade correction values must be finite")
         if self.price <= 0 or self.size <= 0:
             raise ValueError("trade correction price and size must be positive")
+        if (self.original_price is None) != (self.original_size is None):
+            raise ValueError(
+                "original correction price and size must be provided together"
+            )
+        if self.original_price is not None:
+            if not _finite(self.original_price, self.original_size):
+                raise ValueError(
+                    "original correction values must be finite"
+                )
+            if self.original_price <= 0 or self.original_size <= 0:
+                raise ValueError(
+                    "original correction price and size must be positive"
+                )
         if self.session not in SESSIONS:
             raise ValueError("session is invalid")
 
@@ -371,5 +392,6 @@ class MarketDataProvider(Protocol):
     async def update_subscription(
         self,
         request: SubscriptionRequest,
+        on_confirmed=None,
     ) -> SubscriptionConfirmation | None: ...
     async def close(self) -> None: ...

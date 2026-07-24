@@ -170,6 +170,181 @@ async def eventually(predicate, timeout=0.5):
 
 
 class AlpacaIEXProviderTest(unittest.IsolatedAsyncioTestCase):
+    async def test_full_pool_swap_frees_capacity_before_subscribing_replacement(self):
+        current = tuple(f"SYM{index:02d}" for index in range(30))
+        desired = current[:-1] + ("NEW",)
+        socket = QueueFakeSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+        )
+        initial_confirmed = asyncio.Event()
+
+        async def on_initial(_confirmation):
+            initial_confirmed.set()
+
+        stream = asyncio.create_task(
+            provider.stream_events(
+                SubscriptionRequest(current),
+                lambda _event: None,
+                on_initial,
+            )
+        )
+        await socket.feed([{"T": "success", "msg": "authenticated"}])
+        await socket.feed([
+            {
+                "T": "subscription",
+                "trades": list(current),
+                "quotes": list(current),
+            }
+        ])
+        await initial_confirmed.wait()
+
+        acknowledgements = []
+        update = asyncio.create_task(
+            provider.update_subscription(
+                SubscriptionRequest(desired),
+                acknowledgements.append,
+            )
+        )
+        await eventually(lambda: len(socket.sent) == 3)
+        self.assertEqual(
+            socket.sent[2],
+            {
+                "action": "unsubscribe",
+                "trades": [current[-1]],
+                "quotes": [current[-1]],
+            },
+        )
+        await socket.feed([
+            {
+                "T": "subscription",
+                "trades": list(current[:-1]),
+                "quotes": list(current[:-1]),
+            }
+        ])
+        await eventually(lambda: len(acknowledgements) == 1)
+        await eventually(lambda: len(socket.sent) == 4)
+        self.assertEqual(acknowledgements[0].symbols, current[:-1])
+        self.assertEqual(
+            socket.sent[3],
+            {
+                "action": "subscribe",
+                "trades": ["NEW"],
+                "quotes": ["NEW"],
+            },
+        )
+
+        await socket.feed([
+            {
+                "T": "subscription",
+                "trades": list(desired),
+                "quotes": list(desired),
+            }
+        ])
+        confirmation = await asyncio.wait_for(update, 0.2)
+        self.assertEqual(confirmation.symbols, desired)
+        self.assertEqual(
+            [value.symbols for value in acknowledgements],
+            [current[:-1], desired],
+        )
+        await socket.finish()
+        await stream
+
+    async def test_each_successful_update_ack_is_reported_before_later_failure(self):
+        socket = QueueFakeSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+        )
+        initial_confirmed = asyncio.Event()
+        stream = asyncio.create_task(
+            provider.stream_events(
+                SubscriptionRequest(("AMD",)),
+                lambda _event: None,
+                lambda _confirmation: initial_confirmed.set(),
+            )
+        )
+        await socket.feed([{"T": "success", "msg": "authenticated"}])
+        await socket.feed([
+            {"T": "subscription", "trades": ["AMD"], "quotes": ["AMD"]}
+        ])
+        await initial_confirmed.wait()
+
+        acknowledgements = []
+        update = asyncio.create_task(
+            provider.update_subscription(
+                SubscriptionRequest(("NVDA",)),
+                acknowledgements.append,
+            )
+        )
+        await eventually(lambda: len(socket.sent) == 3)
+        await socket.feed([
+            {
+                "T": "subscription",
+                "trades": ["AMD", "NVDA"],
+                "quotes": ["AMD", "NVDA"],
+            }
+        ])
+        await eventually(lambda: len(acknowledgements) == 1)
+        self.assertEqual(acknowledgements[0].symbols, ("AMD", "NVDA"))
+        await eventually(lambda: len(socket.sent) == 4)
+        await socket.feed([
+            {"T": "error", "code": 405, "msg": "sensitive remove failure"}
+        ])
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^alpaca_subscription_error$",
+        ):
+            await update
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^alpaca_subscription_error$",
+        ):
+            await stream
+
+    async def test_authentication_ack_timeout_has_stable_safe_code(self):
+        socket = QueueFakeSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+            ack_timeout_seconds=0.01,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^alpaca_authentication_timeout$",
+        ):
+            await provider.stream_events(
+                SubscriptionRequest(("AMD",)),
+                lambda _event: None,
+            )
+
+    async def test_initial_subscription_ack_timeout_has_stable_safe_code(self):
+        socket = QueueFakeSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+            ack_timeout_seconds=0.01,
+        )
+        stream = asyncio.create_task(
+            provider.stream_events(
+                SubscriptionRequest(("AMD",)),
+                lambda _event: None,
+            )
+        )
+        await socket.feed([{"T": "success", "msg": "authenticated"}])
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^alpaca_subscription_timeout$",
+        ):
+            await stream
+
     async def test_auth_subscribe_normalize_and_emit(self):
         socket = FakeSocket([
             [{"T": "success", "msg": "authenticated"}],
