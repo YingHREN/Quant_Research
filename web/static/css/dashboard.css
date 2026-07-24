@@ -263,6 +263,18 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .chart-placeholder, .volume-placeholder {
   padding-bottom: var(--chart-axis-gutter);
 }
+.chart-placeholder[data-pan-locked="false"],
+.volume-placeholder[data-pan-locked="false"] {
+  cursor: grab;
+}
+.chart-placeholder[data-pan-locked="false"]:active,
+.volume-placeholder[data-pan-locked="false"]:active {
+  cursor: grabbing;
+}
+.chart-placeholder[data-pan-locked="true"],
+.volume-placeholder[data-pan-locked="true"] {
+  cursor: crosshair;
+}
 .scenario-placeholder { height: 260px; margin-top: 14px; }
 .detail-strip, .empty-state { margin-top: 10px; padding: 11px; border-radius: 8px; background: #0b141c; color: var(--muted); font-size: 0.78rem; }
 .detail-heading { display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; }

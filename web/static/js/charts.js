@@ -206,7 +206,7 @@ function chartOptions(element) {
     rightPriceScale: { borderColor: COLORS.grid },
     handleScroll: {
       mouseWheel: true,
-      pressedMouseMove: false,
+      pressedMouseMove: true,
       horzTouchDrag: true,
       vertTouchDrag: true,
     },
@@ -342,6 +342,22 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let forecastMarkerData = null;
   let timelineAnchorDates = new Set();
   let paintingDetail = false;
+
+  function setPanLocked(locked) {
+    const panLocked = Boolean(locked);
+    const options = { handleScroll: { pressedMouseMove: !panLocked } };
+    priceChart.applyOptions(options);
+    volumeChart.applyOptions(options);
+    [priceEl, volumeEl].forEach((element) => {
+      if (element.dataset) {
+        element.dataset.panLocked = String(panLocked);
+      } else {
+        element.setAttribute?.("data-pan-locked", String(panLocked));
+      }
+    });
+  }
+
+  setPanLocked(false);
 
   function replaceTimelineAnchor(payload, reset = false) {
     if (reset) timelineAnchorDates = new Set();
@@ -577,11 +593,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     const row = rowForParam(param);
     if (lockedTime !== null) {
       lockedTime = null;
+      setPanLocked(false);
       paintDetail(row || rows.at(-1) || null, false);
       return;
     }
     if (!row) return;
     lockedTime = timeKey(row.time);
+    setPanLocked(true);
     paintDetail(row, true);
   }
 
@@ -698,6 +716,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
     replaceTimelineAnchor(payload, true);
     lockedTime = null;
+    setPanLocked(false);
     forecastIndex = indexForecasts(payload);
     factorsByDate = factorValuesByDate(payload);
     fetchedForecastIndexes = new Map();

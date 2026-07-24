@@ -1087,7 +1087,7 @@ class WebAssetTest(unittest.TestCase):
                 .replace(/\\s+/g, ' ').trim();
             }}
             globalThis.document = {{createElement: () => node()}};
-            function chart(name, chartOptions) {{
+            function chart(element, chartOptions) {{
               const scale = {{range: null, rangeHandler: null,
                 subscribeVisibleLogicalRangeChange(handler) {{ this.rangeHandler = handler; }},
                 unsubscribeVisibleLogicalRangeChange() {{ this.rangeHandler = null; }},
@@ -1096,7 +1096,8 @@ class WebAssetTest(unittest.TestCase):
                   this.range = next;
                   this.rangeHandler?.(next);
                 }}, fitContent() {{}}}};
-              const value = {{name, chartOptions, series: [], crosshairHandler: null, clickHandler: null,
+              const value = {{name: element.name, element, chartOptions, series: [],
+                crosshairHandler: null, clickHandler: null, appliedOptions: [],
                 crosshairPositions: [], programmaticEvents: 0, forecastDataEvents: 0,
                 forecastAutoScrolls: 0,
                 sharedTimes() {{
@@ -1135,13 +1136,13 @@ class WebAssetTest(unittest.TestCase):
                   }}
                 }},
                 clearCrosshairPosition() {{}},
-                applyOptions() {{}}, remove() {{}}}};
+                applyOptions(options) {{ this.appliedOptions.push(options); }}, remove() {{}}}};
               created.push(value); return value;
             }}
             globalThis.LightweightCharts = {{
               CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
               CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2}},
-              createChart(element, options) {{ return chart(element.name, options); }},
+              createChart(element, options) {{ return chart(element, options); }},
               createSeriesMarkers(_series, markers) {{
                 const controller = {{markers, calls: 1, setMarkers(next) {{
                   this.markers = next; this.calls += 1;
@@ -1212,8 +1213,8 @@ class WebAssetTest(unittest.TestCase):
             const {{createLinkedCharts}} = await import({json.dumps(chart_uri)});
             const detail = node();
             const controller = createLinkedCharts(
-              {{name: 'price', clientWidth: 800, clientHeight: 400}},
-              {{name: 'volume', clientWidth: 800, clientHeight: 180}}, detail,
+              {{name: 'price', clientWidth: 800, clientHeight: 400, dataset: {{}}}},
+              {{name: 'volume', clientWidth: 800, clientHeight: 180, dataset: {{}}}}, detail,
               {{locale: 'zh-CN'}},
             );
             const rows = Array.from({{length: 70}}, (_, index) => ({{
@@ -1255,8 +1256,10 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].forecastAutoScrolls, 0);
             assert.equal(created[0].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
             assert.equal(created[1].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
-            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, false);
-            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, false);
+            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, true);
+            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, true);
+            assert.equal(created[0].element.dataset.panLocked, 'false');
+            assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(created[0].chartOptions.handleScroll.mouseWheel, true);
             assert.equal(created[0].chartOptions.handleScroll.horzTouchDrag, true);
             assert.equal(created[0].chartOptions.handleScroll.vertTouchDrag, true);
@@ -1325,6 +1328,12 @@ class WebAssetTest(unittest.TestCase):
             created[0].crosshairHandler({{time: '2026-07-18'}});
             assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
             assert.match(textTree(detail), /已锁定/);
+            assert.deepEqual(created[0].appliedOptions.at(-1),
+              {{handleScroll: {{pressedMouseMove: false}}}});
+            assert.deepEqual(created[1].appliedOptions.at(-1),
+              {{handleScroll: {{pressedMouseMove: false}}}});
+            assert.equal(created[0].element.dataset.panLocked, 'true');
+            assert.equal(created[1].element.dataset.panLocked, 'true');
             const lockedPositionsBeforeSwitch = created[0].crosshairPositions.length;
             controller.setForecastHorizon(20);
             assert.equal(created[0].crosshairPositions.length, lockedPositionsBeforeSwitch + 1);
@@ -1341,6 +1350,12 @@ class WebAssetTest(unittest.TestCase):
             assert.match(textTree(detail), /Evidence status Not precomputed/);
 
             created[0].clickHandler({{time: '2026-07-18'}});
+            assert.deepEqual(created[0].appliedOptions.at(-1),
+              {{handleScroll: {{pressedMouseMove: true}}}});
+            assert.deepEqual(created[1].appliedOptions.at(-1),
+              {{handleScroll: {{pressedMouseMove: true}}}});
+            assert.equal(created[0].element.dataset.panLocked, 'false');
+            assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(forecastMarkers.markers.length, 1);
             assert.equal(forecastMarkers.markers[0].time, '2026-07-18');
             assert.doesNotMatch(forecastMarkers.markers[0].text, /Forecast direction/);
@@ -1402,6 +1417,14 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn(".quiet-button, .range-controls button, .forecast-controls button", css)
         self.assertNotIn("var(--up)", css)
         self.assertNotIn("var(--down)", css)
+
+    def test_chart_pan_state_has_distinct_cursors(self):
+        css = (STATIC / "css/dashboard.css").read_text()
+        self.assertIn('[data-pan-locked="false"]', css)
+        self.assertIn('[data-pan-locked="true"]', css)
+        self.assertIn("cursor: grab", css)
+        self.assertIn("cursor: grabbing", css)
+        self.assertIn("cursor: crosshair", css)
 
     def test_historical_forecast_request_states_are_visible(self):
         chart_uri = (STATIC / "js/charts.js").as_uri()
