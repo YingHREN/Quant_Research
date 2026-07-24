@@ -76,6 +76,14 @@ class MarketOverviewServiceTest(unittest.TestCase):
         self.assertEqual(payload["asof"], "2026-07-23")
         self.assertEqual(payload["evidence_tier"], "daily_proxy")
         self.assertEqual(payload["requested_horizon"], 5)
+        self.assertEqual(
+            set(payload["calibration"]),
+            {"opportunity", "downside_risk"},
+        )
+        self.assertEqual(
+            set(payload["calibration"]["opportunity"]),
+            {"5", "20", "60"},
+        )
 
     def test_empty_snapshot_returns_typed_unavailable_payload(self):
         repository = FakeRepository(fixture_histories())

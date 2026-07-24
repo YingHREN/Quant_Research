@@ -9,7 +9,13 @@ import pandas as pd
 
 from research.market_context import (
     SUPPORTED_HORIZONS,
+    build_group_score_frame,
     build_market_context,
+)
+from research.market_outcomes import (
+    ScoreCalibration,
+    attach_market_outcomes,
+    calibrate_score_probability,
 )
 from web.market_groups import market_group
 
@@ -74,6 +80,20 @@ class MarketOverviewService:
                 group,
                 horizon,
             )
+            score_frame = build_group_score_frame(
+                snapshot.histories,
+                group,
+            )
+            outcome_frame = attach_market_outcomes(
+                score_frame,
+                snapshot.histories,
+                horizons=SUPPORTED_HORIZONS,
+            )
+            payload["calibration"] = _calibration_payload(
+                payload,
+                outcome_frame,
+                normalized_asof,
+            )
 
         with self._lock:
             self._cache[key] = deepcopy(payload)
@@ -109,3 +129,38 @@ def _empty_payload(horizon, sector):
         "changed_events": [],
         "calibration": {},
     }
+
+
+def _calibration_payload(payload, outcome_frame, asof):
+    selected = payload.get("selected_group", {})
+    current_scores = {
+        "opportunity": selected.get(
+            "reversal_opportunity",
+            {},
+        ).get("score"),
+        "downside_risk": selected.get(
+            "downside_risk",
+            {},
+        ).get("score"),
+    }
+    result = {}
+    for outcome, current_score in current_scores.items():
+        result[outcome] = {}
+        for horizon in SUPPORTED_HORIZONS:
+            if current_score is None:
+                calibration = ScoreCalibration(
+                    None,
+                    "score_unavailable",
+                    0,
+                    None,
+                )
+            else:
+                calibration = calibrate_score_probability(
+                    outcome_frame,
+                    current_score,
+                    asof,
+                    horizon,
+                    outcome,
+                )
+            result[outcome][str(horizon)] = calibration.to_dict()
+    return result
