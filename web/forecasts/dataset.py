@@ -22,8 +22,17 @@ MARKET_ATOMIC_FEATURE_COLUMNS = (
     "pressure_distribution_day",
     "pressure_failed_breakout",
     "qqq_trend_state",
+    "qqq_close_vs_ema20_pct",
+    "qqq_return_5",
+    "qqq_return_20",
+    "qqq_volume_ratio",
+    "sector_trend_state",
     "sector_relative_strength_20",
     "stock_sector_relative_strength_20",
+    "early_prior_session_selloff",
+    "early_current_price_acceptance",
+    "early_descending_trendline_proximity",
+    "early_current_volume_support",
 )
 FEATURE_COLUMNS = (
     "close_vs_ema20_pct",

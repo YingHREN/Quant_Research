@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from research.market_pressure import Evidence, build_pressure_rows
+from research.early_reversal import build_early_reversal_rows
 from research.reversal import build_reversal_rows
 from web.market_groups import (
     REFERENCE_TICKERS,
@@ -76,8 +77,19 @@ _REVERSAL_ATOMIC_COLUMNS = (
 )
 _CROSS_MARKET_ATOMIC_COLUMNS = (
     "qqq_trend_state",
+    "qqq_close_vs_ema20_pct",
+    "qqq_return_5",
+    "qqq_return_20",
+    "qqq_volume_ratio",
+    "sector_trend_state",
     "sector_relative_strength_20",
     "stock_sector_relative_strength_20",
+)
+_EARLY_REVERSAL_ATOMIC_COLUMNS = (
+    "early_prior_session_selloff",
+    "early_current_price_acceptance",
+    "early_descending_trendline_proximity",
+    "early_current_volume_support",
 )
 
 
@@ -210,7 +222,9 @@ def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
         (*group.constituent_tickers, *group.related_tickers)
     )
     qqq_trend = _qqq_trend_series(prepared.get("QQQ"))
+    qqq_continuous = _qqq_continuous_frame(prepared.get("QQQ"))
     sector = _sector_composite(prepared, group)
+    sector_trend = _price_trend_series(sector)
     sector_relative = _relative_strength_series(
         sector,
         (
@@ -227,15 +241,33 @@ def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
             frame[f"pressure_{column}"] = item.pressure[column].astype(float)
         for column in _REVERSAL_ATOMIC_COLUMNS:
             frame[column] = item.reversal[column].astype(float)
+        early = pd.DataFrame(
+            build_early_reversal_rows(
+                item.history,
+                item.reversal.to_dict(orient="records"),
+            ),
+            index=item.history.index,
+        )
+        for column in _EARLY_REVERSAL_ATOMIC_COLUMNS:
+            frame[column] = early[column].astype(float)
         frame["qqq_trend_state"] = _causal_reindex(
             qqq_trend,
             frame.index,
         )
-        frame["sector_relative_strength_20"] = _causal_reindex(
-            sector_relative,
-            frame.index,
-        )
+        for column in qqq_continuous:
+            frame[column] = _causal_reindex(
+                qqq_continuous[column],
+                frame.index,
+            )
         if ticker in group_tickers:
+            frame["sector_trend_state"] = _causal_reindex(
+                sector_trend,
+                frame.index,
+            )
+            frame["sector_relative_strength_20"] = _causal_reindex(
+                sector_relative,
+                frame.index,
+            )
             stock_relative = _relative_strength_series(
                 item.history["Close"].astype(float),
                 sector,
@@ -246,6 +278,8 @@ def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
                 frame.index,
             )
         else:
+            frame["sector_trend_state"] = np.nan
+            frame["sector_relative_strength_20"] = np.nan
             frame["stock_sector_relative_strength_20"] = np.nan
         frames[ticker] = frame
     if not frames:
@@ -255,6 +289,7 @@ def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
             )
             + _REVERSAL_ATOMIC_COLUMNS
             + _CROSS_MARKET_ATOMIC_COLUMNS
+            + _EARLY_REVERSAL_ATOMIC_COLUMNS
         )
     return pd.concat(
         frames,
@@ -276,6 +311,44 @@ def _qqq_trend_series(item):
         default=0.0,
     )
     return pd.Series(values, index=close.index, dtype=float).where(valid)
+
+
+def _price_trend_series(close):
+    if close is None or close.empty:
+        return None
+    close = close.sort_index().astype(float)
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    sma50 = close.rolling(50, min_periods=50).mean()
+    valid = ema20.notna() & sma50.notna()
+    values = np.select(
+        (
+            valid & (close > ema20) & (ema20 > sma50),
+            valid & (close < ema20) & (ema20 < sma50),
+        ),
+        (1.0, -1.0),
+        default=0.0,
+    )
+    return pd.Series(values, index=close.index, dtype=float).where(valid)
+
+
+def _qqq_continuous_frame(item):
+    columns = (
+        "qqq_close_vs_ema20_pct",
+        "qqq_return_5",
+        "qqq_return_20",
+        "qqq_volume_ratio",
+    )
+    if item is None:
+        return pd.DataFrame(columns=columns, dtype=float)
+    close = item.history["Close"].astype(float)
+    result = pd.DataFrame(index=close.index)
+    result["qqq_close_vs_ema20_pct"] = (
+        close / item.ema20.replace(0.0, np.nan) - 1.0
+    ) * 100.0
+    result["qqq_return_5"] = close.pct_change(5, fill_method=None)
+    result["qqq_return_20"] = close.pct_change(20, fill_method=None)
+    result["qqq_volume_ratio"] = item.pressure["volume_ratio"].astype(float)
+    return result.loc[:, columns].where(np.isfinite(result), np.nan)
 
 
 def _relative_strength_series(first, second, window):

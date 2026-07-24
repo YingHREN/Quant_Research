@@ -187,6 +187,48 @@ class MarketContextTest(unittest.TestCase):
         self.assertNotIn("downside_risk_score", rows)
         self.assertNotIn("market_posture_score", rows)
 
+    def test_atomic_rows_include_continuous_market_sector_and_early_evidence(self):
+        histories = {
+            "QQQ": rising(slope=0.15),
+            "SOXX": rising(slope=0.25),
+            "SMH": rising(slope=0.30),
+            "AMD": rising(slope=0.40),
+            "OTHER": rising(slope=0.10),
+        }
+
+        rows = build_atomic_model_rows(
+            histories,
+            market_group("semiconductor"),
+        )
+        latest = rows.loc[("AMD", histories["AMD"].index[-1])]
+
+        for column in (
+            "qqq_close_vs_ema20_pct",
+            "qqq_return_5",
+            "qqq_return_20",
+            "qqq_volume_ratio",
+            "sector_trend_state",
+            "early_prior_session_selloff",
+            "early_current_price_acceptance",
+            "early_descending_trendline_proximity",
+            "early_current_volume_support",
+        ):
+            self.assertIn(column, rows)
+            self.assertTrue(np.isfinite(latest[column]))
+        self.assertGreater(latest["qqq_return_20"], latest["qqq_return_5"])
+        self.assertEqual(latest["sector_trend_state"], 1.0)
+        self.assertTrue(
+            rows.loc[:, "early_prior_session_selloff"].dropna().isin((0.0, 1.0)).all()
+        )
+        self.assertTrue(
+            np.isnan(
+                rows.loc[
+                    ("OTHER", histories["OTHER"].index[-1]),
+                    "stock_sector_relative_strength_20",
+                ]
+            )
+        )
+
     def test_group_score_frame_is_point_in_time_and_multiindexed(self):
         histories = {
             "QQQ": rising(periods=70),

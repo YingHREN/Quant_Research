@@ -150,8 +150,17 @@ class ForecastDatasetTest(unittest.TestCase):
             "pressure_distribution_day",
             "pressure_failed_breakout",
             "qqq_trend_state",
+            "qqq_close_vs_ema20_pct",
+            "qqq_return_5",
+            "qqq_return_20",
+            "qqq_volume_ratio",
+            "sector_trend_state",
             "sector_relative_strength_20",
             "stock_sector_relative_strength_20",
+            "early_prior_session_selloff",
+            "early_current_price_acceptance",
+            "early_descending_trendline_proximity",
+            "early_current_volume_support",
         ):
             self.assertIn(key, FEATURE_COLUMNS)
             self.assertTrue(np.isfinite(row[key]) or np.isnan(row[key]))
@@ -173,6 +182,11 @@ class ForecastDatasetTest(unittest.TestCase):
         after = build_feature_frame(append_future_benchmark_spike(histories))
         cross_market = (
             "qqq_trend_state",
+            "qqq_close_vs_ema20_pct",
+            "qqq_return_5",
+            "qqq_return_20",
+            "qqq_volume_ratio",
+            "sector_trend_state",
             "sector_relative_strength_20",
             "stock_sector_relative_strength_20",
         )
