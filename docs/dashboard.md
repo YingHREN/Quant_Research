@@ -26,6 +26,25 @@ under the local-storage key `quant-dashboard-locale`. Chart ticks are always
 `MM-DD`, while details and observation dates are always ISO `YYYY-MM-DD`; both
 formats are deliberately independent of browser and operating-system locale.
 
+## Free intraday collector
+
+The collector is a separate foreground process so opening or hovering the
+dashboard cannot change subscriptions:
+
+```bash
+source env.sh
+export ALPACA_API_KEY="..."
+export ALPACA_API_SECRET="..."
+./venv/bin/python collect_intraday.py \
+  --selected AMD --peer NVDA --peer AVGO --candidate NBIS
+```
+
+This phase uses Alpaca's free IEX feed, not the full US consolidated market.
+Trade direction is inferred from the contemporaneous quote midpoint and then
+the tick rule; it is not exchange-provided aggressor direction. Inspect
+`GET /api/market-data/status` for coverage, active symbols, freshness, and
+disconnects.
+
 ## Update market data
 
 `Update market data` is an explicit, price-only refresh. It fetches Tiingo EOD
