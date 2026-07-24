@@ -49,6 +49,8 @@ class SubscriptionRequest:
     max_symbols: int = 30
 
     def __init__(self, symbols: Sequence[str], max_symbols: int = 30):
+        if isinstance(max_symbols, bool) or not isinstance(max_symbols, int) or not 1 <= max_symbols <= 30:
+            raise ValueError("max_symbols must be a positive integer at most 30")
         normalized = tuple(dict.fromkeys(_symbol(value) for value in symbols))
         if len(normalized) > max_symbols:
             raise ValueError(f"subscription supports at most {max_symbols} symbols")
@@ -75,6 +77,7 @@ class TradeEvent:
         _require_utc(self.event_ts, "event_ts")
         _require_utc(self.received_ts, "received_ts")
         object.__setattr__(self, "symbol", _symbol(self.symbol))
+        object.__setattr__(self, "conditions", tuple(self.conditions))
         if self.price <= 0 or self.size <= 0:
             raise ValueError("trade price and size must be positive")
         if self.direction not in DIRECTIONS or self.direction_source not in DIRECTION_SOURCES:
@@ -124,6 +127,12 @@ class BarEvent:
     trade_count: int
     vwap: float | None
     locally_aggregated: bool
+
+    def __post_init__(self):
+        _require_utc(self.start_ts, "start_ts")
+        _require_utc(self.end_ts, "end_ts")
+        _require_utc(self.received_ts, "received_ts")
+        object.__setattr__(self, "symbol", _symbol(self.symbol))
 
 
 MarketEvent = Union[TradeEvent, QuoteEvent, BarEvent]
