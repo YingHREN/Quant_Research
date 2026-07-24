@@ -57,6 +57,14 @@ class MarketAnalysisSnapshot:
     histories: dict[str, pd.DataFrame]
 
 
+@dataclass(frozen=True)
+class MarketOverviewSnapshot:
+    """One consistent read snapshot for market and sector analysis."""
+
+    observation_date: str | None
+    histories: dict[str, pd.DataFrame]
+
+
 class MarketDataRepository:
     """Repository for read-only queries and explicit per-ticker price writes."""
 
@@ -199,6 +207,40 @@ class MarketDataRepository:
         with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
         return self._histories_from_rows(rows)
+
+    def load_market_overview_snapshot(self, asof=None):
+        """Load all locally available histories in one read-only query."""
+        cutoff = iso_date(asof)
+        query = """
+            SELECT ticker AS Ticker,
+                   date AS Date,
+                   open AS Open,
+                   high AS High,
+                   low AS Low,
+                   close AS Close,
+                   volume AS Volume
+            FROM prices
+        """
+        params = ()
+        if cutoff is not None:
+            query += " WHERE date <= ?"
+            params = (cutoff,)
+        query += " ORDER BY ticker ASC, date ASC"
+        with self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+        histories = self._histories_from_rows(rows)
+        latest = max(
+            (
+                history.index[-1]
+                for history in histories.values()
+                if not history.empty
+            ),
+            default=None,
+        )
+        return MarketOverviewSnapshot(
+            observation_date=iso_date(latest),
+            histories=histories,
+        )
 
     def load_analysis_snapshot(self, ticker):
         """Load summaries and the selected-date peer cohort in one SQL snapshot."""

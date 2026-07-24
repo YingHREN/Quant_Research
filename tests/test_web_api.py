@@ -1154,6 +1154,32 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.mimetype, "text/html")
         self.assertIn("<html", response.get_data(as_text=True))
 
+    def test_market_overview_route_validates_horizon_and_sector(self):
+        service = mock.Mock()
+        app = create_app(
+            test_config(MARKET_OVERVIEW_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+        client = app.test_client()
+
+        bad_horizon = client.get("/api/market-overview?horizon=7")
+        bad_sector = client.get(
+            "/api/market-overview?sector=secret/path"
+        )
+
+        self.assertEqual(bad_horizon.status_code, 400)
+        self.assertEqual(
+            bad_horizon.get_json()["error"]["code"],
+            "invalid_horizon",
+        )
+        self.assertEqual(bad_sector.status_code, 400)
+        self.assertEqual(
+            bad_sector.get_json()["error"]["code"],
+            "invalid_sector",
+        )
+        service.build.assert_not_called()
+
 
 class ForecastServiceTest(unittest.TestCase):
     def setUp(self):

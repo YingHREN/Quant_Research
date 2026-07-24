@@ -27,9 +27,9 @@ from werkzeug.exceptions import HTTPException
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
-from web.forecasts.base import UnavailableReason
+from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
 from web.market_calendar import session_offset
-from web.market_groups import REFERENCE_TICKERS
+from web.market_groups import REFERENCE_TICKERS, market_group
 from web.services.analysis import AnalysisContext
 from web.services.forecasts import (
     ForecastRevisionChanged,
@@ -42,6 +42,7 @@ from web.services.market_data import (
     MarketDataUnavailable,
     UnknownTicker,
 )
+from web.services.market_overview import MarketOverviewService
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
@@ -89,6 +90,18 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             on_success=getattr(forecast_service, "invalidate", None),
             reference_tickers=REFERENCE_TICKERS,
         )
+    market_overview_service = flask_app.config.get(
+        "MARKET_OVERVIEW_SERVICE"
+    )
+    if market_overview_service is None:
+        market_overview_service = MarketOverviewService(
+            repository,
+            revision_getter=lambda: getattr(
+                forecast_service,
+                "database_revision",
+                0,
+            ),
+        )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
         factor_registry = build_default_registry()
@@ -113,10 +126,50 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions["dashboard_intraday_status_service"] = intraday_status_service
+    flask_app.extensions[
+        "dashboard_market_overview_service"
+    ] = market_overview_service
 
     @flask_app.get("/")
     def index():
         return render_template("index.html", rows=None, mkt_ok=None, query="")
+
+    @flask_app.get("/market")
+    def market_dashboard():
+        return render_template("market.html")
+
+    @flask_app.get("/api/market-overview")
+    def market_overview():
+        raw_horizon = request.args.get("horizon", "5")
+        try:
+            horizon = int(raw_horizon)
+        except (TypeError, ValueError):
+            return _safe_error(
+                "invalid_horizon",
+                "Market horizon is invalid",
+                400,
+            )
+        if horizon not in SUPPORTED_HORIZONS:
+            return _safe_error(
+                "invalid_horizon",
+                "Market horizon is invalid",
+                400,
+            )
+        sector = request.args.get("sector", "semiconductor")
+        try:
+            market_group(sector)
+        except ValueError:
+            return _safe_error(
+                "invalid_sector",
+                "Market sector is invalid",
+                400,
+            )
+        payload = market_overview_service.build(
+            asof=request.args.get("asof"),
+            horizon=horizon,
+            sector=sector,
+        )
+        return _json_response(payload)
 
     @flask_app.get("/api/universe")
     def universe():
