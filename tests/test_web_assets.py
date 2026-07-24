@@ -1203,6 +1203,10 @@ class WebAssetTest(unittest.TestCase):
                 timeScale: () => scale,
                 addSeries(type, options) {{
                   const series = {{type, options, data: [], setData(data) {{
+                    const replacingLoadedCandles = type === 'candles' && this.data.length > 0;
+                    if (replacingLoadedCandles && value.crosshairHandler && data.length) {{
+                      value.crosshairHandler({{time: data[0].time}});
+                    }}
                     this.data = data;
                     if (options.lineWidth === 3 && data.length && scale.range
                         && chartOptions.timeScale.shiftVisibleRangeOnNewBar !== false) {{
@@ -1224,6 +1228,10 @@ class WebAssetTest(unittest.TestCase):
                 unsubscribeCrosshairMove() {{}}, subscribeClick(handler) {{ this.clickHandler = handler; }},
                 unsubscribeClick() {{}},
                 setCrosshairPosition(value, time, series) {{
+                  if (!Number.isFinite(value)
+                      || !series.data.some((point) => point.time === time)) {{
+                    throw new Error('crosshair target must exist in the active series');
+                  }}
                   this.crosshairPositions.push({{value, time, series}});
                   if (this.crosshairHandler && this.programmaticEvents < 8) {{
                     this.programmaticEvents += 1;
@@ -1647,6 +1655,16 @@ class WebAssetTest(unittest.TestCase):
               evaluation: payload.forecast_evaluation['20']}});
             assert.match(textTree(mixedEn), /Unavailable reason No available forecasts/);
             assert.equal(controller.setForecastHorizon(40), 60);
+
+            assert.doesNotThrow(() => controller.setChartData({{chart: [{{
+              time: '2026-08-03', open: 201, high: 204, low: 199, close: 203,
+              volume: 2100, volume_ma20: 1900, volume_ratio: 1.1,
+            }}]}}));
+            assert.equal(created[0].series[0].data[0].time, '2026-08-03');
+            assert.equal(
+              created[1].series.find((series) => series.type === 'histogram').data[0].time,
+              '2026-08-03',
+            );
         """
         result = subprocess.run(
             ["node", "--input-type=module", "-e", script],

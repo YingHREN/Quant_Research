@@ -339,6 +339,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let shapeMarkerData = [];
   let forecastMarkerData = null;
   let paintingDetail = false;
+  let updatingChartData = false;
 
   function setPanLocked(locked) {
     const panLocked = Boolean(locked);
@@ -536,7 +537,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function handleCrosshair(source) {
     return (param) => {
-      if (destroyed || paintingDetail) return;
+      if (destroyed || paintingDetail || updatingChartData) return;
       if (pendingCrosshairEvents.has(source)) {
         const expectedTime = pendingCrosshairEvents.get(source);
         const eventTime = timeKey(param && param.time);
@@ -686,40 +687,48 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function setChartData(payload) {
     if (destroyed) return;
-    lastPayload = payload;
-    rows = Array.isArray(payload && payload.chart) ? payload.chart : [];
-    rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
-    lockedTime = null;
-    setPanLocked(false);
-    forecastIndex = indexForecasts(payload);
-    factorsByDate = factorValuesByDate(payload);
-    fetchedForecastIndexes = new Map();
-    requestedForecastDates = new Set();
-    forecastRequestStates = new Map();
-    if (forecastRequestTimer !== null) clearTimeout(forecastRequestTimer);
-    forecastRequestTimer = null;
-    forecastRequestTimerDate = null;
+    updatingChartData = true;
+    try {
+      lastPayload = payload;
+      rows = Array.isArray(payload && payload.chart) ? payload.chart : [];
+      rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
+      lockedTime = null;
+      pendingCrosshairEvents.clear();
+      priceChart.clearCrosshairPosition();
+      volumeChart.clearCrosshairPosition();
+      setPanLocked(false);
+      forecastIndex = indexForecasts(payload);
+      factorsByDate = factorValuesByDate(payload);
+      fetchedForecastIndexes = new Map();
+      requestedForecastDates = new Set();
+      forecastRequestStates = new Map();
+      if (forecastRequestTimer !== null) clearTimeout(forecastRequestTimer);
+      forecastRequestTimer = null;
+      forecastRequestTimerDate = null;
 
-    candleSeries.setData(rows.map((row) => ({
-      time: row.time,
-      open: row.open,
-      high: row.high,
-      low: row.low,
-      close: row.close,
-    })));
-    volumeSeries.setData(rows.map((row) => ({
-      time: row.time,
-      value: row.volume,
-      color: row.close >= row.open ? COLORS.up : COLORS.down,
-    })));
-    ema20Series.setData(seriesPoints(rows, "ema20"));
-    sma50Series.setData(seriesPoints(rows, "sma50"));
-    sma200Series.setData(seriesPoints(rows, "sma200"));
-    trendlineSeries.setData(whitespaceSeriesPoints(rows, "descending_trendline"));
-    volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
-    volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
+      candleSeries.setData(rows.map((row) => ({
+        time: row.time,
+        open: row.open,
+        high: row.high,
+        low: row.low,
+        close: row.close,
+      })));
+      volumeSeries.setData(rows.map((row) => ({
+        time: row.time,
+        value: row.volume,
+        color: row.close >= row.open ? COLORS.up : COLORS.down,
+      })));
+      ema20Series.setData(seriesPoints(rows, "ema20"));
+      sma50Series.setData(seriesPoints(rows, "sma50"));
+      sma200Series.setData(seriesPoints(rows, "sma200"));
+      trendlineSeries.setData(whitespaceSeriesPoints(rows, "descending_trendline"));
+      volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
+      volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
-    renderDecorations(payload);
+      renderDecorations(payload);
+    } finally {
+      updatingChartData = false;
+    }
 
     paintDetail(rows.at(-1) || null, false);
     setRange(selectedRange);
