@@ -54,9 +54,45 @@ def synthetic_frame(periods=18, tickers=("AAA", "BBB")):
 
 
 class RidgeForecastProviderTest(unittest.TestCase):
+    def test_bearish_turn_risk_overrides_bullish_raw_prediction(self):
+        frame, dates = synthetic_frame(periods=100)
+        asof = dates[70]
+        risk_features = {
+            "close_vs_ema20_pct": -7.95,
+            "pivot_distance_pct": -20.06,
+            "volume_ratio": 1.73,
+            "volume_change": 1.38,
+            "pressure_close_location": -0.89,
+            "pressure_signed_volume_proxy": -1.61,
+            "pressure_distribution_day": 1.0,
+            "stock_sector_relative_strength_20": -0.11,
+        }
+        for feature, value in risk_features.items():
+            frame.loc[("AAA", asof), feature] = value
+
+        class BullishRawPredictionProvider(RidgeForecastProvider):
+            def _fit_predict(self, training, target, forecast_row):
+                return 0.1269
+
+        result = BullishRawPredictionProvider(
+            frame,
+            minimum_samples=8,
+        ).forecast_series("AAA", (asof,), (20,))[0]
+
+        self.assertTrue(
+            hasattr(result, "raw_direction"),
+            "forecast must preserve the unadjusted model direction",
+        )
+        self.assertEqual(result.raw_direction, "up")
+        self.assertEqual(result.direction, "down")
+        self.assertGreaterEqual(result.bearish_turn_score, 70)
+        self.assertEqual(result.direction_adjustment_reason, "bearish_turn_risk")
+        self.assertIn("distribution_volume", result.bearish_turn_conditions)
+        self.assertIn("ema20_breakdown", result.bearish_turn_conditions)
+
     def test_atomic_market_feature_schema_advances_model_version(self):
         self.assertEqual(MODEL_KEY, "ridge_direction_v1")
-        self.assertEqual(MODEL_VERSION, "v3")
+        self.assertEqual(MODEL_VERSION, "v4")
 
     def test_prediction_is_deterministic_and_singular_features_are_stable(self):
         frame, dates = synthetic_frame()

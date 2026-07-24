@@ -57,6 +57,10 @@ class ForecastResult:
     model_key: str
     model_version: str
     unavailable_reason: UnavailableReason | str | None = None
+    raw_direction: str | None = None
+    bearish_turn_score: float = 0.0
+    direction_adjustment_reason: str | None = None
+    bearish_turn_conditions: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self):
         ticker = _required_string(self.ticker, "ticker")
@@ -80,6 +84,21 @@ class ForecastResult:
         asof_date = _optional_date(self.asof_date, "asof_date")
         training_cutoff = _optional_date(self.training_cutoff, "training_cutoff")
         reason = _normalize_reason(self.unavailable_reason)
+        raw_direction = self.direction if self.raw_direction is None else self.raw_direction
+        if raw_direction not in FORECAST_DIRECTIONS:
+            raise ValueError(f"invalid raw forecast direction: {raw_direction}")
+        bearish_turn_score = _optional_number(
+            self.bearish_turn_score,
+            "bearish_turn_score",
+        )
+        if bearish_turn_score is None or not 0.0 <= bearish_turn_score <= 100.0:
+            raise ValueError("bearish_turn_score must be between 0 and 100")
+        adjustment_reason = self.direction_adjustment_reason
+        if adjustment_reason not in (None, "bearish_turn_risk"):
+            raise ValueError("invalid direction_adjustment_reason")
+        conditions = tuple(self.bearish_turn_conditions)
+        if any(not isinstance(value, str) or not value for value in conditions):
+            raise ValueError("bearish_turn_conditions must contain non-empty strings")
         if asof_date is None:
             raise ValueError("forecasts require asof_date")
         if int(self.training_sample_count) > 0 and training_cutoff is None:
@@ -92,6 +111,8 @@ class ForecastResult:
         if self.direction != "unavailable" and reason is not None:
             raise ValueError("available forecasts cannot have unavailable_reason")
         if self.direction == "unavailable":
+            if raw_direction != "unavailable":
+                raise ValueError("unavailable forecasts require unavailable raw_direction")
             if predicted_return is not None or up_probability is not None:
                 raise ValueError("unavailable forecasts cannot contain predictions")
             if self.confidence_status != "unavailable":
@@ -99,6 +120,8 @@ class ForecastResult:
             if confidence_reason is not None:
                 raise ValueError("unavailable forecasts cannot have confidence_reason")
         else:
+            if raw_direction == "unavailable":
+                raise ValueError("available forecasts require available raw_direction")
             if predicted_return is None:
                 raise ValueError("available forecasts require a finite predicted_return")
             if int(self.training_sample_count) <= 0:
@@ -113,6 +136,10 @@ class ForecastResult:
                 raise ValueError("calibrated forecasts cannot have confidence_reason")
             if self.confidence_status == "uncalibrated" and confidence_reason is None:
                 raise ValueError("uncalibrated forecasts require confidence_reason")
+        if adjustment_reason is None and raw_direction != self.direction:
+            raise ValueError("changed forecast direction requires an adjustment reason")
+        if adjustment_reason is not None and raw_direction == self.direction:
+            raise ValueError("direction adjustment requires a changed direction")
         object.__setattr__(self, "ticker", ticker)
         object.__setattr__(self, "model_key", model_key)
         object.__setattr__(self, "model_version", model_version)
@@ -124,6 +151,10 @@ class ForecastResult:
         object.__setattr__(self, "asof_date", asof_date)
         object.__setattr__(self, "training_cutoff", training_cutoff)
         object.__setattr__(self, "unavailable_reason", reason)
+        object.__setattr__(self, "raw_direction", raw_direction)
+        object.__setattr__(self, "bearish_turn_score", bearish_turn_score)
+        object.__setattr__(self, "direction_adjustment_reason", adjustment_reason)
+        object.__setattr__(self, "bearish_turn_conditions", conditions)
 
     def to_dict(self):
         """Return a fresh JSON-safe representation of this result."""
@@ -132,6 +163,7 @@ class ForecastResult:
             "asof_date": iso_date(self.asof_date),
             "horizon_sessions": self.horizon_sessions,
             "direction": self.direction,
+            "raw_direction": self.raw_direction,
             "predicted_return": json_safe(self.predicted_return),
             "up_probability": json_safe(self.up_probability),
             "confidence_status": self.confidence_status,
@@ -140,6 +172,9 @@ class ForecastResult:
             "training_cutoff": iso_date(self.training_cutoff),
             "model_key": self.model_key,
             "model_version": self.model_version,
+            "bearish_turn_score": json_safe(self.bearish_turn_score),
+            "direction_adjustment_reason": self.direction_adjustment_reason,
+            "bearish_turn_conditions": list(self.bearish_turn_conditions),
             "unavailable_reason": (
                 None
                 if self.unavailable_reason is None

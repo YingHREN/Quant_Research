@@ -1262,6 +1262,7 @@ class ForecastServiceTest(unittest.TestCase):
                 "asof_date",
                 "horizon_sessions",
                 "direction",
+                "raw_direction",
                 "predicted_return",
                 "up_probability",
                 "confidence_status",
@@ -1270,6 +1271,9 @@ class ForecastServiceTest(unittest.TestCase):
                 "training_cutoff",
                 "model_key",
                 "model_version",
+                "bearish_turn_score",
+                "direction_adjustment_reason",
+                "bearish_turn_conditions",
                 "unavailable_reason",
             },
         )

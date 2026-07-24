@@ -1381,6 +1381,45 @@ class WebAssetTest(unittest.TestCase):
               date: '2026-07-16', forecast: null, requestState: 'error'}});
             assert.match(textTree(requestFailureDetail), /2026-07-16 的历史预测计算失败/);
 
+            const adjustedDetail = node();
+            const adjustedForecast = {{
+              direction: 'down',
+              raw_direction: 'up',
+              predicted_return: 0.1269,
+              up_probability: null,
+              confidence_status: 'uncalibrated',
+              confidence_reason: 'insufficient_calibration_samples',
+              training_sample_count: 90076,
+              training_cutoff: '2026-06-30',
+              model_key: 'ridge_direction_v1',
+              model_version: 'v4',
+              bearish_turn_score: 100,
+              direction_adjustment_reason: 'bearish_turn_risk',
+              bearish_turn_conditions: [
+                'distribution_volume',
+                'ema20_breakdown',
+                'abnormal_volume',
+              ],
+            }};
+            forecasts.renderForecastDetail(adjustedDetail, {{
+              locale: 'zh-CN',
+              horizon: 20,
+              date: '2026-07-01',
+              forecast: adjustedForecast,
+            }});
+            const adjustedText = textTree(adjustedDetail);
+            assert.match(adjustedText, /方向：下跌/);
+            assert.match(adjustedText, /顶部反转风险 100分/);
+            assert.match(adjustedText, /原模型方向 上涨/);
+            assert.ok(adjustedText.includes('原模型预测收益率 +12.69%'));
+            assert.match(adjustedText, /放量派发/);
+            assert.match(adjustedText, /跌破 EMA20/);
+            assert.deepEqual(
+              forecasts.forecastMarker(adjustedForecast, '2026-07-01', 'zh-CN'),
+              {{time: '2026-07-01', position: 'aboveBar', color: '#ff7a7a',
+                shape: 'arrowDown', text: '预测起点 · 下跌'}},
+            );
+
             const mixedZh = node();
             forecasts.renderForecastDetail(mixedZh, {{locale: 'zh-CN', horizon: 20,
               date: '2026-07-17', forecast: null,

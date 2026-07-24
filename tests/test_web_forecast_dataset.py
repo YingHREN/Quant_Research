@@ -434,6 +434,7 @@ class ForecastContractTest(unittest.TestCase):
                 "asof_date": "2026-07-22",
                 "horizon_sessions": 20,
                 "direction": "unavailable",
+                "raw_direction": "unavailable",
                 "predicted_return": None,
                 "up_probability": None,
                 "confidence_status": "unavailable",
@@ -442,6 +443,9 @@ class ForecastContractTest(unittest.TestCase):
                 "training_cutoff": "2026-07-21",
                 "model_key": "ridge_direction_v1",
                 "model_version": "v1",
+                "bearish_turn_score": 0.0,
+                "direction_adjustment_reason": None,
+                "bearish_turn_conditions": [],
                 "unavailable_reason": "insufficient_history",
             },
         )

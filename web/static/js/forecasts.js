@@ -104,6 +104,21 @@ function modelText(forecast, model) {
   return [key, version].filter(Boolean).join(" · ");
 }
 
+function adjustedByBearishRisk(forecast) {
+  return forecast?.direction_adjustment_reason === "bearish_turn_risk"
+    && forecast?.raw_direction
+    && forecast.raw_direction !== forecast.direction;
+}
+
+function bearishConditionText(forecast, locale) {
+  const conditions = Array.isArray(forecast?.bearish_turn_conditions)
+    ? forecast.bearish_turn_conditions
+    : [];
+  return conditions
+    .map((condition) => localizedCode("forecast.bearishCondition", condition, locale))
+    .join("、");
+}
+
 function renderEvidence(section, evidence, locale) {
   const title = document.createElement("strong");
   title.className = "forecast-evidence-title";
@@ -164,6 +179,36 @@ export function renderForecastDetail(container, options = {}) {
   const values = document.createElement("dl");
   values.className = "forecast-values";
   if (available) {
+    const riskAdjusted = adjustedByBearishRisk(forecast);
+    if (riskAdjusted) {
+      appendItem(
+        values,
+        t("forecast.field.bearishTurnScore", {}, locale),
+        t(
+          "forecast.value.bearishTurnScore",
+          { score: Number(forecast.bearish_turn_score).toFixed(0) },
+          locale,
+        ),
+      );
+      appendItem(
+        values,
+        t("forecast.field.rawDirection", {}, locale),
+        localizedCode("forecast.direction", forecast.raw_direction, locale),
+      );
+      appendItem(
+        values,
+        t("forecast.field.rawPredictedReturn", {}, locale),
+        percent(forecast.predicted_return, 2, true),
+      );
+      const conditionText = bearishConditionText(forecast, locale);
+      if (conditionText) {
+        appendItem(
+          values,
+          t("forecast.field.bearishConditions", {}, locale),
+          conditionText,
+        );
+      }
+    }
     if (finite(forecast.up_probability)) {
       appendItem(values, t("forecast.field.probability", {}, locale), percent(forecast.up_probability));
     } else {
@@ -173,7 +218,9 @@ export function renderForecastDetail(container, options = {}) {
         localizedCode("forecast.confidence", forecast.confidence_reason, locale),
       );
     }
-    appendItem(values, t("forecast.field.predictedReturn", {}, locale), percent(forecast.predicted_return, 2, true));
+    if (!riskAdjusted) {
+      appendItem(values, t("forecast.field.predictedReturn", {}, locale), percent(forecast.predicted_return, 2, true));
+    }
     appendItem(values, t("forecast.field.trainingSamples", {}, locale), String(forecast.training_sample_count ?? "—"));
     appendItem(values, t("forecast.field.trainingCutoff", {}, locale), forecast.training_cutoff || "—");
     appendItem(values, t("forecast.field.model", {}, locale), modelText(forecast, options.model));

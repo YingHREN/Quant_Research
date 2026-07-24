@@ -20,8 +20,9 @@ from web.forecasts.dataset import (
 
 
 MODEL_KEY = "ridge_direction_v1"
-MODEL_VERSION = "v3"
+MODEL_VERSION = "v4"
 NEUTRAL_BANDS = MappingProxyType({5: 0.01, 20: 0.02, 60: 0.04})
+BEARISH_TURN_THRESHOLD = 70.0
 
 
 class RidgeForecastProvider:
@@ -177,11 +178,21 @@ class RidgeForecastProvider:
         calibration = self._calibrated_probability(
             ticker, predicted_return, asof, horizon
         )
+        raw_direction = direction_for_return(predicted_return, horizon)
+        bearish_turn_score, bearish_turn_conditions = bearish_turn_assessment(
+            forecast_row
+        )
+        adjusted_direction = (
+            "down"
+            if bearish_turn_score >= BEARISH_TURN_THRESHOLD
+            else raw_direction
+        )
         return ForecastResult(
             ticker=ticker,
             asof_date=asof,
             horizon_sessions=horizon,
-            direction=direction_for_return(predicted_return, horizon),
+            direction=adjusted_direction,
+            raw_direction=raw_direction,
             predicted_return=predicted_return,
             up_probability=calibration.up_probability,
             confidence_status=(
@@ -194,6 +205,13 @@ class RidgeForecastProvider:
             training_cutoff=cutoff,
             model_key=self.model_key,
             model_version=self.model_version,
+            bearish_turn_score=bearish_turn_score,
+            direction_adjustment_reason=(
+                "bearish_turn_risk"
+                if adjusted_direction != raw_direction
+                else None
+            ),
+            bearish_turn_conditions=bearish_turn_conditions,
             unavailable_reason=None,
         )
 
@@ -298,6 +316,88 @@ def direction_for_return(predicted_return, horizon):
     if value < -band:
         return "down"
     return "neutral"
+
+
+def bearish_turn_assessment(forecast_row):
+    """Score causal end-of-session evidence of a bearish turning point."""
+    score = 0.0
+    conditions = []
+
+    distribution = _finite_feature(forecast_row, "pressure_distribution_day")
+    if distribution is not None and distribution >= 0.5:
+        score += 25.0
+        conditions.append("distribution_volume")
+
+    close_vs_ema20 = _finite_feature(forecast_row, "close_vs_ema20_pct")
+    if close_vs_ema20 is not None and close_vs_ema20 < 0.0:
+        score += 20.0
+        conditions.append("ema20_breakdown")
+
+    volume_ratio = _finite_feature(forecast_row, "volume_ratio")
+    if volume_ratio is not None and volume_ratio >= 1.5:
+        score += 20.0
+        conditions.append("abnormal_volume")
+    elif volume_ratio is not None and volume_ratio >= 1.2:
+        score += 12.0
+        conditions.append("abnormal_volume")
+
+    volume_change = _finite_feature(forecast_row, "volume_change")
+    if volume_change is not None and volume_change >= 0.5:
+        score += 10.0
+        conditions.append("volume_expansion")
+
+    close_location = _finite_feature(forecast_row, "pressure_close_location")
+    if close_location is not None and close_location <= -0.6:
+        score += 10.0
+        conditions.append("weak_close")
+
+    signed_volume = _finite_feature(
+        forecast_row,
+        "pressure_signed_volume_proxy",
+    )
+    if signed_volume is not None and signed_volume <= -1.0:
+        score += 10.0
+        conditions.append("sell_pressure")
+
+    stock_sector_rs = _finite_feature(
+        forecast_row,
+        "stock_sector_relative_strength_20",
+    )
+    if stock_sector_rs is not None and stock_sector_rs <= -0.05:
+        score += 5.0
+        conditions.append("sector_underperformance")
+
+    failed_breakout = _finite_feature(
+        forecast_row,
+        "pressure_failed_breakout",
+    )
+    pivot_distance = _finite_feature(forecast_row, "pivot_distance_pct")
+    if (
+        failed_breakout is not None
+        and failed_breakout >= 0.5
+    ) or (
+        pivot_distance is not None
+        and pivot_distance <= -10.0
+        and distribution is not None
+        and distribution >= 0.5
+        and volume_ratio is not None
+        and volume_ratio >= 1.2
+    ):
+        score += 10.0
+        conditions.append("failed_breakout")
+
+    return min(score, 100.0), tuple(conditions)
+
+
+def _finite_feature(row, name):
+    try:
+        value = row.get(name)
+    except AttributeError:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
 
 
 def _validated_ticker(value):
