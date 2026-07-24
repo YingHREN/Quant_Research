@@ -163,6 +163,14 @@ class IntradayStoreTest(unittest.TestCase):
             session="regular",
         )
         self.assertEqual(self.store.write_events((original, correction, correction)), 2)
+        replayed_correction = replace(
+            correction,
+            received_ts=AT + timedelta(seconds=10),
+        )
+        self.assertEqual(
+            self.store.write_events((replayed_correction,)),
+            0,
+        )
         effective = self.store.read_effective_trades("alpaca", "AMD")
         self.assertEqual(len(effective), 1)
         self.assertEqual((effective[0].price, effective[0].size), (151.0, 200.0))
@@ -191,6 +199,11 @@ class IntradayStoreTest(unittest.TestCase):
             session="regular",
         )
         self.assertEqual(self.store.write_events((cancel, cancel)), 1)
+        replayed_cancel = replace(
+            cancel,
+            received_ts=AT + timedelta(seconds=10),
+        )
+        self.assertEqual(self.store.write_events((replayed_cancel,)), 0)
         self.assertEqual(self.store.read_effective_trades("alpaca", "AMD"), [])
 
     def test_initialize_migrates_preceding_intraday_schema_without_touching_prices(self):
@@ -248,6 +261,134 @@ class IntradayStoreTest(unittest.TestCase):
                     400.0,
                 ),
             )
+
+    def test_effective_trade_adjustments_are_scoped_by_provider_and_symbol(self):
+        amd = replace(
+            trade(sequence="shared-id"),
+            symbol="AMD",
+            event_ts_ns=1784903400000000000,
+        )
+        nvda = replace(amd, symbol="NVDA", price=170.0)
+        correction = TradeCorrectionEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=1),
+            received_ts=AT + timedelta(seconds=1),
+            event_ts_ns=1784903401000000000,
+            provider_trade_id="shared-id",
+            replacement_trade_id="replacement-id",
+            price=151.0,
+            size=200.0,
+            exchange="V",
+            conditions=("@",),
+            session="regular",
+        )
+        self.assertEqual(
+            self.store.write_events((amd, nvda, correction)),
+            3,
+        )
+        effective = {
+            event.symbol: event
+            for event in self.store.read_effective_trades()
+        }
+        self.assertEqual(effective["AMD"].price, 151.0)
+        self.assertEqual(effective["NVDA"].price, 170.0)
+
+    def test_new_session_closes_stale_crashed_session_intervals(self):
+        old_heartbeat = AT - timedelta(minutes=1)
+        self.store.open_subscription(
+            "alpaca",
+            ("AMD",),
+            old_heartbeat,
+            session_id="old-session",
+        )
+        self.store.open_subscription(
+            "alpaca",
+            ("NVDA",),
+            old_heartbeat,
+            session_id="orphaned-session",
+        )
+        self.store.write_collector_status(
+            session_id="old-session",
+            provider="alpaca",
+            coverage="iex",
+            state="running",
+            confirmed_symbols=("AMD",),
+            last_event_received_at=None,
+            disconnect_count=0,
+            error=None,
+            heartbeat_at=old_heartbeat,
+            queue_depth=0,
+            queue_high_water=0,
+            dropped_event_count=0,
+            undrained_event_count=0,
+        )
+
+        self.store.begin_collector_session(
+            session_id="new-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
+
+        with sqlite3.connect(self.path) as connection:
+            finished = connection.execute(
+                "SELECT session_id, finished_at FROM subscription_intervals "
+                "ORDER BY session_id"
+            ).fetchall()
+        self.assertEqual(
+            finished,
+            [
+                ("old-session", AT.isoformat()),
+                ("orphaned-session", AT.isoformat()),
+            ],
+        )
+        status = self.store.read_collector_status(
+            now=AT,
+            stale_after_seconds=30,
+        )
+        self.assertEqual(status["session_id"], "new-session")
+        self.assertEqual(status["state"], "connecting")
+        self.assertEqual(status["subscribed_symbols"], [])
+
+    def test_persisted_collector_status_distinguishes_stale_and_never_configured(self):
+        never_configured = self.store.read_collector_status(now=AT)
+        self.assertEqual(never_configured["state"], "unavailable")
+        self.assertEqual(
+            never_configured["error"],
+            "collector_not_configured",
+        )
+        self.store.write_collector_status(
+            session_id="session-1",
+            provider="alpaca",
+            coverage="iex",
+            state="running",
+            confirmed_symbols=("SPY", "AMD"),
+            last_event_received_at=AT,
+            disconnect_count=2,
+            error=None,
+            heartbeat_at=AT,
+            queue_depth=3,
+            queue_high_water=7,
+            dropped_event_count=0,
+            undrained_event_count=0,
+        )
+        running = self.store.read_collector_status(
+            now=AT + timedelta(seconds=5),
+            stale_after_seconds=30,
+        )
+        self.assertEqual(running["state"], "running")
+        self.assertEqual(running["subscribed_symbols"], ["SPY", "AMD"])
+        self.assertEqual(running["queue_depth"], 3)
+
+        stale = self.store.read_collector_status(
+            now=AT + timedelta(seconds=31),
+            stale_after_seconds=30,
+        )
+        self.assertEqual(stale["state"], "stale")
+        self.assertEqual(stale["error"], "collector_stale")
+        self.assertEqual(stale["session_id"], "session-1")
 
 
 if __name__ == "__main__":

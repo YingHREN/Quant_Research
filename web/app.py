@@ -48,9 +48,11 @@ from web.services.update_jobs import (
     UpdateAlreadyRunning,
     UpdateJobManager,
 )
+from marketdata.paths import DEFAULT_MARKET_DATA_DATABASE
+from marketdata.storage import IntradayStore
 
 
-DEFAULT_DATABASE = PROJECT_ROOT / "data" / "prices.db"
+DEFAULT_DATABASE = DEFAULT_MARKET_DATA_DATABASE
 UNIVERSE_FACTOR_KEYS = (
     "strict_vcp",
     "tight_platform",
@@ -93,7 +95,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         scenario_provider = HistoricalScenarioProvider()
     intraday_status_service = flask_app.config.get("INTRADAY_STATUS_SERVICE")
     if intraday_status_service is None:
-        intraday_status_service = IntradayStatusService()
+        intraday_status_service = IntradayStatusService(
+            store=IntradayStore(
+                flask_app.config["MARKET_DATA_DATABASE"]
+            ),
+            stale_after_seconds=flask_app.config.get(
+                "INTRADAY_STATUS_STALE_AFTER_SECONDS",
+                30,
+            ),
+        )
 
     flask_app.extensions["dashboard_repository"] = repository
     flask_app.extensions["dashboard_update_manager"] = update_manager

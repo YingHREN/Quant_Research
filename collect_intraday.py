@@ -6,6 +6,7 @@ import os
 
 from marketdata.alpaca import AlpacaIEXProvider
 from marketdata.collector import IntradayCollector
+from marketdata.paths import DEFAULT_MARKET_DATA_DATABASE
 from marketdata.storage import IntradayStore
 
 
@@ -16,7 +17,10 @@ def build_collector(argv=None):
     parser.add_argument("--selected", default="SPY")
     parser.add_argument("--peer", action="append", default=[])
     parser.add_argument("--candidate", action="append", default=[])
-    parser.add_argument("--database", default="data/prices.db")
+    parser.add_argument(
+        "--database",
+        default=str(DEFAULT_MARKET_DATA_DATABASE),
+    )
     args = parser.parse_args(argv)
     key = os.environ.get("ALPACA_API_KEY", "")
     secret = os.environ.get("ALPACA_API_SECRET", "")

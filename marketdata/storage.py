@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from marketdata.base import (
     QuoteEvent,
+    SubscriptionRequest,
     TradeCancelEvent,
     TradeCorrectionEvent,
     TradeEvent,
@@ -62,6 +63,15 @@ CREATE TABLE IF NOT EXISTS intraday_trade_cancels (
     session TEXT NOT NULL,
     PRIMARY KEY (provider, symbol, event_identity)
 );
+CREATE TABLE IF NOT EXISTS collector_status (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    session_id TEXT NOT NULL, provider TEXT NOT NULL, coverage TEXT NOT NULL,
+    state TEXT NOT NULL, confirmed_symbols TEXT NOT NULL,
+    last_event_received_at TEXT, disconnect_count INTEGER NOT NULL,
+    error TEXT, heartbeat_at TEXT NOT NULL, queue_depth INTEGER NOT NULL,
+    queue_high_water INTEGER NOT NULL, dropped_event_count INTEGER NOT NULL,
+    undrained_event_count INTEGER NOT NULL
+);
 """
 
 
@@ -101,6 +111,14 @@ class IntradayStore:
     def _connect(self):
         connection = sqlite3.connect(self.db_path)
         connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=5000")
+        return connection
+
+    def _connect_readonly(self):
+        connection = sqlite3.connect(
+            f"file:{self.db_path.resolve()}?mode=ro",
+            uri=True,
+        )
         connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
@@ -206,7 +224,9 @@ class IntradayStore:
 
     @classmethod
     def _adjustment_identity(cls, event):
-        return cls._canonical_identity(asdict(event))
+        payload = asdict(event)
+        payload.pop("received_ts", None)
+        return cls._canonical_identity(payload)
 
     @staticmethod
     def _require_utc(value, field):
@@ -364,15 +384,28 @@ class IntradayStore:
             ).fetchall()
 
         latest_corrections = {
-            row["provider_trade_id"]: row for row in corrections
+            (
+                row["provider"],
+                row["symbol"],
+                row["provider_trade_id"],
+            ): row
+            for row in corrections
         }
-        cancelled_ids = {row["provider_trade_id"] for row in cancels}
+        cancelled_ids = {
+            (row["provider"], row["symbol"], row["provider_trade_id"])
+            for row in cancels
+        }
         effective = []
         for row in trades:
             source_sequence = row["source_sequence"]
-            if source_sequence in cancelled_ids:
+            provider_trade_key = (
+                row["provider"],
+                row["symbol"],
+                source_sequence,
+            )
+            if provider_trade_key in cancelled_ids:
                 continue
-            correction = latest_corrections.get(source_sequence)
+            correction = latest_corrections.get(provider_trade_key)
             if correction is None:
                 effective.append(self._trade_from_row(row))
             else:
@@ -475,6 +508,234 @@ class IntradayStore:
                     for symbol in symbols
                 ],
             )
+
+    @staticmethod
+    def _never_configured_status():
+        return {
+            "state": "unavailable",
+            "provider": None,
+            "coverage": None,
+            "subscribed_symbols": [],
+            "last_event_received_at": None,
+            "disconnect_count": 0,
+            "error": "collector_not_configured",
+            "heartbeat_at": None,
+            "session_id": None,
+            "queue_depth": 0,
+            "queue_high_water": 0,
+            "dropped_event_count": 0,
+            "undrained_event_count": 0,
+        }
+
+    def begin_collector_session(
+        self,
+        *,
+        session_id,
+        provider,
+        coverage,
+        started_at,
+        stale_after_seconds=30,
+    ):
+        self._require_utc(started_at, "started_at")
+        if not str(session_id).strip():
+            raise ValueError("session_id is required")
+        with self._connect() as connection:
+            existing = connection.execute(
+                "SELECT session_id, state, heartbeat_at FROM collector_status "
+                "WHERE singleton_id=1"
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    "UPDATE subscription_intervals SET finished_at=? "
+                    "WHERE finished_at IS NULL",
+                    (started_at.isoformat(),),
+                )
+            elif existing[0] != session_id:
+                heartbeat = _parse_utc(existing[2])
+                age = (started_at - heartbeat).total_seconds()
+                active = existing[1] in (
+                    "connecting",
+                    "running",
+                    "retrying",
+                )
+                if active and age <= stale_after_seconds:
+                    raise RuntimeError("collector_session_active")
+                connection.execute(
+                    "UPDATE subscription_intervals SET finished_at=? "
+                    "WHERE finished_at IS NULL AND "
+                    "(session_id IS NULL OR session_id != ?)",
+                    (started_at.isoformat(), session_id),
+                )
+            self._write_collector_status_connection(
+                connection,
+                session_id=session_id,
+                provider=provider,
+                coverage=coverage,
+                state="connecting",
+                confirmed_symbols=(),
+                last_event_received_at=None,
+                disconnect_count=0,
+                error=None,
+                heartbeat_at=started_at,
+                queue_depth=0,
+                queue_high_water=0,
+                dropped_event_count=0,
+                undrained_event_count=0,
+            )
+
+    def write_collector_status(
+        self,
+        *,
+        session_id,
+        provider,
+        coverage,
+        state,
+        confirmed_symbols,
+        last_event_received_at,
+        disconnect_count,
+        error,
+        heartbeat_at,
+        queue_depth,
+        queue_high_water,
+        dropped_event_count,
+        undrained_event_count,
+    ):
+        self._require_utc(heartbeat_at, "heartbeat_at")
+        if last_event_received_at is not None:
+            self._require_utc(
+                last_event_received_at,
+                "last_event_received_at",
+            )
+        with self._connect() as connection:
+            self._write_collector_status_connection(
+                connection,
+                session_id=session_id,
+                provider=provider,
+                coverage=coverage,
+                state=state,
+                confirmed_symbols=confirmed_symbols,
+                last_event_received_at=last_event_received_at,
+                disconnect_count=disconnect_count,
+                error=error,
+                heartbeat_at=heartbeat_at,
+                queue_depth=queue_depth,
+                queue_high_water=queue_high_water,
+                dropped_event_count=dropped_event_count,
+                undrained_event_count=undrained_event_count,
+            )
+
+    @staticmethod
+    def _write_collector_status_connection(
+        connection,
+        *,
+        session_id,
+        provider,
+        coverage,
+        state,
+        confirmed_symbols,
+        last_event_received_at,
+        disconnect_count,
+        error,
+        heartbeat_at,
+        queue_depth,
+        queue_high_water,
+        dropped_event_count,
+        undrained_event_count,
+    ):
+        symbols = SubscriptionRequest(confirmed_symbols).symbols
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO collector_status (
+                singleton_id, session_id, provider, coverage, state,
+                confirmed_symbols, last_event_received_at, disconnect_count,
+                error, heartbeat_at, queue_depth, queue_high_water,
+                dropped_event_count, undrained_event_count
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                provider,
+                coverage,
+                state,
+                json.dumps(symbols),
+                (
+                    None
+                    if last_event_received_at is None
+                    else last_event_received_at.isoformat()
+                ),
+                int(disconnect_count),
+                error,
+                heartbeat_at.isoformat(),
+                int(queue_depth),
+                int(queue_high_water),
+                int(dropped_event_count),
+                int(undrained_event_count),
+            ),
+        )
+
+    def read_collector_status(
+        self,
+        *,
+        now=None,
+        stale_after_seconds=30,
+    ):
+        if not self.db_path.exists():
+            return self._never_configured_status()
+        if now is None:
+            now = datetime.now(timezone.utc)
+        self._require_utc(now, "now")
+        try:
+            with self._connect_readonly() as connection:
+                row = connection.execute(
+                    """
+                    SELECT session_id, provider, coverage, state,
+                           confirmed_symbols, last_event_received_at,
+                           disconnect_count, error, heartbeat_at, queue_depth,
+                           queue_high_water, dropped_event_count,
+                           undrained_event_count
+                    FROM collector_status WHERE singleton_id=1
+                    """
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return self._never_configured_status()
+        if row is None:
+            return self._never_configured_status()
+        (
+            session_id,
+            provider,
+            coverage,
+            state,
+            confirmed_symbols,
+            last_event_received_at,
+            disconnect_count,
+            error,
+            heartbeat_at,
+            queue_depth,
+            queue_high_water,
+            dropped_event_count,
+            undrained_event_count,
+        ) = row
+        heartbeat = _parse_utc(heartbeat_at)
+        if state in ("connecting", "running", "retrying") and (
+            now - heartbeat
+        ).total_seconds() > stale_after_seconds:
+            state = "stale"
+            error = "collector_stale"
+        return {
+            "state": state,
+            "provider": provider,
+            "coverage": coverage,
+            "subscribed_symbols": list(json.loads(confirmed_symbols)),
+            "last_event_received_at": last_event_received_at,
+            "disconnect_count": disconnect_count,
+            "error": error,
+            "heartbeat_at": heartbeat_at,
+            "session_id": session_id,
+            "queue_depth": queue_depth,
+            "queue_high_water": queue_high_water,
+            "dropped_event_count": dropped_event_count,
+            "undrained_event_count": undrained_event_count,
+        }
 
     def status(self):
         with self._connect() as connection:

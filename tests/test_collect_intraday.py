@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import collect_intraday
+from web.app import DEFAULT_DATABASE as FLASK_DEFAULT_DATABASE
 
 
 class CollectIntradayCliTest(unittest.TestCase):
@@ -36,6 +37,16 @@ class CollectIntradayCliTest(unittest.TestCase):
         self.assertEqual(snapshot["desired_symbols"][:4],
                          ["SPY", "QQQ", "SOXX", "AMD"])
         self.assertNotIn("secret", str(snapshot).lower())
+
+    def test_cli_and_flask_share_absolute_project_database_default(self):
+        with mock.patch.dict(
+            "os.environ",
+            {"ALPACA_API_KEY": "key", "ALPACA_API_SECRET": "secret"},
+            clear=True,
+        ):
+            collector = collect_intraday.build_collector(["--selected", "AMD"])
+        self.assertTrue(collector._store.db_path.is_absolute())
+        self.assertEqual(collector._store.db_path, FLASK_DEFAULT_DATABASE)
 
     def test_build_does_not_create_a_missing_database_path(self):
         with tempfile.TemporaryDirectory() as directory:

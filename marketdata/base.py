@@ -63,7 +63,15 @@ def _trading_date(value: datetime, trading_date: str | None) -> str:
 
 
 def _finite(*values: float) -> bool:
-    return all(not isinstance(value, bool) and isfinite(value) for value in values)
+    for value in values:
+        if isinstance(value, bool):
+            return False
+        try:
+            if not isfinite(value):
+                return False
+        except TypeError:
+            return False
+    return True
 
 
 def _validate_size_unit(size_unit: str, lot_size: int) -> None:

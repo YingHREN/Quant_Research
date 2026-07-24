@@ -1,8 +1,13 @@
 import asyncio
 from datetime import datetime, timezone
+import threading
 import unittest
 
-from marketdata.base import ProviderCapabilities, TradeEvent
+from marketdata.base import (
+    ProviderCapabilities,
+    SubscriptionConfirmation,
+    TradeEvent,
+)
 from marketdata.collector import IntradayCollector
 
 
@@ -13,6 +18,9 @@ class FakeStore:
         self.closed = []
         self.lifecycle = []
         self.capabilities = []
+        self.batches = []
+        self.statuses = []
+        self.sessions = []
 
     def initialize(self):
         pass
@@ -24,11 +32,35 @@ class FakeStore:
         self.events.append(event)
         return True
 
-    def open_subscription(self, provider, symbols, at):
+    def write_events(self, events):
+        batch = tuple(events)
+        self.batches.append(batch)
+        self.events.extend(batch)
+        return len(batch)
+
+    def begin_collector_session(self, *args, **kwargs):
+        self.sessions.append((args, kwargs))
+
+    def write_collector_status(self, *args, **kwargs):
+        self.statuses.append((args, kwargs))
+
+    def open_subscription(
+        self,
+        provider,
+        symbols,
+        at,
+        session_id=None,
+    ):
         self.opened.append((provider, symbols))
         self.lifecycle.append(("open", provider, symbols, at))
 
-    def close_subscription(self, provider, symbols, at):
+    def close_subscription(
+        self,
+        provider,
+        symbols,
+        at,
+        session_id=None,
+    ):
         self.closed.append((provider, symbols))
         self.lifecycle.append(("close", provider, symbols, at))
 
@@ -38,11 +70,22 @@ class FailOnceCloseStore(FakeStore):
         super().__init__()
         self.close_attempts = 0
 
-    def close_subscription(self, provider, symbols, at):
+    def close_subscription(
+        self,
+        provider,
+        symbols,
+        at,
+        session_id=None,
+    ):
         self.close_attempts += 1
         if self.close_attempts == 1:
             raise RuntimeError("sensitive close detail")
-        super().close_subscription(provider, symbols, at)
+        super().close_subscription(
+            provider,
+            symbols,
+            at,
+            session_id=session_id,
+        )
 
 
 class FakeProvider:
@@ -67,12 +110,14 @@ class FakeProvider:
             None,
         )
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         await asyncio.Event().wait()
 
     async def update_subscription(self, request):
         self.updated.append(request.symbols)
+        return SubscriptionConfirmation(request.symbols, request.symbols)
 
     async def close(self):
         self.close_calls += 1
@@ -86,9 +131,17 @@ async def eventually(predicate, timeout=0.5):
     await asyncio.wait_for(wait(), timeout)
 
 
+async def confirm_subscription(on_confirmed, symbols):
+    confirmation = SubscriptionConfirmation(symbols, symbols)
+    if on_confirmed is not None:
+        await on_confirmed(confirmation)
+    return confirmation
+
+
 class FailingProvider(FakeProvider):
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         raise RuntimeError("sensitive provider detail")
 
 
@@ -117,6 +170,7 @@ class BlockingUpdateProvider(FakeProvider):
             raise
         finally:
             self.concurrent_updates -= 1
+        return SubscriptionConfirmation(request.symbols, request.symbols)
 
 
 class SlowCancelUpdateProvider(FakeProvider):
@@ -170,7 +224,7 @@ class UnavailableProvider(FakeProvider):
             "missing_credentials",
         )
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         raise AssertionError("unavailable provider must not connect")
 
 
@@ -179,8 +233,9 @@ class RetryOnceProvider(FakeProvider):
         super().__init__()
         self.second_attempt_started = asyncio.Event()
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         if len(self.requests) == 1:
             raise RuntimeError("sensitive stream detail")
         self.second_attempt_started.set()
@@ -193,8 +248,9 @@ class EmittingProvider(FakeProvider):
         self.event = event
         self.emitted = asyncio.Event()
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         await emit(self.event)
         self.emitted.set()
         await asyncio.Event().wait()
@@ -210,8 +266,9 @@ class DisconnectDuringUpdateProvider(FakeProvider):
         self.release_update = asyncio.Event()
         self.update_cancelled = False
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         if len(self.requests) == 1:
             self.first_stream_started.set()
             await self.fail_first_stream.wait()
@@ -227,6 +284,7 @@ class DisconnectDuringUpdateProvider(FakeProvider):
         except asyncio.CancelledError:
             self.update_cancelled = True
             raise
+        return SubscriptionConfirmation(request.symbols, request.symbols)
 
 
 class FailUpdateThenReconnectProvider(FakeProvider):
@@ -236,8 +294,9 @@ class FailUpdateThenReconnectProvider(FakeProvider):
         self.fail_first_stream = asyncio.Event()
         self.second_stream_started = asyncio.Event()
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         if len(self.requests) == 1:
             self.first_stream_started.set()
             await self.fail_first_stream.wait()
@@ -255,8 +314,9 @@ class RestartableProvider(FakeProvider):
         super().__init__()
         self.stream_releases = []
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         release = asyncio.Event()
         self.stream_releases.append(release)
         await release.wait()
@@ -285,8 +345,9 @@ class CloseCancelsStreamProvider(FakeProvider):
         self.stream_started = asyncio.Event()
         self.stream_task = None
 
-    async def stream_events(self, request, emit):
+    async def stream_events(self, request, emit, on_confirmed=None):
         self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
         self.stream_task = asyncio.current_task()
         self.stream_started.set()
         await asyncio.Event().wait()
@@ -335,19 +396,244 @@ class FailOnceUpdateProvider(FakeProvider):
         self.updated.append(request.symbols)
         if len(self.updated) == 1:
             raise RuntimeError("first update failed")
+        return SubscriptionConfirmation(request.symbols, request.symbols)
+
+
+def market_event(sequence):
+    at = datetime(2026, 7, 24, 14, 30, sequence, tzinfo=timezone.utc)
+    return TradeEvent(
+        "fake",
+        "AMD",
+        at,
+        at,
+        150.0 + sequence,
+        10.0,
+        "V",
+        (),
+        "unknown",
+        "unknown",
+        str(sequence),
+        "regular",
+    )
+
+
+class DelayedInitialConfirmationProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.stream_started = asyncio.Event()
+        self.release_confirmation = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def stream_events(self, request, emit, on_confirmed=None):
+        self.requests.append(request.symbols)
+        self.stream_started.set()
+        await self.release_confirmation.wait()
+        await confirm_subscription(on_confirmed, request.symbols)
+        await self.closed.wait()
+
+    async def close(self):
+        await super().close()
+        self.closed.set()
+
+
+class BurstProvider(FakeProvider):
+    def __init__(self, events):
+        super().__init__()
+        self.events = tuple(events)
+        self.accepted = 0
+        self.emitted = asyncio.Event()
+        self.closed = asyncio.Event()
+
+    async def stream_events(self, request, emit, on_confirmed=None):
+        self.requests.append(request.symbols)
+        await confirm_subscription(on_confirmed, request.symbols)
+        for event in self.events:
+            await emit(event)
+            self.accepted += 1
+        self.emitted.set()
+        await self.closed.wait()
+
+    async def close(self):
+        await super().close()
+        self.closed.set()
+
+
+class BlockingBatchStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.write_started = threading.Event()
+        self.release_write = threading.Event()
+
+    def write_events(self, events):
+        batch = tuple(events)
+        self.write_started.set()
+        if not self.release_write.wait(timeout=2):
+            raise RuntimeError("test writer release timed out")
+        self.batches.append(batch)
+        self.events.extend(batch)
+        return len(batch)
+
+
+class FailingBatchStore(FakeStore):
+    def write_event(self, event):
+        raise RuntimeError("sensitive sqlite detail")
+
+    def write_events(self, events):
+        raise RuntimeError("sensitive sqlite detail")
+
+
+class FailingInitializeStore(FakeStore):
+    def initialize(self):
+        raise RuntimeError("sensitive startup sqlite detail")
 
 
 class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_collector_waits_for_provider_confirmation_before_running_or_opening(self):
+        provider = DelayedInitialConfirmationProvider()
+        store = FakeStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await provider.stream_started.wait()
+
+        self.assertEqual(collector.snapshot()["state"], "connecting")
+        self.assertEqual(collector.snapshot()["subscribed_symbols"], [])
+        self.assertEqual(store.opened, [])
+
+        provider.release_confirmation.set()
+        await eventually(lambda: collector.snapshot()["state"] == "running")
+        self.assertIsNotNone(collector.snapshot()["heartbeat_at"])
+        self.assertEqual(
+            collector.snapshot()["subscribed_symbols"],
+            ["SPY", "QQQ", "SOXX", "AMD"],
+        )
+        self.assertEqual(
+            store.opened,
+            [("fake", ("SPY", "QQQ", "SOXX", "AMD"))],
+        )
+        await collector.stop()
+        await run_task
+
+    async def test_startup_storage_error_is_typed_without_connect_or_disconnect(self):
+        provider = FakeProvider()
+        collector = IntradayCollector(provider, FailingInitializeStore())
+
+        await collector.run()
+
+        snapshot = collector.snapshot()
+        self.assertEqual(snapshot["state"], "collector_error")
+        self.assertEqual(snapshot["error"], "storage_error")
+        self.assertEqual(snapshot["disconnect_count"], 0)
+        self.assertEqual(provider.requests, [])
+        self.assertNotIn("sensitive startup sqlite detail", str(snapshot))
+
+    async def test_burst_events_use_bounded_queue_and_batch_storage_api(self):
+        provider = BurstProvider(market_event(index) for index in range(5))
+        store = FakeStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            queue_size=8,
+            batch_size=3,
+        )
+        run_task = asyncio.create_task(collector.run())
+        await provider.emitted.wait()
+        await eventually(lambda: len(store.events) == 5)
+
+        snapshot = collector.snapshot()
+        self.assertEqual(sum(len(batch) for batch in store.batches), 5)
+        self.assertGreater(max(len(batch) for batch in store.batches), 1)
+        self.assertLessEqual(snapshot["queue_high_water"], 8)
+        self.assertEqual(snapshot["dropped_event_count"], 0)
+        await collector.stop()
+        await run_task
+
+    async def test_queue_full_applies_lossless_backpressure(self):
+        provider = BurstProvider(market_event(index) for index in range(3))
+        store = BlockingBatchStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            queue_size=1,
+            batch_size=1,
+        )
+        run_task = asyncio.create_task(collector.run())
+        await asyncio.to_thread(store.write_started.wait, 0.5)
+        await eventually(lambda: provider.accepted >= 2)
+        self.assertEqual(provider.accepted, 2)
+        self.assertFalse(provider.emitted.is_set())
+        self.assertEqual(collector.snapshot()["dropped_event_count"], 0)
+
+        store.release_write.set()
+        await provider.emitted.wait()
+        await eventually(lambda: len(store.events) == 3)
+        await collector.stop()
+        await run_task
+
+    async def test_storage_error_is_typed_and_not_counted_as_provider_disconnect(self):
+        provider = BurstProvider((market_event(1),))
+        store = FailingBatchStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            retry_delays=(60,),
+            queue_size=2,
+            batch_size=2,
+        )
+        run_task = asyncio.create_task(collector.run())
+        try:
+            await eventually(
+                lambda: collector.snapshot()["state"] == "collector_error"
+            )
+            await asyncio.wait_for(run_task, 0.5)
+            snapshot = collector.snapshot()
+            self.assertEqual(snapshot["error"], "storage_error")
+            self.assertEqual(snapshot["disconnect_count"], 0)
+            self.assertGreaterEqual(snapshot["undrained_event_count"], 1)
+            self.assertNotIn("sensitive sqlite detail", str(snapshot))
+        finally:
+            if not run_task.done():
+                await collector.stop()
+                run_task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await run_task
+
+    async def test_shutdown_waits_for_queue_drain(self):
+        provider = BurstProvider(market_event(index) for index in range(3))
+        store = BlockingBatchStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            queue_size=8,
+            batch_size=3,
+        )
+        run_task = asyncio.create_task(collector.run())
+        await provider.emitted.wait()
+        await asyncio.to_thread(store.write_started.wait, 0.5)
+        stop_task = asyncio.create_task(collector.stop())
+        await asyncio.sleep(0)
+        try:
+            self.assertFalse(stop_task.done())
+        finally:
+            store.release_write.set()
+        await stop_task
+        await run_task
+        self.assertEqual(store.events, list(provider.events))
+        self.assertEqual(
+            collector.snapshot()["undrained_event_count"],
+            0,
+        )
+
     async def test_selection_builds_expected_pool_and_updates_connected_provider(self):
         provider, store = FakeProvider(), FakeStore()
         collector = IntradayCollector(provider, store, retry_delays=(0,))
         collector.set_selection("AMD", ["NVDA", "AVGO"], ["NBIS"])
         task = asyncio.create_task(collector.run())
-        await asyncio.sleep(0)
+        await eventually(lambda: bool(provider.requests))
         self.assertEqual(provider.requests[0][:4], ("SPY", "QQQ", "SOXX", "AMD"))
 
         collector.set_selection("NBIS", ["AMD"], [])
-        await asyncio.sleep(0)
+        await eventually(lambda: bool(provider.updated))
         self.assertEqual(provider.updated[-1][:4], ("SPY", "QQQ", "SOXX", "NBIS"))
         await collector.stop()
         task.cancel()
@@ -512,6 +798,11 @@ class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
         collector = IntradayCollector(provider, store)
         task = asyncio.create_task(collector.run())
         await provider.emitted.wait()
+        await eventually(lambda: store.events == [event])
+        await eventually(
+            lambda: collector.snapshot()["last_event_received_at"]
+            == received_at.isoformat()
+        )
 
         try:
             self.assertEqual(store.events, [event])
