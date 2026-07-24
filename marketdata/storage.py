@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
+import hashlib
 import json
 import sqlite3
 
@@ -14,8 +15,9 @@ CREATE TABLE IF NOT EXISTS provider_capability_snapshots (
     PRIMARY KEY (provider, recorded_at)
 );
 CREATE TABLE IF NOT EXISTS subscription_intervals (
+    interval_id INTEGER PRIMARY KEY AUTOINCREMENT,
     provider TEXT NOT NULL, symbol TEXT NOT NULL, started_at TEXT NOT NULL,
-    finished_at TEXT, PRIMARY KEY (provider, symbol, started_at)
+    finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS intraday_trades (
     provider TEXT NOT NULL, symbol TEXT NOT NULL, event_ts TEXT NOT NULL,
@@ -53,11 +55,37 @@ class IntradayStore:
     def _sequence(event):
         if event.source_sequence is not None:
             return event.source_sequence
-        return "|".join(
-            (event.event_ts.isoformat(), str(getattr(event, "price", "")),
-             str(getattr(event, "size", "")), str(getattr(event, "bid_price", "")),
-             str(getattr(event, "ask_price", "")))
-        )
+        if isinstance(event, TradeEvent):
+            payload = {
+                "event_ts": event.event_ts.isoformat(),
+                "price": event.price,
+                "size": event.size,
+                "exchange": event.exchange,
+                "conditions": event.conditions,
+                "direction": event.direction,
+                "direction_source": event.direction_source,
+                "session": event.session,
+            }
+        elif isinstance(event, QuoteEvent):
+            payload = {
+                "event_ts": event.event_ts.isoformat(),
+                "bid_price": event.bid_price,
+                "bid_size": event.bid_size,
+                "ask_price": event.ask_price,
+                "ask_size": event.ask_size,
+                "session": event.session,
+            }
+        else:
+            raise TypeError("unsupported market event")
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _require_utc(value, field):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(f"{field} must be UTC-aware")
+        if value.utcoffset().total_seconds() != 0:
+            raise ValueError(f"{field} must be UTC")
 
     def write_event(self, event):
         with self._connect() as connection:
@@ -86,6 +114,7 @@ class IntradayStore:
             return connection.total_changes > before
 
     def record_capabilities(self, capabilities, recorded_at):
+        self._require_utc(recorded_at, "recorded_at")
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO provider_capability_snapshots VALUES (?, ?, ?)",
@@ -94,13 +123,16 @@ class IntradayStore:
             )
 
     def open_subscription(self, provider, symbols, started_at):
+        self._require_utc(started_at, "started_at")
         with self._connect() as connection:
             connection.executemany(
-                "INSERT OR IGNORE INTO subscription_intervals VALUES (?, ?, ?, NULL)",
+                "INSERT INTO subscription_intervals (provider, symbol, started_at, finished_at) "
+                "VALUES (?, ?, ?, NULL)",
                 [(provider, symbol, started_at.isoformat()) for symbol in symbols],
             )
 
     def close_subscription(self, provider, symbols, finished_at):
+        self._require_utc(finished_at, "finished_at")
         with self._connect() as connection:
             connection.executemany(
                 "UPDATE subscription_intervals SET finished_at=? "
@@ -110,6 +142,7 @@ class IntradayStore:
 
     def status(self):
         with self._connect() as connection:
+            connection.execute("BEGIN")
             capability = connection.execute(
                 "SELECT payload FROM provider_capability_snapshots "
                 "ORDER BY recorded_at DESC LIMIT 1"
