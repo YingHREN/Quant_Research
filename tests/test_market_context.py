@@ -1,0 +1,217 @@
+import unittest
+
+import numpy as np
+import pandas as pd
+
+from research.market_context import (
+    build_atomic_model_rows,
+    build_group_score_frame,
+    build_market_context,
+    score_evidence,
+)
+from research.market_pressure import Evidence
+from web.market_groups import market_group
+
+
+def rising(periods=260, slope=0.2, end="2026-07-23"):
+    index = pd.bdate_range(end=end, periods=periods)
+    close = 100.0 + np.arange(periods) * slope
+    return pd.DataFrame(
+        {
+            "Open": close - 0.2,
+            "High": close + 1.0,
+            "Low": close - 1.0,
+            "Close": close,
+            "Volume": np.full(periods, 1_000_000.0),
+        },
+        index=index,
+    )
+
+
+class MarketContextTest(unittest.TestCase):
+    def test_one_semiconductor_proxy_degrades_coverage_without_fabrication(self):
+        histories = {
+            "QQQ": rising(),
+            "SPY": rising(),
+            "SOXX": rising(slope=0.3),
+            "AMD": rising(slope=0.4),
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+
+        selected = result["selected_group"]
+        self.assertEqual(selected["available_benchmarks"], ["SOXX"])
+        self.assertLess(selected["coverage"], 1.0)
+        self.assertNotIn("SMH", selected["available_benchmarks"])
+
+    def test_missing_both_sector_proxies_makes_stock_scores_unavailable(self):
+        result = build_market_context(
+            {"QQQ": rising(), "SPY": rising(), "AMD": rising()},
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            20,
+        )
+
+        amd = result["constituents"][0]
+
+        self.assertIsNone(amd["reversal_opportunity"]["score"])
+        self.assertIsNone(amd["downside_risk"]["score"])
+        self.assertEqual(
+            amd["reversal_opportunity"]["unavailable_reason"],
+            "missing_sector_benchmark",
+        )
+
+    def test_opportunity_and_risk_are_independent_not_complements(self):
+        histories = {
+            "QQQ": rising(),
+            "SPY": rising(),
+            "SOXX": rising(),
+            "SMH": rising(),
+            "AMD": rising(),
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+        amd = result["constituents"][0]
+        opportunity = amd["reversal_opportunity"]["score"]
+        risk = amd["downside_risk"]["score"]
+
+        self.assertNotEqual(opportunity + risk, 100.0)
+
+    def test_future_append_does_not_change_old_market_context(self):
+        histories = {
+            name: rising() for name in ("QQQ", "SPY", "SOXX", "SMH", "AMD")
+        }
+        before = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+        extended = {}
+        for name, frame in histories.items():
+            tail = rising(periods=2, slope=-20.0, end="2026-07-27")
+            extended[name] = pd.concat(
+                [frame, tail.loc[tail.index > frame.index[-1]]]
+            )
+
+        after = build_market_context(
+            extended,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+
+        self.assertEqual(after, before)
+
+    def test_score_below_eighty_percent_is_unavailable(self):
+        rows = (
+            Evidence(
+                "available",
+                1.0,
+                0.0,
+                "met",
+                79.0,
+                79.0,
+                "1 session",
+            ),
+            Evidence(
+                "missing",
+                None,
+                None,
+                "unavailable",
+                0.0,
+                21.0,
+                "20 sessions",
+                "insufficient_history",
+            ),
+        )
+
+        score = score_evidence(
+            rows,
+            required_available=True,
+            unavailable_reason="insufficient_coverage",
+        )
+
+        self.assertIsNone(score.score)
+        self.assertAlmostEqual(score.coverage, 0.79)
+
+    def test_later_benchmark_row_is_not_used_for_earlier_stock_asof(self):
+        histories = {
+            "QQQ": rising(end="2026-07-24"),
+            "SPY": rising(end="2026-07-24"),
+            "SOXX": rising(end="2026-07-24"),
+            "SMH": rising(end="2026-07-24"),
+            "AMD": rising(end="2026-07-23"),
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+
+        self.assertEqual(result["asof"], "2026-07-23")
+        self.assertEqual(
+            result["selected_group"]["latest_source_date"],
+            "2026-07-23",
+        )
+
+    def test_atomic_rows_exclude_composite_scores(self):
+        histories = {
+            "QQQ": rising(),
+            "SOXX": rising(),
+            "SMH": rising(),
+            "AMD": rising(),
+        }
+
+        rows = build_atomic_model_rows(
+            histories,
+            market_group("semiconductor"),
+        )
+
+        self.assertIn("pressure_signed_volume_proxy", rows)
+        self.assertIn("prior_high_breakout", rows)
+        self.assertNotIn("reversal_opportunity_score", rows)
+        self.assertNotIn("downside_risk_score", rows)
+        self.assertNotIn("market_posture_score", rows)
+
+    def test_group_score_frame_is_point_in_time_and_multiindexed(self):
+        histories = {
+            "QQQ": rising(periods=70),
+            "SPY": rising(periods=70),
+            "SOXX": rising(periods=70),
+            "SMH": rising(periods=70),
+            "AMD": rising(periods=70),
+        }
+
+        rows = build_group_score_frame(
+            histories,
+            market_group("semiconductor"),
+        )
+
+        self.assertEqual(
+            rows.index.names,
+            ["ticker", "observation_date"],
+        )
+        self.assertIn("reversal_opportunity_score", rows)
+        self.assertIn("downside_risk_score", rows)
+        self.assertIn("atr20_pct", rows)
+        self.assertEqual(
+            rows.index.get_level_values("observation_date").max(),
+            histories["AMD"].index.max(),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
