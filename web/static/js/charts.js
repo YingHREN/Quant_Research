@@ -284,6 +284,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   });
   const forecastProjectionSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.forecastProjection", {}, locale),
+    visible: false,
     color: COLORS.forecast,
     lineWidth: 3,
     lineStyle: LightweightCharts.LineStyle.Solid,

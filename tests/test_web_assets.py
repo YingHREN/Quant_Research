@@ -1232,6 +1232,7 @@ class WebAssetTest(unittest.TestCase):
               (series) => series.options.title === '模型预测线',
             );
             assert.ok(forecastSeries);
+            assert.equal(forecastSeries.options.visible, false);
             assert.equal(typeof forecastSeries.options.autoscaleInfoProvider, 'function');
             assert.equal(forecastSeries.options.autoscaleInfoProvider(), null);
             assert.equal(created[0].series[0].options.autoscaleInfoProvider, undefined);
