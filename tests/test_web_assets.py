@@ -1360,8 +1360,8 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].chartOptions.handleScroll.vertTouchDrag, false);
             assert.deepEqual(created[0].chartOptions.handleScale, {{
               axisPressedMouseMove: false,
-              mouseWheel: false,
-              pinch: false,
+              mouseWheel: true,
+              pinch: true,
             }});
             const sharedTimesAfterHover = created[0].sharedTimes();
             assert.deepEqual(sharedTimesAfterHover, sharedTimesBeforeHover);
@@ -1468,8 +1468,8 @@ class WebAssetTest(unittest.TestCase):
               }},
               handleScale: {{
                 axisPressedMouseMove: false,
-                mouseWheel: false,
-                pinch: false,
+                mouseWheel: true,
+                pinch: true,
               }},
             }});
             assert.deepEqual(created[1].appliedOptions.at(-1), {{
@@ -1481,8 +1481,8 @@ class WebAssetTest(unittest.TestCase):
               }},
               handleScale: {{
                 axisPressedMouseMove: false,
-                mouseWheel: false,
-                pinch: false,
+                mouseWheel: true,
+                pinch: true,
               }},
             }});
             assert.equal(created[0].element.dataset.panLocked, 'true');
@@ -1548,8 +1548,8 @@ class WebAssetTest(unittest.TestCase):
               }},
               handleScale: {{
                 axisPressedMouseMove: false,
-                mouseWheel: false,
-                pinch: false,
+                mouseWheel: true,
+                pinch: true,
               }},
             }});
             assert.deepEqual(created[1].appliedOptions.at(-1), {{
@@ -1561,8 +1561,8 @@ class WebAssetTest(unittest.TestCase):
               }},
               handleScale: {{
                 axisPressedMouseMove: false,
-                mouseWheel: false,
-                pinch: false,
+                mouseWheel: true,
+                pinch: true,
               }},
             }});
             assert.equal(created[0].element.dataset.panLocked, 'false');

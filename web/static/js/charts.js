@@ -194,8 +194,8 @@ function chartInteractionOptions() {
     },
     handleScale: {
       axisPressedMouseMove: false,
-      mouseWheel: false,
-      pinch: false,
+      mouseWheel: true,
+      pinch: true,
     },
   };
 }
