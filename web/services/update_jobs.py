@@ -238,7 +238,7 @@ class UpdateJobManager:
             if not getattr(summary, "inactive", False)
         ]
         ordered_tickers = tuple(
-            dict.fromkeys((*active_tickers, *self._reference_tickers))
+            dict.fromkeys((*self._reference_tickers, *active_tickers))
         )
         with self._lock:
             self._remaining_tickers = list(ordered_tickers)
