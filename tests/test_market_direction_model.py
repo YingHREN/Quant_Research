@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -8,6 +9,8 @@ from research.market_direction_model import (
     chronological_purged_folds,
     evaluate_direction_ablation,
     walk_forward_direction_predictions,
+    walk_forward_boosted_predictions,
+    walk_forward_ridge_predictions,
 )
 
 
@@ -137,6 +140,59 @@ class MarketDirectionModelTest(unittest.TestCase):
                 "predicted_direction",
             ].notna().all()
         )
+
+    def test_ridge_baseline_uses_same_purged_executable_rows(self):
+        frame = feature_frame()
+
+        predictions = walk_forward_ridge_predictions(
+            frame,
+            horizon=5,
+            feature_columns=("stock", "market", "sector"),
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        self.assertEqual(set(predictions["specification"]), {"ridge_baseline"})
+        self.assertTrue(predictions["predicted_direction"].notna().all())
+        self.assertTrue(
+            (
+                predictions["training_samples"]
+                < len(frame)
+            ).all()
+        )
+
+    def test_fold_preprocessing_clips_extreme_finite_values_without_warning(self):
+        frame = feature_frame()
+        frame.loc[("AAA", frame.loc["AAA"].index[10]), "stock"] = 1e300
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            predictions = walk_forward_direction_predictions(
+                frame,
+                horizon=5,
+                feature_sets={"extreme": ("stock", "market")},
+                n_folds=4,
+                minimum_samples=30,
+            )
+
+        self.assertFalse(predictions.empty)
+
+    def test_boosted_challenger_learns_non_linear_context_on_purged_folds(self):
+        frame = feature_frame()
+
+        predictions = walk_forward_boosted_predictions(
+            frame,
+            horizon=5,
+            feature_columns=("stock", "market", "sector"),
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        self.assertEqual(
+            set(predictions["specification"]),
+            {"boosted_full_context"},
+        )
+        self.assertTrue(predictions["predicted_direction"].notna().all())
 
 
 if __name__ == "__main__":

@@ -7,7 +7,8 @@ from numbers import Integral
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import (
     balanced_accuracy_score,
     f1_score,
@@ -177,9 +178,10 @@ def walk_forward_direction_predictions(
                 class_weight="balanced",
                 max_iter=1_000,
                 random_state=0,
+                solver="liblinear",
             )
             model.fit(x_train, y_train)
-            predicted = model.predict(x_test)
+            predicted = _logistic_predict(model, x_test)
             output.append(
                 _prediction_rows(
                     test,
@@ -205,6 +207,136 @@ def walk_forward_direction_predictions(
                 "training_samples",
             )
         )
+    return pd.concat(output, ignore_index=True)
+
+
+def walk_forward_ridge_predictions(
+    frame: pd.DataFrame,
+    *,
+    horizon: int,
+    feature_columns: Sequence[str],
+    n_folds: int = 5,
+    minimum_samples: int = 100,
+) -> pd.DataFrame:
+    """Evaluate Ridge directions on the same executable, purged folds."""
+    checked_horizon = _validate_horizons((horizon,))[0]
+    columns = tuple(feature_columns)
+    if not columns:
+        raise ValueError("feature_columns must not be empty")
+    missing = [column for column in columns if column not in frame]
+    if missing:
+        raise ValueError(f"frame is missing feature columns: {missing}")
+    if (
+        isinstance(minimum_samples, bool)
+        or not isinstance(minimum_samples, Integral)
+        or int(minimum_samples) <= 0
+    ):
+        raise ValueError("minimum_samples must be a positive integer")
+
+    target_name = f"executable_return_{checked_horizon}"
+    output = []
+    folds = chronological_purged_folds(frame, checked_horizon, n_folds)
+    for fold_number, (train_index, test_index) in enumerate(folds, start=1):
+        train = frame.iloc[train_index]
+        test = frame.iloc[test_index]
+        if len(train) < int(minimum_samples):
+            continue
+        x_train, x_test = _training_only_design(train, test, columns)
+        target = train[target_name].to_numpy(dtype=float)
+        if np.min(target) == np.max(target):
+            continue
+        model = Ridge(alpha=1.0, solver="lsqr")
+        model.fit(x_train, target)
+        predicted_return = (
+            np.sum(x_test * model.coef_[None, :], axis=1)
+            + float(model.intercept_)
+        )
+        rows = _prediction_rows(
+            test,
+            _directions(test[target_name], checked_horizon),
+            _directions(
+                pd.Series(predicted_return),
+                checked_horizon,
+            ),
+            checked_horizon,
+            fold_number,
+            "ridge_baseline",
+            len(train),
+        )
+        rows["predicted_return"] = predicted_return
+        output.append(rows)
+    if not output:
+        return pd.DataFrame()
+    return pd.concat(output, ignore_index=True)
+
+
+def walk_forward_boosted_predictions(
+    frame: pd.DataFrame,
+    *,
+    horizon: int,
+    feature_columns: Sequence[str],
+    n_folds: int = 5,
+    minimum_samples: int = 100,
+) -> pd.DataFrame:
+    """Evaluate a shallow nonlinear context challenger on purged folds."""
+    checked_horizon = _validate_horizons((horizon,))[0]
+    columns = tuple(feature_columns)
+    if not columns:
+        raise ValueError("feature_columns must not be empty")
+    missing = [column for column in columns if column not in frame]
+    if missing:
+        raise ValueError(f"frame is missing feature columns: {missing}")
+    if (
+        isinstance(minimum_samples, bool)
+        or not isinstance(minimum_samples, Integral)
+        or int(minimum_samples) <= 0
+    ):
+        raise ValueError("minimum_samples must be a positive integer")
+
+    target_name = f"executable_return_{checked_horizon}"
+    output = []
+    folds = chronological_purged_folds(frame, checked_horizon, n_folds)
+    for fold_number, (train_index, test_index) in enumerate(folds, start=1):
+        train = frame.iloc[train_index]
+        test = frame.iloc[test_index]
+        if len(train) < int(minimum_samples):
+            continue
+        target = _directions(train[target_name], checked_horizon)
+        classes, counts = np.unique(target, return_counts=True)
+        if len(classes) < 2:
+            continue
+        class_weights = {
+            label: len(target) / (len(classes) * count)
+            for label, count in zip(classes, counts)
+        }
+        sample_weight = np.asarray(
+            [class_weights[label] for label in target],
+            dtype=float,
+        )
+        x_train, x_test = _training_only_design(train, test, columns)
+        model = HistGradientBoostingClassifier(
+            learning_rate=0.05,
+            max_iter=80,
+            max_leaf_nodes=15,
+            max_depth=3,
+            min_samples_leaf=max(20, min(100, len(train) // 100)),
+            l2_regularization=1.0,
+            random_state=0,
+        )
+        model.fit(x_train, target, sample_weight=sample_weight)
+        output.append(
+            _prediction_rows(
+                test,
+                _directions(test[target_name], checked_horizon),
+                model.predict(x_test),
+                checked_horizon,
+                fold_number,
+                "boosted_full_context",
+                len(train),
+            )
+        )
+    if not output:
+        return pd.DataFrame()
     return pd.concat(output, ignore_index=True)
 
 
@@ -270,20 +402,56 @@ def evaluate_direction_ablation(predictions: pd.DataFrame) -> pd.DataFrame:
 def _training_only_design(train, test, columns):
     train_raw = train.loc[:, columns].apply(pd.to_numeric, errors="coerce")
     test_raw = test.loc[:, columns].apply(pd.to_numeric, errors="coerce")
-    medians = train_raw.median().fillna(0.0)
-    train_values = train_raw.fillna(medians).to_numpy(dtype=float)
-    test_values = test_raw.fillna(medians).to_numpy(dtype=float)
+    train_raw = train_raw.replace((np.inf, -np.inf), np.nan)
+    test_raw = test_raw.replace((np.inf, -np.inf), np.nan)
+    raw_median = train_raw.median().fillna(0.0)
+    quartile_25 = train_raw.quantile(0.25).fillna(raw_median)
+    quartile_75 = train_raw.quantile(0.75).fillna(raw_median)
+    robust_scale = (quartile_75 - quartile_25).abs()
+    robust_scale = robust_scale.where(
+        robust_scale > 1e-12,
+        raw_median.abs().mul(1e-6).clip(lower=1e-12),
+    )
+    lower = pd.concat(
+        (
+            train_raw.quantile(0.005).fillna(raw_median),
+            raw_median - 20.0 * robust_scale,
+        ),
+        axis=1,
+    ).max(axis=1)
+    upper = pd.concat(
+        (
+            train_raw.quantile(0.995).fillna(raw_median),
+            raw_median + 20.0 * robust_scale,
+        ),
+        axis=1,
+    ).min(axis=1)
+    train_clipped = train_raw.clip(lower=lower, upper=upper, axis="columns")
+    test_clipped = test_raw.clip(lower=lower, upper=upper, axis="columns")
+    medians = train_clipped.median().fillna(0.0)
+    train_values = train_clipped.fillna(medians).to_numpy(dtype=float)
+    test_values = test_clipped.fillna(medians).to_numpy(dtype=float)
     train_missing = train_raw.isna().to_numpy(dtype=float)
     test_missing = test_raw.isna().to_numpy(dtype=float)
     train_design = np.concatenate((train_values, train_missing), axis=1)
     test_design = np.concatenate((test_values, test_missing), axis=1)
     means = train_design.mean(axis=0)
     scales = train_design.std(axis=0)
-    scales[~np.isfinite(scales) | (scales == 0.0)] = 1.0
+    scales[~np.isfinite(scales) | (scales < 1e-12)] = 1.0
     return (
-        (train_design - means) / scales,
-        (test_design - means) / scales,
+        np.clip((train_design - means) / scales, -12.0, 12.0),
+        np.clip((test_design - means) / scales, -12.0, 12.0),
     )
+
+
+def _logistic_predict(model, design):
+    decision = np.sum(
+        design[:, None, :] * model.coef_[None, :, :],
+        axis=2,
+    ) + model.intercept_
+    if len(model.classes_) == 2:
+        return np.where(decision[:, 0] > 0.0, model.classes_[1], model.classes_[0])
+    return model.classes_[np.argmax(decision, axis=1)]
 
 
 def _prediction_rows(

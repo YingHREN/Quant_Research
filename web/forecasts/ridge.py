@@ -272,7 +272,20 @@ class RidgeForecastProvider:
             forecast_design = np.concatenate(([1.0], standardized_forecast))
             penalty = np.eye(design.shape[1], dtype=float) * self.alpha
             penalty[0, 0] = 0.0
-            lhs = design.T @ design + penalty
+            # Avoid the same Accelerate status-flag failure as the
+            # matrix-vector path below. Chunked explicit outer products keep
+            # peak memory bounded as the causal feature set grows.
+            gram = np.zeros(
+                (design.shape[1], design.shape[1]),
+                dtype=float,
+            )
+            for start in range(0, len(design), 2_048):
+                block = design[start : start + 2_048]
+                gram += np.sum(
+                    block[:, :, None] * block[:, None, :],
+                    axis=0,
+                )
+            lhs = gram + penalty
             # Avoid an Accelerate BLAS status-flag bug observed for large,
             # entirely finite matrix-vector products under warning-strict
             # execution.  The explicit reduction is algebraically identical.
@@ -281,7 +294,7 @@ class RidgeForecastProvider:
                 coefficients = np.linalg.solve(lhs, rhs)
             except np.linalg.LinAlgError:
                 coefficients = np.linalg.lstsq(lhs, rhs, rcond=None)[0]
-            prediction = forecast_design @ coefficients
+            prediction = np.sum(forecast_design * coefficients)
         return float(prediction)
 
     def _unavailable(self, ticker, asof, horizon, reason, sample_count, cutoff):

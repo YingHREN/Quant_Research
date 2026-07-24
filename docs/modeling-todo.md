@@ -27,14 +27,15 @@ market-context, and data-source work discussed for the local dashboard.
   evaluation.
 - [ ] Display “no demonstrated forecast advantage” when walk-forward results
   do not beat the configured baseline.
-- [ ] Replace the five-session return-to-direction conversion with a directly
+- [x] Replace the five-session return-to-direction conversion with a directly
   evaluated classification objective.
-- [ ] Use next-session open as the executable entry price.
+- [x] Use next-session open as the executable entry price.
 - [ ] Evaluate non-overlapping five-session outcomes in addition to the daily
   overlapping research sample.
-- [ ] Add time decay, class balancing, and ticker/sector hierarchy experiments.
-- [ ] Report NBIS, semiconductor, and full-universe results separately.
-- [ ] Re-evaluate the bearish-risk override independently; do not retain an
+- [ ] Add time decay and ticker/sector hierarchy experiments. Class-balanced
+  logistic and shallow boosted challengers were tested on 2026-07-25.
+- [x] Report NBIS, semiconductor, and full-universe results separately.
+- [x] Re-evaluate the bearish-risk override independently; do not retain an
   override that reduces out-of-sample accuracy.
 - [ ] Require stable walk-forward improvement before restoring a prominent
   direction label.
@@ -102,23 +103,29 @@ market-context, and data-source work discussed for the local dashboard.
 
 ## P2 — Trained reversal and pressure models
 
-- [ ] Use the atomic bearish, supply, demand, and early-reversal conditions as
+- [x] Use the available atomic bearish and early-reversal conditions as
   model features rather than treating hand-set scores as probabilities.
-- [ ] Train separate future-5-session and future-20-session downside
-  classifiers.
-- [ ] Compare raw Ridge, rules-only, classification, and combined strategies.
-- [ ] Use expanding-window or rolling walk-forward evaluation with purged
+- [x] Train separate future-5-session and future-20-session direction
+  classifiers; path-dependent downside classifiers remain separate follow-up.
+- [x] Compare raw Ridge, rules-only, logistic classification, and shallow
+  boosted classification. The rules-only bearish override had no full-universe
+  lift and must not be treated as a probability.
+- [x] Use expanding-window walk-forward evaluation with purged
   label boundaries.
 - [ ] Report precision, recall, balanced accuracy, ROC AUC, PR AUC, coverage,
   return, maximum drawdown, and turnover.
 - [ ] Calibrate probabilities only when sample and both-class requirements are
   met.
-- [ ] Study high-volatility semiconductor and AI-infrastructure stocks
+- [x] Study high-volatility semiconductor and AI-infrastructure stocks
   separately.
-- [ ] Maintain named NBIS, AMD, and similar event-case regressions without
+- [x] Maintain named NBIS and AMD event-case regressions without
   training specifically to those dates.
-- [ ] Measure incremental value from QQQ, sector, and stock-level agreement or
+- [x] Measure incremental value from QQQ, sector, and stock-level agreement or
   divergence.
+- [ ] Add time-decayed samples and a ticker/sector hierarchy without one-hot
+  memorization, then repeat the fixed promotion gate.
+- [ ] Train the path-dependent maximum-adverse-excursion classifier separately
+  from terminal direction; do not reuse terminal-return labels as “risk.”
 
 ## P2 — Intraday trades and quotes
 
