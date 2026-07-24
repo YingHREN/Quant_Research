@@ -169,6 +169,22 @@ function renderDetail(detailEl, row, locked, locale, forecastOptions = {}) {
   renderForecastDetail(detailEl, { ...forecastOptions, locale });
 }
 
+function chartInteractionOptions() {
+  return {
+    handleScroll: {
+      mouseWheel: false,
+      pressedMouseMove: false,
+      horzTouchDrag: false,
+      vertTouchDrag: false,
+    },
+    handleScale: {
+      axisPressedMouseMove: false,
+      mouseWheel: false,
+      pinch: false,
+    },
+  };
+}
+
 function chartOptions(element) {
   return {
     width: element.clientWidth,
@@ -183,12 +199,7 @@ function chartOptions(element) {
       horzLines: { color: COLORS.grid },
     },
     rightPriceScale: { borderColor: COLORS.grid },
-    handleScroll: {
-      mouseWheel: true,
-      pressedMouseMove: false,
-      horzTouchDrag: true,
-      vertTouchDrag: true,
-    },
+    ...chartInteractionOptions(),
     timeScale: {
       borderColor: COLORS.grid,
       timeVisible: false,
@@ -316,7 +327,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function setPanLocked(locked) {
     const panLocked = Boolean(locked);
-    const options = { handleScroll: { pressedMouseMove: false } };
+    const options = chartInteractionOptions();
     priceChart.applyOptions(options);
     volumeChart.applyOptions(options);
     [priceEl, volumeEl].forEach((element) => {

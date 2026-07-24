@@ -1261,9 +1261,14 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, false);
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
-            assert.equal(created[0].chartOptions.handleScroll.mouseWheel, true);
-            assert.equal(created[0].chartOptions.handleScroll.horzTouchDrag, true);
-            assert.equal(created[0].chartOptions.handleScroll.vertTouchDrag, true);
+            assert.equal(created[0].chartOptions.handleScroll.mouseWheel, false);
+            assert.equal(created[0].chartOptions.handleScroll.horzTouchDrag, false);
+            assert.equal(created[0].chartOptions.handleScroll.vertTouchDrag, false);
+            assert.deepEqual(created[0].chartOptions.handleScale, {{
+              axisPressedMouseMove: false,
+              mouseWheel: false,
+              pinch: false,
+            }});
             const sharedTimesAfterHover = created[0].sharedTimes();
             assert.deepEqual(sharedTimesAfterHover, sharedTimesBeforeHover);
             assert.equal(
@@ -1360,10 +1365,32 @@ class WebAssetTest(unittest.TestCase):
             created[1].crosshairHandler({{time: '2026-07-18'}});
             assert.equal(created[0].crosshairPositions.at(-1).time, '2026-07-17');
             assert.equal(created[1].crosshairPositions.at(-1).time, '2026-07-17');
-            assert.deepEqual(created[0].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: false}}}});
-            assert.deepEqual(created[1].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: false}}}});
+            assert.deepEqual(created[0].appliedOptions.at(-1), {{
+              handleScroll: {{
+                mouseWheel: false,
+                pressedMouseMove: false,
+                horzTouchDrag: false,
+                vertTouchDrag: false,
+              }},
+              handleScale: {{
+                axisPressedMouseMove: false,
+                mouseWheel: false,
+                pinch: false,
+              }},
+            }});
+            assert.deepEqual(created[1].appliedOptions.at(-1), {{
+              handleScroll: {{
+                mouseWheel: false,
+                pressedMouseMove: false,
+                horzTouchDrag: false,
+                vertTouchDrag: false,
+              }},
+              handleScale: {{
+                axisPressedMouseMove: false,
+                mouseWheel: false,
+                pinch: false,
+              }},
+            }});
             assert.equal(created[0].element.dataset.panLocked, 'true');
             assert.equal(created[1].element.dataset.panLocked, 'true');
             const lockedTimesBeforeHistoricalForecast = created[0].sharedTimes();
@@ -1418,10 +1445,32 @@ class WebAssetTest(unittest.TestCase):
             assert.match(textTree(detail), /Evidence status Not precomputed/);
 
             created[0].clickHandler({{time: '2026-07-18'}});
-            assert.deepEqual(created[0].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: false}}}});
-            assert.deepEqual(created[1].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: false}}}});
+            assert.deepEqual(created[0].appliedOptions.at(-1), {{
+              handleScroll: {{
+                mouseWheel: false,
+                pressedMouseMove: false,
+                horzTouchDrag: false,
+                vertTouchDrag: false,
+              }},
+              handleScale: {{
+                axisPressedMouseMove: false,
+                mouseWheel: false,
+                pinch: false,
+              }},
+            }});
+            assert.deepEqual(created[1].appliedOptions.at(-1), {{
+              handleScroll: {{
+                mouseWheel: false,
+                pressedMouseMove: false,
+                horzTouchDrag: false,
+                vertTouchDrag: false,
+              }},
+              handleScale: {{
+                axisPressedMouseMove: false,
+                mouseWheel: false,
+                pinch: false,
+              }},
+            }});
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(forecastMarkers.markers.length, 1);
