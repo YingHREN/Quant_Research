@@ -41,6 +41,7 @@ from web.services.market_data import (
     MarketDataUnavailable,
     UnknownTicker,
 )
+from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
     PriceProvider,
@@ -90,12 +91,16 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:
         scenario_provider = HistoricalScenarioProvider()
+    intraday_status_service = flask_app.config.get("INTRADAY_STATUS_SERVICE")
+    if intraday_status_service is None:
+        intraday_status_service = IntradayStatusService()
 
     flask_app.extensions["dashboard_repository"] = repository
     flask_app.extensions["dashboard_update_manager"] = update_manager
     flask_app.extensions["dashboard_factor_registry"] = factor_registry
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
+    flask_app.extensions["dashboard_intraday_status_service"] = intraday_status_service
 
     @flask_app.get("/")
     def index():
@@ -286,6 +291,10 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     @flask_app.get("/api/update/status")
     def update_status():
         return _json_response(_snapshot_dict(update_manager.snapshot()))
+
+    @flask_app.get("/api/market-data/status")
+    def market_data_status():
+        return _json_response(intraday_status_service.snapshot())
 
     @flask_app.errorhandler(InvalidTicker)
     def invalid_ticker(_error):
