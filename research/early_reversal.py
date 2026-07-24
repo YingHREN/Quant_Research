@@ -8,6 +8,7 @@ import math
 import pandas as pd
 
 from research.market_pressure import build_pressure_rows
+from research.market_data import next_bar
 from research.reversal import build_reversal_rows
 
 
@@ -17,6 +18,72 @@ CONDITION_CODES = (
     "descending_trendline_proximity",
     "current_volume_support",
 )
+
+
+def _entry_outcome(
+    history: pd.DataFrame,
+    signal_date: pd.Timestamp,
+    horizons: Sequence[int],
+) -> dict[str, object]:
+    signal = pd.Timestamp(signal_date)
+    entry = next_bar(history, signal)
+    result: dict[str, object] = {
+        "signal_date": signal.date().isoformat(),
+        "entry_date": None,
+        "entry_price": None,
+        "returns": {str(horizon): None for horizon in horizons},
+        "matured": {str(horizon): False for horizon in horizons},
+        "as_of_return": None,
+    }
+    if entry is None:
+        return result
+    entry_date, entry_bar = entry
+    entry_price = float(entry_bar["Open"])
+    result["entry_date"] = pd.Timestamp(entry_date).date().isoformat()
+    result["entry_price"] = entry_price
+    future = history.loc[history.index > signal]
+    for horizon in horizons:
+        if len(future) < horizon:
+            continue
+        result["returns"][str(horizon)] = (
+            float(future["Close"].iloc[horizon - 1]) / entry_price - 1.0
+        )
+        result["matured"][str(horizon)] = True
+    if entry_price and history.index[-1] >= entry_date:
+        result["as_of_return"] = float(history["Close"].iloc[-1]) / entry_price - 1.0
+    return result
+
+
+def compare_next_open_entries(
+    history: pd.DataFrame,
+    early_observation_date: pd.Timestamp,
+    confirmation_date: pd.Timestamp,
+    horizons: Sequence[int] = (5, 20),
+) -> dict[str, object]:
+    """Compare early and confirmed signals using executable next-session opens."""
+    if not horizons or any(
+        not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0
+        for horizon in horizons
+    ):
+        raise ValueError("horizons must be positive integers")
+    ordered = history.sort_index().copy(deep=True)
+    early = _entry_outcome(ordered, pd.Timestamp(early_observation_date), horizons)
+    confirmed = _entry_outcome(ordered, pd.Timestamp(confirmation_date), horizons)
+    delay = None
+    premium = None
+    if early["entry_date"] is not None and confirmed["entry_date"] is not None:
+        early_position = ordered.index.get_loc(pd.Timestamp(early["entry_date"]))
+        confirmed_position = ordered.index.get_loc(pd.Timestamp(confirmed["entry_date"]))
+        delay = int(confirmed_position - early_position)
+        if early["entry_price"]:
+            premium = float(confirmed["entry_price"]) / float(early["entry_price"]) - 1.0
+    return {
+        "as_of_date": ordered.index[-1].date().isoformat() if len(ordered) else None,
+        "early": early,
+        "confirmed": confirmed,
+        "confirmation_delay_sessions": delay,
+        "confirmation_entry_premium": premium,
+    }
 
 
 def _empty_row() -> dict[str, object]:

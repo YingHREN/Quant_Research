@@ -16,7 +16,7 @@ market-context, and data-source work discussed for the local dashboard.
   confirmation.
 - [x] Add localized chart markers, date details, factor explanations, and
   scores.
-- [ ] Compare entry after the 2026-07-17 observation with entry after the
+- [x] Compare entry after the 2026-07-17 observation with entry after the
   2026-07-20 confirmation using next-open execution.
 
 ## P0 — Repair the five-session forecast
