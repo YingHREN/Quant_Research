@@ -99,4 +99,3 @@ def market_group(key: str) -> MarketGroup:
         return MARKET_GROUPS[str(key)]
     except KeyError as exc:
         raise ValueError("unsupported_market_group") from exc
-

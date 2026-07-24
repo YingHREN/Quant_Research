@@ -39,4 +39,3 @@ class MarketGroupTest(unittest.TestCase):
         self.assertEqual(technology.benchmark_tickers, ("XLK",))
         self.assertEqual(technology.constituent_tickers, ())
         self.assertEqual(technology.related_tickers, ())
-
