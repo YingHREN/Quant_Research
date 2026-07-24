@@ -23,6 +23,7 @@ class IntradayCollector:
         self._disconnect_count = 0
         self._stream_error = None
         self._update_error = None
+        self._cleanup_error = None
         self._stop_requested = False
         self._stop_event = asyncio.Event()
         self._update_task = None
@@ -112,21 +113,37 @@ class IntradayCollector:
         )
 
     async def _perform_cleanup(self, completion):
-        error = None
+        result = None
         try:
             await self._cancel_update_worker()
             self._close_active()
             if not self._provider_closed:
-                self._provider_closed = True
                 await self._provider.close()
+                self._provider_closed = True
             self._state = "stopped"
-        except BaseException as caught:
-            error = caught
+            self._cleanup_error = None
+            self._stream_error = None
+            self._update_error = None
+        except asyncio.CancelledError:
+            result = "cancelled"
+            self._state = "cleanup_failed"
+            self._cleanup_error = "provider_error"
+        except Exception:
+            result = "provider_error"
+            self._state = "cleanup_failed"
+            self._cleanup_error = "provider_error"
         finally:
             if self._cleanup_owner is asyncio.current_task():
                 self._cleanup_owner = None
             if not completion.done():
-                completion.set_result(error)
+                completion.set_result(result)
+
+    @staticmethod
+    def _raise_cleanup_result(result):
+        if result == "cancelled":
+            raise asyncio.CancelledError
+        if result is not None:
+            raise RuntimeError("collector_cleanup_failed")
 
     async def _cleanup_from_run(self):
         if self._cleanup_completion is not None:
@@ -135,15 +152,20 @@ class IntradayCollector:
         self._cleanup_completion = completion
         self._cleanup_owner = asyncio.current_task()
         await self._perform_cleanup(completion)
-        error = completion.result()
-        if error is not None:
-            raise error
+        self._raise_cleanup_result(completion.result())
 
     async def _emit(self, event):
         self._store.write_event(event)
         self._last_event_received_at = event.received_ts
 
     async def run(self):
+        cleanup_completion = self._cleanup_completion
+        if cleanup_completion is not None:
+            if not cleanup_completion.done():
+                raise RuntimeError("collector_stopping")
+            if cleanup_completion.result() is not None:
+                raise RuntimeError("collector_cleanup_failed")
+
         current_task = asyncio.current_task()
         if self._run_owner is not None and not self._run_owner.done():
             raise RuntimeError("collector_already_running")
@@ -213,7 +235,9 @@ class IntradayCollector:
         self._stop_requested = True
         self._stop_event.set()
         completion = self._cleanup_completion
-        if completion is None:
+        if completion is None or (
+            completion.done() and completion.result() is not None
+        ):
             completion = asyncio.get_running_loop().create_future()
             self._cleanup_completion = completion
             cleanup_task = asyncio.create_task(
@@ -226,9 +250,7 @@ class IntradayCollector:
                 await asyncio.shield(completion)
             except asyncio.CancelledError:
                 cancelled = True
-        error = completion.result()
-        if error is not None:
-            raise error
+        self._raise_cleanup_result(completion.result())
         if cancelled:
             raise asyncio.CancelledError
 
@@ -246,5 +268,9 @@ class IntradayCollector:
                 else self._last_event_received_at.isoformat()
             ),
             "disconnect_count": self._disconnect_count,
-            "error": self._stream_error or self._update_error,
+            "error": (
+                self._cleanup_error
+                or self._stream_error
+                or self._update_error
+            ),
         }

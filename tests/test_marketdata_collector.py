@@ -33,6 +33,18 @@ class FakeStore:
         self.lifecycle.append(("close", provider, symbols, at))
 
 
+class FailOnceCloseStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.close_attempts = 0
+
+    def close_subscription(self, provider, symbols, at):
+        self.close_attempts += 1
+        if self.close_attempts == 1:
+            raise RuntimeError("sensitive close detail")
+        super().close_subscription(provider, symbols, at)
+
+
 class FakeProvider:
     def __init__(self):
         self.requests = []
@@ -292,6 +304,30 @@ class CloseCancelsStreamProvider(FakeProvider):
                 await stream_task
             except asyncio.CancelledError:
                 pass
+
+
+class CancelThenSlowCloseProvider(CloseCancelsStreamProvider):
+    def __init__(self):
+        super().__init__()
+        self.stream_joined = asyncio.Event()
+        self.release_first_close = asyncio.Event()
+
+    async def close(self):
+        self.close_calls += 1
+        stream_task = self.stream_task
+        if (
+            stream_task is not None
+            and stream_task is not asyncio.current_task()
+            and not stream_task.done()
+        ):
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+        self.stream_joined.set()
+        if self.close_calls == 1:
+            await self.release_first_close.wait()
 
 
 class FailOnceUpdateProvider(FakeProvider):
@@ -780,6 +816,102 @@ class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(collector.snapshot()["state"], "stopped")
         self.assertEqual(collector.snapshot()["subscribed_symbols"], [])
+
+    async def test_run_is_rejected_while_shared_cleanup_is_pending(self):
+        provider, store = CancelThenSlowCloseProvider(), FakeStore()
+        collector = IntradayCollector(provider, store)
+        run_task = asyncio.create_task(collector.run())
+        await provider.stream_started.wait()
+        stop_task = asyncio.create_task(collector.stop())
+        await provider.stream_joined.wait()
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
+
+        admission_error = None
+        try:
+            await asyncio.wait_for(collector.run(), 0.05)
+        except BaseException as caught:
+            admission_error = caught
+        state_before_release = collector.snapshot()["state"]
+        requests_before_release = len(provider.requests)
+        provider.release_first_close.set()
+        await stop_task
+
+        self.assertIsInstance(admission_error, RuntimeError)
+        self.assertEqual(str(admission_error), "collector_stopping")
+        self.assertEqual(requests_before_release, 1)
+        self.assertNotEqual(state_before_release, "stopped")
+        self.assertEqual(collector.snapshot()["state"], "stopped")
+
+        run_task = asyncio.create_task(collector.run())
+        await eventually(lambda: len(provider.requests) == 2)
+        self.assertEqual(collector.snapshot()["state"], "running")
+        await asyncio.wait_for(collector.stop(), 0.2)
+        with self.assertRaises(asyncio.CancelledError):
+            await run_task
+        self.assertEqual(len(provider.requests), 2)
+
+    async def test_failed_cleanup_blocks_run_and_next_stop_retries(self):
+        provider, store = CloseCancelsStreamProvider(), FailOnceCloseStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await provider.stream_started.wait()
+
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^collector_cleanup_failed$",
+            ):
+                await collector.stop()
+
+            failed_snapshot = collector.snapshot()
+            self.assertEqual(failed_snapshot["state"], "cleanup_failed")
+            self.assertEqual(failed_snapshot["error"], "provider_error")
+            self.assertNotIn("sensitive close detail", str(failed_snapshot))
+            self.assertEqual(
+                failed_snapshot["subscribed_symbols"],
+                ["SPY", "QQQ", "SOXX", "AMD"],
+            )
+            self.assertEqual(store.close_attempts, 1)
+            self.assertEqual(provider.close_calls, 0)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^collector_cleanup_failed$",
+            ):
+                await collector.run()
+
+            await asyncio.wait_for(collector.stop(), 0.2)
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
+
+            stopped_snapshot = collector.snapshot()
+            self.assertEqual(stopped_snapshot["state"], "stopped")
+            self.assertIsNone(stopped_snapshot["error"])
+            self.assertEqual(stopped_snapshot["subscribed_symbols"], [])
+
+            run_task = asyncio.create_task(collector.run())
+            await eventually(lambda: len(provider.requests) == 2)
+            self.assertEqual(collector.snapshot()["state"], "running")
+            await asyncio.wait_for(collector.stop(), 0.2)
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
+
+            self.assertEqual(store.close_attempts, 3)
+            self.assertEqual(
+                store.closed,
+                [
+                    ("fake", ("SPY", "QQQ", "SOXX", "AMD")),
+                    ("fake", ("SPY", "QQQ", "SOXX", "AMD")),
+                ],
+            )
+            self.assertEqual(provider.close_calls, 2)
+        finally:
+            if not run_task.done():
+                run_task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await run_task
 
 
 if __name__ == "__main__":
