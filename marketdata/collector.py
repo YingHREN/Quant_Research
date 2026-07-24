@@ -21,10 +21,13 @@ class IntradayCollector:
         self._state = "idle"
         self._last_event_received_at = None
         self._disconnect_count = 0
-        self._error = None
+        self._stream_error = None
+        self._update_error = None
         self._stop_requested = False
         self._stop_event = asyncio.Event()
         self._update_task = None
+        self._provider_closed = False
+        self._run_owner = None
 
     @staticmethod
     def _now():
@@ -67,93 +70,119 @@ class IntradayCollector:
                         changed_at,
                     )
                 self._active = desired
+                self._update_error = None
         except asyncio.CancelledError:
             raise
         except Exception:
-            self._error = "provider_error"
+            self._update_error = "provider_error"
 
     def _update_finished(self, task):
         if self._update_task is task:
             self._update_task = None
+
+    async def _cancel_update_worker(self):
+        update_task = self._update_task
+        if update_task is None:
+            return
+        update_task.cancel()
+        await asyncio.gather(update_task, return_exceptions=True)
+        if self._update_task is update_task:
+            self._update_task = None
+
+    def _close_active(self):
+        if not self._active.symbols:
+            return
+        self._store.close_subscription(
+            self._provider.capabilities().provider,
+            self._active.symbols,
+            self._now(),
+        )
+        self._active = SubscriptionRequest(
+            (),
+            max_symbols=self._active.max_symbols,
+        )
+
+    async def _cleanup(self):
+        try:
+            await self._cancel_update_worker()
+            self._close_active()
+            if not self._provider_closed:
+                self._provider_closed = True
+                await self._provider.close()
+        finally:
+            self._state = "stopped"
 
     async def _emit(self, event):
         self._store.write_event(event)
         self._last_event_received_at = event.received_ts
 
     async def run(self):
+        current_task = asyncio.current_task()
+        if self._run_owner is not None and not self._run_owner.done():
+            raise RuntimeError("collector_already_running")
+        self._run_owner = current_task
+        self._stop_requested = False
+        self._stop_event = asyncio.Event()
+        self._update_error = None
+        try:
+            await self._run_owned()
+        finally:
+            if self._run_owner is current_task:
+                self._run_owner = None
+
+    async def _run_owned(self):
         self._store.initialize()
         capabilities = self._provider.capabilities()
         self._store.record_capabilities(capabilities, self._now())
         if capabilities.unavailable_reason is not None:
             self._state = "unavailable"
-            self._error = capabilities.unavailable_reason
+            self._stream_error = capabilities.unavailable_reason
             return
 
+        self._provider_closed = False
         retry_index = 0
-        while not self._stop_requested:
-            started_at = self._now()
-            self._state = "connecting"
-            self._error = None
-            self._active = self._desired
-            self._store.open_subscription(
-                capabilities.provider,
-                self._active.symbols,
-                started_at,
-            )
-            try:
-                self._state = "running"
-                await self._provider.stream_events(self._active, self._emit)
-                if not self._stop_requested:
-                    raise RuntimeError("provider_stream_ended")
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self._disconnect_count += 1
-                self._error = "provider_error"
-                self._state = "retrying"
-                self._store.close_subscription(
+        try:
+            while not self._stop_requested:
+                started_at = self._now()
+                self._state = "connecting"
+                self._stream_error = None
+                self._active = self._desired
+                self._store.open_subscription(
                     capabilities.provider,
                     self._active.symbols,
-                    self._now(),
+                    started_at,
                 )
-                self._active = SubscriptionRequest(
-                    (),
-                    max_symbols=capabilities.max_symbols,
-                )
-                delay = self._retry_delays[
-                    min(retry_index, len(self._retry_delays) - 1)
-                ]
-                retry_index += 1
-                if delay <= 0:
-                    await asyncio.sleep(0)
-                else:
-                    try:
-                        await asyncio.wait_for(self._stop_event.wait(), delay)
-                    except asyncio.TimeoutError:
-                        pass
-        self._state = "stopped"
+                try:
+                    self._state = "running"
+                    await self._provider.stream_events(self._active, self._emit)
+                    if not self._stop_requested:
+                        raise RuntimeError("provider_stream_ended")
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._disconnect_count += 1
+                    self._stream_error = "provider_error"
+                    self._state = "retrying"
+                    await self._cancel_update_worker()
+                    self._close_active()
+                    delay = self._retry_delays[
+                        min(retry_index, len(self._retry_delays) - 1)
+                    ]
+                    retry_index += 1
+                    if delay <= 0:
+                        await asyncio.sleep(0)
+                    else:
+                        try:
+                            await asyncio.wait_for(self._stop_event.wait(), delay)
+                        except asyncio.TimeoutError:
+                            pass
+        finally:
+            await self._cleanup()
 
     async def stop(self):
         self._stop_requested = True
         self._stop_event.set()
-        update_task = self._update_task
-        if update_task is not None:
-            update_task.cancel()
-            await asyncio.gather(update_task, return_exceptions=True)
-            if self._update_task is update_task:
-                self._update_task = None
-        if self._active.symbols:
-            self._store.close_subscription(
-                self._provider.capabilities().provider,
-                self._active.symbols,
-                self._now(),
-            )
-            self._active = SubscriptionRequest(
-                (),
-                max_symbols=self._active.max_symbols,
-            )
-        await self._provider.close()
-        self._state = "stopped"
+        await self._cleanup()
 
     def snapshot(self):
         capabilities = self._provider.capabilities()
@@ -169,5 +198,5 @@ class IntradayCollector:
                 else self._last_event_received_at.isoformat()
             ),
             "disconnect_count": self._disconnect_count,
-            "error": self._error,
+            "error": self._stream_error or self._update_error,
         }
