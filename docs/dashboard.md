@@ -39,6 +39,9 @@ export ALPACA_API_SECRET="..."
   --selected AMD --peer NVDA --peer AVGO --candidate NBIS
 ```
 
+Press `Ctrl-C` in that terminal to stop the foreground collector; it finishes
+its collector cleanup before returning to the shell.
+
 This phase uses Alpaca's free IEX feed, not the full US consolidated market.
 Trade direction is inferred from the contemporaneous quote midpoint and then
 the tick rule; it is not exchange-provided aggressor direction. Inspect

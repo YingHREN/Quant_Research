@@ -62,6 +62,16 @@ class CollectIntradayCliTest(unittest.TestCase):
             with self.assertRaises(asyncio.CancelledError):
                 collect_intraday.main()
 
+    def test_main_returns_cleanly_after_keyboard_interrupt(self):
+        collector = mock.Mock()
+        collector.run.return_value = object()
+        with mock.patch.object(
+            collect_intraday, "build_collector", return_value=collector
+        ), mock.patch.object(
+            collect_intraday.asyncio, "run", side_effect=KeyboardInterrupt
+        ):
+            self.assertIsNone(collect_intraday.main())
+
 
 if __name__ == "__main__":
     unittest.main()

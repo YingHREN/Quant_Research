@@ -31,7 +31,10 @@ def build_collector(argv=None):
 
 
 def main():
-    asyncio.run(build_collector().run())
+    try:
+        asyncio.run(build_collector().run())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
