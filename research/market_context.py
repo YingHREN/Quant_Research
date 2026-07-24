@@ -74,6 +74,11 @@ _REVERSAL_ATOMIC_COLUMNS = (
     "trendline_breakout",
     "higher_low_confirmed",
 )
+_CROSS_MARKET_ATOMIC_COLUMNS = (
+    "qqq_trend_state",
+    "sector_relative_strength_20",
+    "stock_sector_relative_strength_20",
+)
 
 
 @dataclass(frozen=True)
@@ -201,19 +206,47 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
 def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
     """Return causal atomic rows without UI composite scores."""
     prepared = _prepare_histories(histories, None)
-    tickers = tuple(
-        dict.fromkeys((*group.constituent_tickers, *group.related_tickers))
+    group_tickers = frozenset(
+        (*group.constituent_tickers, *group.related_tickers)
+    )
+    qqq_trend = _qqq_trend_series(prepared.get("QQQ"))
+    sector = _sector_composite(prepared, group)
+    sector_relative = _relative_strength_series(
+        sector,
+        (
+            None
+            if "QQQ" not in prepared
+            else prepared["QQQ"].history["Close"].astype(float)
+        ),
+        20,
     )
     frames = {}
-    for ticker in tickers:
-        item = prepared.get(ticker)
-        if item is None:
-            continue
+    for ticker, item in prepared.items():
         frame = pd.DataFrame(index=item.history.index)
         for column in _PRESSURE_ATOMIC_COLUMNS:
             frame[f"pressure_{column}"] = item.pressure[column].astype(float)
         for column in _REVERSAL_ATOMIC_COLUMNS:
             frame[column] = item.reversal[column].astype(float)
+        frame["qqq_trend_state"] = _causal_reindex(
+            qqq_trend,
+            frame.index,
+        )
+        frame["sector_relative_strength_20"] = _causal_reindex(
+            sector_relative,
+            frame.index,
+        )
+        if ticker in group_tickers:
+            stock_relative = _relative_strength_series(
+                item.history["Close"].astype(float),
+                sector,
+                20,
+            )
+            frame["stock_sector_relative_strength_20"] = _causal_reindex(
+                stock_relative,
+                frame.index,
+            )
+        else:
+            frame["stock_sector_relative_strength_20"] = np.nan
         frames[ticker] = frame
     if not frames:
         return _empty_multiindex_frame(
@@ -221,11 +254,48 @@ def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:
                 f"pressure_{column}" for column in _PRESSURE_ATOMIC_COLUMNS
             )
             + _REVERSAL_ATOMIC_COLUMNS
+            + _CROSS_MARKET_ATOMIC_COLUMNS
         )
     return pd.concat(
         frames,
         names=("ticker", "observation_date"),
     ).sort_index()
+
+
+def _qqq_trend_series(item):
+    if item is None:
+        return None
+    close = item.history["Close"].astype(float)
+    valid = item.ema20.notna() & item.sma50.notna()
+    values = np.select(
+        (
+            valid & (close > item.ema20) & (item.ema20 > item.sma50),
+            valid & (close < item.ema20) & (item.ema20 < item.sma50),
+        ),
+        (1.0, -1.0),
+        default=0.0,
+    )
+    return pd.Series(values, index=close.index, dtype=float).where(valid)
+
+
+def _relative_strength_series(first, second, window):
+    if first is None or second is None:
+        return None
+    first = first.sort_index().astype(float)
+    second_asof = second.sort_index().astype(float).reindex(
+        first.index,
+        method="ffill",
+    )
+    first_return = first / first.shift(window) - 1.0
+    second_return = second_asof / second_asof.shift(window) - 1.0
+    result = first_return - second_return
+    return result.where(np.isfinite(result), np.nan)
+
+
+def _causal_reindex(series, index):
+    if series is None or series.empty:
+        return pd.Series(np.nan, index=index, dtype=float)
+    return series.sort_index().reindex(index, method="ffill").astype(float)
 
 
 def build_group_score_frame(histories, group: MarketGroup) -> pd.DataFrame:

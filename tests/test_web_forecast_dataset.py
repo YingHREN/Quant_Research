@@ -42,6 +42,51 @@ def price_history(start="2025-01-02", periods=280, close=None):
     )
 
 
+def market_feature_histories(end="2026-07-23"):
+    dates = pd.bdate_range(end=end, periods=280)
+    result = {}
+    for ticker, slope in (
+        ("QQQ", 0.15),
+        ("SPY", 0.12),
+        ("SOXX", 0.20),
+        ("SMH", 0.22),
+        ("AMD", 0.25),
+        ("OTHER", 0.10),
+    ):
+        close = 100.0 + np.arange(len(dates)) * slope
+        result[ticker] = price_history(
+            periods=len(dates),
+            close=close,
+        ).set_axis(dates)
+    return result
+
+
+def append_future_benchmark_spike(histories):
+    result = {
+        ticker: history.copy(deep=True)
+        for ticker, history in histories.items()
+    }
+    future_dates = pd.bdate_range(
+        start=max(frame.index[-1] for frame in histories.values())
+        + pd.Timedelta(days=1),
+        periods=2,
+    )
+    for ticker in ("QQQ", "SOXX", "SMH"):
+        close = np.array([1_000.0, 10.0])
+        future = pd.DataFrame(
+            {
+                "Open": close,
+                "High": close + 2.0,
+                "Low": close - 2.0,
+                "Close": close,
+                "Volume": [9_000_000.0, 9_000_000.0],
+            },
+            index=future_dates,
+        )
+        result[ticker] = pd.concat([result[ticker], future])
+    return result
+
+
 class ForecastDatasetTest(unittest.TestCase):
     def test_fast_structure_features_match_causal_reference(self):
         close = 100.0 + np.sin(np.arange(280) / 4.0) * 8.0 + np.arange(280) * 0.08
@@ -92,6 +137,58 @@ class ForecastDatasetTest(unittest.TestCase):
             self.assertIn(key, frame.columns)
             self.assertTrue(frame[key].dropna().isin((0.0, 1.0, 2.0, 3.0)).all())
         self.assertNotIn("reversal_signal_count", FEATURE_COLUMNS)
+
+    def test_market_pressure_atomic_features_are_numeric_without_composites(self):
+        histories = market_feature_histories()
+        frame = build_feature_frame(histories)
+        row = frame.loc[("AMD", frame.loc["AMD"].index[-1])]
+
+        for key in (
+            "pressure_close_location",
+            "pressure_upper_wick_ratio",
+            "pressure_signed_volume_proxy",
+            "pressure_distribution_day",
+            "pressure_failed_breakout",
+            "qqq_trend_state",
+            "sector_relative_strength_20",
+            "stock_sector_relative_strength_20",
+        ):
+            self.assertIn(key, FEATURE_COLUMNS)
+            self.assertTrue(np.isfinite(row[key]) or np.isnan(row[key]))
+        self.assertNotIn("market_posture_score", FEATURE_COLUMNS)
+        self.assertNotIn("reversal_opportunity_score", FEATURE_COLUMNS)
+        self.assertNotIn("downside_risk_score", FEATURE_COLUMNS)
+        self.assertTrue(
+            np.isnan(
+                frame.loc[
+                    ("OTHER", frame.loc["OTHER"].index[-1]),
+                    "stock_sector_relative_strength_20",
+                ]
+            )
+        )
+
+    def test_future_benchmark_rows_cannot_change_old_cross_market_features(self):
+        histories = market_feature_histories(end="2026-07-23")
+        before = build_feature_frame(histories)
+        after = build_feature_frame(append_future_benchmark_spike(histories))
+        cross_market = (
+            "qqq_trend_state",
+            "sector_relative_strength_20",
+            "stock_sector_relative_strength_20",
+        )
+        for key in cross_market:
+            self.assertIn(key, before)
+
+        pd.testing.assert_series_equal(
+            after.loc[
+                ("AMD", pd.Timestamp("2026-07-23")),
+                list(cross_market),
+            ],
+            before.loc[
+                ("AMD", pd.Timestamp("2026-07-23")),
+                list(cross_market),
+            ],
+        )
 
     def test_forward_target_uses_ticker_local_session_positions(self):
         histories = {

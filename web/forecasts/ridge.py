@@ -20,7 +20,7 @@ from web.forecasts.dataset import (
 
 
 MODEL_KEY = "ridge_direction_v1"
-MODEL_VERSION = "v2"
+MODEL_VERSION = "v3"
 NEUTRAL_BANDS = MappingProxyType({5: 0.01, 20: 0.02, 60: 0.04})
 
 

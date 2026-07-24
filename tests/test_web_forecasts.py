@@ -12,6 +12,7 @@ from web.forecasts.registry import (
 )
 from web.forecasts.ridge import (
     MODEL_KEY,
+    MODEL_VERSION,
     NEUTRAL_BANDS,
     RidgeForecastProvider,
     direction_for_return,
@@ -53,6 +54,10 @@ def synthetic_frame(periods=18, tickers=("AAA", "BBB")):
 
 
 class RidgeForecastProviderTest(unittest.TestCase):
+    def test_atomic_market_feature_schema_advances_model_version(self):
+        self.assertEqual(MODEL_KEY, "ridge_direction_v1")
+        self.assertEqual(MODEL_VERSION, "v3")
+
     def test_prediction_is_deterministic_and_singular_features_are_stable(self):
         frame, dates = synthetic_frame()
         provider = RidgeForecastProvider(frame, alpha=0.5, minimum_samples=8)

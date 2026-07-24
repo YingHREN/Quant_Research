@@ -9,10 +9,22 @@ import numpy as np
 import pandas as pd
 
 from factors.compute import _ema, _sma, _zigzag_pivots
+from research.market_context import build_atomic_model_rows
 from research.reversal import build_reversal_rows
 from web.forecasts.base import SUPPORTED_HORIZONS
+from web.market_groups import market_group
 
 
+MARKET_ATOMIC_FEATURE_COLUMNS = (
+    "pressure_close_location",
+    "pressure_upper_wick_ratio",
+    "pressure_signed_volume_proxy",
+    "pressure_distribution_day",
+    "pressure_failed_breakout",
+    "qqq_trend_state",
+    "sector_relative_strength_20",
+    "stock_sector_relative_strength_20",
+)
 FEATURE_COLUMNS = (
     "close_vs_ema20_pct",
     "close_vs_sma50_pct",
@@ -30,6 +42,7 @@ FEATURE_COLUMNS = (
     "prior_high_breakout",
     "trendline_breakout",
     "higher_low_confirmed",
+    *MARKET_ATOMIC_FEATURE_COLUMNS,
 )
 REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 INDEX_NAMES = ("ticker", "observation_date")
@@ -44,10 +57,13 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     if not isinstance(histories, Mapping):
         raise TypeError("histories must be a mapping of ticker to DataFrame")
 
-    ticker_frames = []
+    validated = {}
     for raw_ticker, source in histories.items():
         ticker = str(raw_ticker)
         history = _validated_history(ticker, source)
+        validated[ticker] = history
+    ticker_frames = []
+    for ticker, history in validated.items():
         if history.empty:
             continue
         ticker_frames.append(_ticker_features(ticker, history))
@@ -61,6 +77,14 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     result = pd.concat(ticker_frames, axis=0).sort_index()
     if result.index.has_duplicates:
         raise ValueError("duplicate (ticker, observation_date) keys are not allowed")
+    market_rows = build_atomic_model_rows(
+        validated,
+        market_group("semiconductor"),
+    )
+    for column in MARKET_ATOMIC_FEATURE_COLUMNS:
+        result[column] = market_rows[column].reindex(result.index)
+    result = result.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
+    result = result.where(np.isfinite(result), np.nan)
     return result
 
 
@@ -209,6 +233,8 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
         "higher_low_confirmed",
     ):
         features[key] = reversal[key].astype(float)
+    for key in MARKET_ATOMIC_FEATURE_COLUMNS:
+        features[key] = np.nan
     features = features.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
     features = features.where(np.isfinite(features), np.nan)
     features.index = pd.MultiIndex.from_arrays(
