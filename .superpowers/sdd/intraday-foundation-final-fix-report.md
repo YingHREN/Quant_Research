@@ -8,15 +8,169 @@ Implementation commits:
 
 - `722af83` — `fix: harden intraday event and subscription truth`
 - `8cf0a2c` — `fix: persist collector state and batch event writes`
+- `d7484fa` — `fix: close intraday final review gaps`
 
 No design, implementation-plan, or progress files were modified.
 
 ## Outcome
 
 All nine Important findings and the requested minor hardening were addressed.
+The second-round final review's six Important findings and one Minor finding
+were also closed with focused counterexamples.
 The implementation remains limited to the planned Alpaca IEX real-time
 foundation: it adds no historical-bars client, no real network calls in tests,
 and no unrelated scoring or dashboard feature work.
+
+## Second-round final review
+
+### 1. Capacity-safe updates and per-ACK truth
+
+RED:
+
+- A 30-symbol to 30-symbol swap attempted to subscribe symbol 31 before making
+  room.
+- A successful add ACK followed by a failed remove left collector persistence
+  at the pre-add set.
+
+GREEN:
+
+- Subscription updates calculate available capacity and, only when necessary,
+  unsubscribe the minimum number of old symbols before adding replacements.
+  When capacity is available, the original add-before-remove ordering remains.
+- Every successful Alpaca subscription ACK invokes the collector reconciliation
+  callback before the next subscription action is sent.
+- Each callback transactionally reconciles open intervals and the persisted
+  status to the actual acknowledged set. A later action failure therefore
+  leaves memory and SQLite at the last server-confirmed set.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_full_pool_swap_frees_capacity_before_subscribing_replacement`
+- `test_each_successful_update_ack_is_reported_before_later_failure`
+- `test_each_ack_reconciles_actual_symbols_before_later_update_failure`
+
+### 2. Official correction schema and chained replay
+
+RED:
+
+- An official Alpaca correction containing
+  `oi/op/os/oc` and `ci/cp/cs/cc` was dropped by the preceding normalizer.
+- A trade corrected A to B and then B to C replayed only the first correction;
+  cancelling C did not remove the effective trade.
+
+GREEN:
+
+- Correction contracts and storage retain both the original and corrected
+  values from the official schema.
+- Effective replay traverses correction chains, checks cancellation at every
+  identity, emits the final corrected identity, and keeps all lookups scoped by
+  provider and symbol.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_trade_correction_and_cancel_messages_are_normalized`
+- `test_effective_replay_follows_correction_chain_and_corrected_cancel`
+- `test_effective_trade_adjustments_are_scoped_by_provider_and_symbol`
+
+### 3. Transactional lease and fencing token
+
+RED:
+
+- After stale-session takeover, the old owner could still write status,
+  heartbeat, and interval changes.
+- A heartbeat or same-session acquisition could move persisted status time
+  backward.
+- Separate interval and status transactions could commit only half of a
+  subscription reconciliation.
+
+GREEN:
+
+- Session acquisition uses `BEGIN IMMEDIATE`, a persisted lease expiry, and a
+  compare-by-session fencing token.
+- All status, heartbeat, and session-owned interval writes reject a superseded
+  token; status time cannot regress.
+- Subscription interval diffs and their status snapshot commit in one
+  transaction.
+- Collector status/reconciliation writes share a process lock so concurrent
+  heartbeat and writer threads cannot reorder their timestamps.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_takeover_fences_old_status_heartbeat_and_interval_writes`
+- `test_status_heartbeat_cannot_move_backward`
+- `test_subscription_reconciliation_and_status_are_one_transaction`
+- `test_concurrent_status_writes_are_serialized`
+
+### 4. Cleanup error typing and provider closure
+
+RED:
+
+- An interval-close storage error was reported as a provider error and skipped
+  provider close.
+
+GREEN:
+
+- Cleanup attempts writer drain, interval reconciliation, provider close, and
+  heartbeat shutdown independently.
+- Storage failure has precedence as `storage_error`, while provider close is
+  still attempted. Retryable interval-close failures can be retried without
+  leaving split open/close transactions.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_cleanup_interval_storage_error_still_closes_provider`
+- `test_failed_cleanup_blocks_run_and_next_stop_retries`
+
+### 5. Real CLI missing-credential persistence
+
+RED:
+
+- `build_collector()` exited before initializing SQLite, so a separately
+  started Flask process could only report `collector_not_configured`.
+
+GREEN:
+
+- The real CLI now runs the unavailable collector far enough to acquire a
+  session and persist `state="unavailable", error="missing_credentials"`,
+  without opening a network connection, then exits with a safe credential
+  message.
+- A separately constructed Flask app reading the same database observes that
+  exact state.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_build_allows_unavailable_collector_without_connecting`
+- `test_missing_credentials_persist_for_separate_flask_reader`
+- `test_persisted_missing_credentials_is_distinct_from_never_configured`
+
+### 6. Stable application-level ACK timeouts
+
+RED:
+
+- A connected socket that never acknowledged authentication or the initial
+  subscription could wait forever.
+
+GREEN:
+
+- Authentication, initial subscription, and dynamic subscription ACK waits are
+  bounded by an application timeout and expose only stable safe error codes.
+
+Commit: `d7484fa`
+
+Key tests:
+
+- `test_authentication_ack_timeout_has_stable_safe_code`
+- `test_initial_subscription_ack_timeout_has_stable_safe_code`
 
 ## Finding-by-finding TDD evidence
 
@@ -39,8 +193,9 @@ GREEN:
   `SubscriptionConfirmation`.
 - Stable safe protocol codes are used for authentication, subscription, and
   mismatch failures; provider details and credentials are not exposed.
-- Updates wait for the additions ACK before sending removals, then validate the
-  final ACK.
+- Updates wait for each ACK before the next action. They add before removing
+  when capacity permits and first free only the required slots at the
+  30-symbol limit.
 - `IntradayCollector` publishes `running`, updates its active set, and opens or
   closes intervals only after confirmation.
 - Subscription intervals carry a collector session id. Starting a new session
@@ -210,9 +365,12 @@ GREEN:
   provider identity, exact timestamp, replacement/cancel metadata, session, and
   local trading date.
 - Normalization handles Alpaca `c` and `x` explicitly.
+- Alpaca corrections parse the official original/corrected field groups
+  `oi/op/os/oc` and `ci/cp/cs/cc`.
 - Raw trades and adjustments remain immutable in separate tables; exact
   adjustment replays are idempotent independent of local receive time.
-- `read_effective_trades()` applies corrections/cancels with a scoped
+- `read_effective_trades()` follows correction chains and applies
+  corrections/cancels with a scoped
   `(provider, symbol, provider_trade_id)` identity.
 
 Commits: `722af83`, `8cf0a2c`
@@ -282,8 +440,10 @@ Key tests:
 - `BarEvent` validates UTC/order, interval shape, finite positive OHLC/VWAP,
   OHLC consistency, nonnegative finite volume, and nonnegative integer count.
 - CLI and Flask use the same absolute project-root database default.
+- Authentication and subscription ACK waits have bounded application-level
+  timeouts with stable safe codes.
 
-Commits: `722af83`, `8cf0a2c`
+Commits: `722af83`, `8cf0a2c`, `d7484fa`
 
 ## Verification
 
@@ -291,7 +451,7 @@ Interpreter:
 
 `/Users/renyinghao.1/Project/stock_screener/venv/bin/python`
 
-Results at implementation head `8cf0a2c`:
+Results at implementation head `d7484fa`:
 
 - Focused intraday suites:
   `python -m unittest tests.test_marketdata_contracts
@@ -299,10 +459,10 @@ Results at implementation head `8cf0a2c`:
   tests.test_marketdata_subscriptions tests.test_marketdata_alpaca
   tests.test_marketdata_collector tests.test_web_intraday_status
   tests.test_collect_intraday -v`
-  — **99 passed**
+  — **112 passed**
 - Complete suite:
   `python -m unittest discover -s tests -v`
-  — **321 passed**
+  — **334 passed**
 - Repository Python compilation with
   `PYTHONPYCACHEPREFIX=/private/tmp/intraday-foundation-final-pycache`
   — **passed**
