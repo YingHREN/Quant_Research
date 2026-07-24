@@ -251,6 +251,13 @@ class BuiltinFactorTest(unittest.TestCase):
                 "higher_low_confirmation_date",
                 "reversal_signal_count",
                 "reversal_candidate",
+                "early_reversal_score",
+                "early_reversal_watch",
+                "early_reversal_conditions",
+                "early_prior_session_selloff",
+                "early_current_price_acceptance",
+                "early_descending_trendline_proximity",
+                "early_current_volume_support",
             },
         )
         self.assertEqual(last["time"], "2026-07-21")
@@ -278,6 +285,10 @@ class BuiltinFactorTest(unittest.TestCase):
         self.assertIsInstance(last["higher_low_confirmed"], bool)
         self.assertIsInstance(last["reversal_candidate"], bool)
         self.assertIn(last["reversal_signal_count"], (0, 1, 2, 3))
+        self.assertIsInstance(last["early_reversal_score"], int)
+        self.assertIn(last["early_reversal_score"], (0, 25, 50, 75, 100))
+        self.assertIsInstance(last["early_reversal_watch"], bool)
+        self.assertIsInstance(last["early_reversal_conditions"], list)
 
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()
@@ -291,6 +302,7 @@ class BuiltinFactorTest(unittest.TestCase):
             "trendline_breakout",
             "higher_low_confirmed",
             "reversal_signal_count",
+            "early_reversal_score",
         ):
             self.assertIn(key, by_key)
         ctx = context_from_history(price_history(40))
@@ -300,6 +312,10 @@ class BuiltinFactorTest(unittest.TestCase):
 
         self.assertEqual(strict_vcp.raw_value["reject_reason"], "历史不足")
         self.assertEqual(platform.raw_value["reason"], "历史不足")
+        early = registry.evaluate_one(by_key["early_reversal_score"], ctx)
+        self.assertEqual(early.raw_value, build_chart_rows(ctx)[-1]["early_reversal_score"])
+        self.assertEqual(early.formatted, f"{early.raw_value}/100")
+        self.assertFalse(by_key["early_reversal_score"].percentile_eligible)
 
     def test_legacy_score_is_explicitly_not_predictive(self):
         registry = build_default_registry()

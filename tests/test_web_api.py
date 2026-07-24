@@ -665,11 +665,21 @@ class WebApiTest(unittest.TestCase):
             "higher_low_confirmation_date",
             "reversal_signal_count",
             "reversal_candidate",
+            "early_reversal_score",
+            "early_reversal_watch",
+            "early_reversal_conditions",
+            "early_prior_session_selloff",
+            "early_current_price_acceptance",
+            "early_descending_trendline_proximity",
+            "early_current_volume_support",
         )
         for row in payload["chart"]:
             for key in reversal_keys:
                 self.assertIn(key, row)
             self.assertIn(row["reversal_signal_count"], (0, 1, 2, 3))
+            self.assertIn(row["early_reversal_score"], (0, 25, 50, 75, 100))
+            self.assertIsInstance(row["early_reversal_watch"], bool)
+            self.assertIsInstance(row["early_reversal_conditions"], list)
 
     def test_historical_forecast_endpoint_computes_only_requested_date(self):
         requested = self.repository.histories["AAA"].index[-20].date().isoformat()

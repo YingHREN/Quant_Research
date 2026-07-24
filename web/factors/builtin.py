@@ -22,6 +22,7 @@ from factors.compute import (
     volume_stats,
 )
 from research.momentum import momentum_features
+from research.early_reversal import build_early_reversal_rows
 from research.reversal import build_reversal_rows
 from run import market_uptrend
 from scoring.engine import evaluate
@@ -272,6 +273,11 @@ FACTOR_ZH = {
         "对突破前高、突破下降趋势线和更高低点确认三个布尔事件求和。",
         "观察日", "描述性组合；达到两个仅标记候选，不代表买入建议。",
     ),
+    "early_reversal_score": _zh(
+        "早期反转观察", "结构确认前的收盘后反转观察分数。",
+        "前一日放量下跌、当日价格接受、接近未突破的下降趋势线和当日量能支持各计 25 分；前两项必须同时满足且总分至少 75 才进入观察。",
+        "前一交易日与观察日", "描述性观察分数；不是反转概率，也不替代结构确认。",
+    ),
     "volume_ratio": _zh(
         "成交量比率", "当前成交量除以时点一致的 20 日平均成交量。",
         "当日成交量除以过去 20 日简单平均成交量。",
@@ -314,6 +320,7 @@ FACTOR_WINDOWS = {
     "trendline_breakout": "Adaptive confirmed swings",
     "higher_low_confirmed": "Adaptive confirmed swings",
     "reversal_signal_count": "Observation session",
+    "early_reversal_score": "Prior session and observation session",
     "volume_ratio": "20 sessions",
     "atr20_pct": "20 sessions",
     "realized_vol_63": "Up to 63 sessions",
@@ -387,6 +394,11 @@ def build_default_registry():
                       "Number of same-session causal reversal events.",
                       _chart_value("reversal_signal_count"), lambda v: f"{int(v)}/3",
                       methodology="Sum of prior-high breakout, descending-trendline breakout, and confirmed higher-low event flags."),
+        BuiltinFactor("early_reversal_score", "Early reversal watch", "structure", "neutral",
+                      "End-of-session reversal observation before structural confirmation.",
+                      _chart_value("early_reversal_score"), lambda v: f"{int(v)}/100",
+                      methodology="Awards 25 points each for a prior-session selloff, current price acceptance, proximity below an active descending trendline, and current volume support; the first two are required for a watch.",
+                      percentile_eligible=False),
         BuiltinFactor("volume_ratio", "Volume ratio", "volume", "higher",
                       "Current volume divided by its point-in-time 20-session average.",
                       _chart_value("volume_ratio"), _ratio,
@@ -484,6 +496,7 @@ def build_chart_rows(context: AnalysisContext):
         above_ema20 = close >= ema20
         above_sma50 = close >= sma50
         reversal_rows = build_reversal_rows(history)
+        early_reversal_rows = build_early_reversal_rows(history, reversal_rows)
 
         rows = []
         for position, (timestamp, source) in enumerate(history.iterrows()):
@@ -538,6 +551,7 @@ def build_chart_rows(context: AnalysisContext):
                         "above" if above_sma50.iloc[position] else "below"
                     ) if crossed_sma50 else None,
                     **reversal_rows[position],
+                    **early_reversal_rows[position],
                 }
             )
         return rows
