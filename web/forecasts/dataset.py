@@ -53,6 +53,32 @@ FEATURE_COLUMNS = (
     "higher_low_confirmed",
     *MARKET_ATOMIC_FEATURE_COLUMNS,
 )
+RIDGE_V4_FEATURE_COLUMNS = (
+    "close_vs_ema20_pct",
+    "close_vs_sma50_pct",
+    "close_vs_sma200_pct",
+    "mom_3_1",
+    "mom_6_1",
+    "mom_12_1",
+    "strict_vcp",
+    "tight_platform",
+    "pivot_distance_pct",
+    "volume_ratio",
+    "volume_change",
+    "atr20_pct",
+    "realized_vol_63",
+    "prior_high_breakout",
+    "trendline_breakout",
+    "higher_low_confirmed",
+    "pressure_close_location",
+    "pressure_upper_wick_ratio",
+    "pressure_signed_volume_proxy",
+    "pressure_distribution_day",
+    "pressure_failed_breakout",
+    "qqq_trend_state",
+    "sector_relative_strength_20",
+    "stock_sector_relative_strength_20",
+)
 REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 INDEX_NAMES = ("ticker", "observation_date")
 

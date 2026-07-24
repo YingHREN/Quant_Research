@@ -12,7 +12,7 @@ import pandas as pd
 
 from web.forecasts.base import ForecastResult, SUPPORTED_HORIZONS, UnavailableReason
 from web.forecasts.dataset import (
-    FEATURE_COLUMNS,
+    RIDGE_V4_FEATURE_COLUMNS,
     eligible_training_rows,
     label_end_column,
     target_column,
@@ -37,7 +37,7 @@ class RidgeForecastProvider:
         *,
         alpha: float = 1.0,
         minimum_samples: int = 30,
-        feature_columns: Sequence[str] = FEATURE_COLUMNS,
+        feature_columns: Sequence[str] = RIDGE_V4_FEATURE_COLUMNS,
         calibration_history: pd.DataFrame | None = None,
         _labels_validated: bool = False,
     ):

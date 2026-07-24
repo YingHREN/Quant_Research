@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from web.forecasts.base import UnavailableReason
-from web.forecasts.dataset import FEATURE_COLUMNS
+from web.forecasts.dataset import FEATURE_COLUMNS, RIDGE_V4_FEATURE_COLUMNS
 from web.forecasts.registry import (
     DuplicateForecastProviderKey,
     ForecastRegistry,
@@ -93,6 +93,17 @@ class RidgeForecastProviderTest(unittest.TestCase):
     def test_atomic_market_feature_schema_advances_model_version(self):
         self.assertEqual(MODEL_KEY, "ridge_direction_v1")
         self.assertEqual(MODEL_VERSION, "v4")
+
+    def test_v4_default_feature_schema_excludes_unpromoted_challenger_fields(self):
+        provider = RidgeForecastProvider(synthetic_frame()[0])
+
+        self.assertEqual(provider.feature_columns, RIDGE_V4_FEATURE_COLUMNS)
+        self.assertNotIn("qqq_return_20", provider.feature_columns)
+        self.assertNotIn(
+            "early_current_price_acceptance",
+            provider.feature_columns,
+        )
+        self.assertIn("qqq_return_20", FEATURE_COLUMNS)
 
     def test_prediction_is_deterministic_and_singular_features_are_stable(self):
         frame, dates = synthetic_frame()
