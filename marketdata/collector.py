@@ -28,6 +28,7 @@ class IntradayCollector:
         self._update_task = None
         self._provider_closed = False
         self._run_owner = None
+        self._stop_cleanup_task = None
 
     @staticmethod
     def _now():
@@ -37,6 +38,9 @@ class IntradayCollector:
         limit = self._provider.capabilities().max_symbols
         desired = build_pool(selected, peers, candidates, limit=limit)
         self._desired = SubscriptionRequest(desired, max_symbols=limit)
+        if self._desired == self._active:
+            self._update_error = None
+            return
         if self._state == "running" and (
             self._update_task is None or self._update_task.done()
         ):
@@ -74,7 +78,11 @@ class IntradayCollector:
         except asyncio.CancelledError:
             raise
         except Exception:
-            self._update_error = "provider_error"
+            self._update_error = (
+                None
+                if self._desired == self._active
+                else "provider_error"
+            )
 
     def _update_finished(self, task):
         if self._update_task is task:
@@ -103,14 +111,12 @@ class IntradayCollector:
         )
 
     async def _cleanup(self):
-        try:
-            await self._cancel_update_worker()
-            self._close_active()
-            if not self._provider_closed:
-                self._provider_closed = True
-                await self._provider.close()
-        finally:
-            self._state = "stopped"
+        await self._cancel_update_worker()
+        self._close_active()
+        if not self._provider_closed:
+            self._provider_closed = True
+            await self._provider.close()
+        self._state = "stopped"
 
     async def _emit(self, event):
         self._store.write_event(event)
@@ -124,6 +130,7 @@ class IntradayCollector:
         self._stop_requested = False
         self._stop_event = asyncio.Event()
         self._update_error = None
+        self._stop_cleanup_task = None
         try:
             await self._run_owned()
         finally:
@@ -147,6 +154,7 @@ class IntradayCollector:
                 self._state = "connecting"
                 self._stream_error = None
                 self._active = self._desired
+                self._update_error = None
                 self._store.open_subscription(
                     capabilities.provider,
                     self._active.symbols,
@@ -177,12 +185,27 @@ class IntradayCollector:
                         except asyncio.TimeoutError:
                             pass
         finally:
-            await self._cleanup()
+            if not (
+                self._stop_requested
+                and self._stop_cleanup_task is not None
+            ):
+                await self._cleanup()
 
     async def stop(self):
         self._stop_requested = True
         self._stop_event.set()
-        await self._cleanup()
+        if self._stop_cleanup_task is None:
+            self._stop_cleanup_task = asyncio.create_task(self._cleanup())
+        cleanup_task = self._stop_cleanup_task
+        cancelled = False
+        while not cleanup_task.done():
+            try:
+                await asyncio.shield(cleanup_task)
+            except asyncio.CancelledError:
+                cancelled = True
+        cleanup_task.result()
+        if cancelled:
+            raise asyncio.CancelledError
 
     def snapshot(self):
         capabilities = self._provider.capabilities()

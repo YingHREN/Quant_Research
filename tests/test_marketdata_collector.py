@@ -107,6 +107,31 @@ class BlockingUpdateProvider(FakeProvider):
             self.concurrent_updates -= 1
 
 
+class SlowCancelUpdateProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.update_started = asyncio.Event()
+        self.update_cancellation_started = asyncio.Event()
+        self.finish_update_cancellation = asyncio.Event()
+        self.update_finished = asyncio.Event()
+
+    async def update_subscription(self, request):
+        self.updated.append(request.symbols)
+        self.update_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.update_cancellation_started.set()
+            while not self.finish_update_cancellation.is_set():
+                try:
+                    await self.finish_update_cancellation.wait()
+                except asyncio.CancelledError:
+                    continue
+            raise
+        finally:
+            self.update_finished.set()
+
+
 class FailingUpdateProvider(FakeProvider):
     def __init__(self):
         super().__init__()
@@ -190,6 +215,27 @@ class DisconnectDuringUpdateProvider(FakeProvider):
         except asyncio.CancelledError:
             self.update_cancelled = True
             raise
+
+
+class FailUpdateThenReconnectProvider(FakeProvider):
+    def __init__(self):
+        super().__init__()
+        self.first_stream_started = asyncio.Event()
+        self.fail_first_stream = asyncio.Event()
+        self.second_stream_started = asyncio.Event()
+
+    async def stream_events(self, request, emit):
+        self.requests.append(request.symbols)
+        if len(self.requests) == 1:
+            self.first_stream_started.set()
+            await self.fail_first_stream.wait()
+            raise RuntimeError("first stream failed")
+        self.second_stream_started.set()
+        await asyncio.Event().wait()
+
+    async def update_subscription(self, request):
+        self.updated.append(request.symbols)
+        raise RuntimeError("update failed")
 
 
 class RestartableProvider(FakeProvider):
@@ -541,6 +587,101 @@ class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+
+    async def test_cancelled_stop_waits_for_cleanup_before_propagating(self):
+        provider, store = SlowCancelUpdateProvider(), FakeStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await eventually(lambda: collector.snapshot()["state"] == "running")
+        collector.set_selection("NVDA", [], [])
+        await provider.update_started.wait()
+
+        stop_task = asyncio.create_task(collector.stop())
+        await provider.update_cancellation_started.wait()
+        stop_task.cancel()
+        await asyncio.sleep(0)
+        try:
+            self.assertFalse(stop_task.done())
+            self.assertNotEqual(collector.snapshot()["state"], "stopped")
+        finally:
+            provider.finish_update_cancellation.set()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await stop_task
+
+        try:
+            self.assertTrue(provider.update_finished.is_set())
+            self.assertEqual(provider.close_calls, 1)
+            self.assertEqual(
+                store.closed,
+                [("fake", ("SPY", "QQQ", "SOXX", "AMD"))],
+            )
+            self.assertEqual(collector.snapshot()["state"], "stopped")
+            self.assertEqual(collector.snapshot()["subscribed_symbols"], [])
+        finally:
+            run_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
+
+    async def test_retry_to_latest_desired_clears_prior_update_error(self):
+        provider, store = FailUpdateThenReconnectProvider(), FakeStore()
+        collector = IntradayCollector(provider, store, retry_delays=(0,))
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await provider.first_stream_started.wait()
+
+        collector.set_selection("NVDA", [], [])
+        await eventually(
+            lambda: collector.snapshot()["error"] == "provider_error"
+        )
+        provider.fail_first_stream.set()
+        await provider.second_stream_started.wait()
+
+        try:
+            snapshot = collector.snapshot()
+            self.assertEqual(
+                snapshot["subscribed_symbols"],
+                ["SPY", "QQQ", "SOXX", "NVDA"],
+            )
+            self.assertIsNone(snapshot["error"])
+            self.assertEqual(provider.requests[-1][3], "NVDA")
+        finally:
+            await collector.stop()
+            run_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
+
+    async def test_reverting_desired_to_active_clears_update_error_without_update(self):
+        provider, store = FailingUpdateProvider(), FakeStore()
+        collector = IntradayCollector(provider, store)
+        collector.set_selection("AMD", [], [])
+        run_task = asyncio.create_task(collector.run())
+        await eventually(lambda: collector.snapshot()["state"] == "running")
+
+        collector.set_selection("NVDA", [], [])
+        await eventually(
+            lambda: collector.snapshot()["error"] == "provider_error"
+        )
+        collector.set_selection("AMD", [], [])
+        await asyncio.sleep(0)
+
+        try:
+            snapshot = collector.snapshot()
+            self.assertEqual(
+                snapshot["desired_symbols"],
+                snapshot["subscribed_symbols"],
+            )
+            self.assertIsNone(snapshot["error"])
+            self.assertEqual(
+                [symbols[3] for symbols in provider.updated],
+                ["NVDA"],
+            )
+        finally:
+            await collector.stop()
+            run_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
 
 
 if __name__ == "__main__":
