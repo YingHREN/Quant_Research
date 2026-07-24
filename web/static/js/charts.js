@@ -573,17 +573,48 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     }
   }
 
+  function pinLockedCrosshair() {
+    const lockedRow = lockedTime === null ? null : rowByTime.get(lockedTime);
+    if (!lockedRow || syncingCrosshair || destroyed) return;
+    const time = timeKey(lockedRow.time);
+    syncingCrosshair = true;
+    try {
+      pendingCrosshairEvents.set(priceChart, time);
+      priceChart.setCrosshairPosition(
+        lockedRow.close,
+        lockedRow.time,
+        candleSeries,
+      );
+      pendingCrosshairEvents.set(volumeChart, time);
+      volumeChart.setCrosshairPosition(
+        lockedRow.volume,
+        lockedRow.time,
+        volumeSeries,
+      );
+    } finally {
+      syncingCrosshair = false;
+    }
+  }
+
   function handleCrosshair(source) {
     return (param) => {
       if (destroyed || paintingDetail) return;
       if (pendingCrosshairEvents.has(source)) {
+        const expectedTime = pendingCrosshairEvents.get(source);
+        const eventTime = timeKey(param && param.time);
+        if (expectedTime === eventTime) {
+          pendingCrosshairEvents.delete(source);
+          return;
+        }
         pendingCrosshairEvents.delete(source);
-        return;
       }
       if (syncingCrosshair) return;
+      if (lockedTime !== null) {
+        pinLockedCrosshair();
+        return;
+      }
       const row = rowForParam(param);
       synchronizeCrosshair(source, row);
-      if (lockedTime !== null) return;
       paintDetail(row || rows.at(-1) || null, false);
     };
   }
@@ -773,18 +804,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     forecastHorizon = normalized;
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
     setRange(selectedRange);
-    const lockedRow = lockedTime === null ? null : rowByTime.get(lockedTime);
-    if (lockedRow) {
-      syncingCrosshair = true;
-      try {
-        pendingCrosshairEvents.set(priceChart, timeKey(lockedRow.time));
-        priceChart.setCrosshairPosition(lockedRow.close, lockedRow.time, candleSeries);
-        pendingCrosshairEvents.set(volumeChart, timeKey(lockedRow.time));
-        volumeChart.setCrosshairPosition(lockedRow.volume, lockedRow.time, volumeSeries);
-      } finally {
-        syncingCrosshair = false;
-      }
-    }
+    pinLockedCrosshair();
     return forecastHorizon;
   }
 

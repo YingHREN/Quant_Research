@@ -1132,7 +1132,7 @@ class WebAssetTest(unittest.TestCase):
                   this.crosshairPositions.push({{value, time, series}});
                   if (this.crosshairHandler && this.programmaticEvents < 8) {{
                     this.programmaticEvents += 1;
-                    queueMicrotask(() => this.crosshairHandler({{}}));
+                    queueMicrotask(() => this.crosshairHandler({{time}}));
                   }}
                 }},
                 clearCrosshairPosition() {{}},
@@ -1328,6 +1328,10 @@ class WebAssetTest(unittest.TestCase):
             created[0].crosshairHandler({{time: '2026-07-18'}});
             assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
             assert.match(textTree(detail), /已锁定/);
+            assert.equal(created[1].crosshairPositions.at(-1).time, '2026-07-17');
+            created[1].crosshairHandler({{time: '2026-07-18'}});
+            assert.equal(created[0].crosshairPositions.at(-1).time, '2026-07-17');
+            assert.equal(created[1].crosshairPositions.at(-1).time, '2026-07-17');
             assert.deepEqual(created[0].appliedOptions.at(-1),
               {{handleScroll: {{pressedMouseMove: false}}}});
             assert.deepEqual(created[1].appliedOptions.at(-1),
