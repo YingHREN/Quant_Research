@@ -101,6 +101,18 @@ function booleanText(value, locale) {
   return t(value ? "common.yes" : "common.no", {}, locale);
 }
 
+function earlyReversalConditionsText(row, locale) {
+  const conditions = Array.isArray(row?.early_reversal_conditions)
+    ? row.early_reversal_conditions
+    : [];
+  if (!conditions.length) return "—";
+  return conditions.map((code) => {
+    const key = `chart.earlyReversal.condition.${code}`;
+    const localized = t(key, {}, locale);
+    return localized === key ? code : localized;
+  }).join(" · ");
+}
+
 export function detailItems(row, locale = getLocale()) {
   return [
     { label: t("chart.field.open", {}, locale), value: numberText(row.open) },
@@ -129,6 +141,9 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.trendlineBreakout", {}, locale), value: booleanText(row.trendline_breakout, locale) },
     { label: t("chart.field.higherLowConfirmed", {}, locale), value: booleanText(row.higher_low_confirmed, locale) },
     { label: t("chart.field.reversalConditions", {}, locale), value: `${Number(row.reversal_signal_count) || 0}/3` },
+    { label: t("chart.field.earlyReversalWatch", {}, locale), value: finite(row.early_reversal_score) ? `${row.early_reversal_score}/100` : "—" },
+    { label: t("chart.field.earlyReversalState", {}, locale), value: t(row.early_reversal_watch ? "chart.earlyReversal.watching" : "chart.earlyReversal.inactive", {}, locale) },
+    { label: t("chart.field.earlyReversalEvidence", {}, locale), value: earlyReversalConditionsText(row, locale) },
     { label: t("chart.field.trendlinePivots", {}, locale), value: row.trendline_high_1_date && row.trendline_high_2_date ? `${row.trendline_high_1_date} → ${row.trendline_high_2_date}` : "—" },
     { label: t("chart.field.latestHighConfirmed", {}, locale), value: row.latest_confirmed_high_confirmed_date || "—" },
     { label: t("chart.field.higherLowConfirmation", {}, locale), value: row.higher_low_confirmation_date || "—" },
@@ -649,6 +664,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.sma50, shape: "circle",
           text: t("chart.reversal.higherLow", {}, locale),
+        });
+      }
+      if (row.early_reversal_watch) {
+        markers.push({
+          time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "arrowUp",
+          text: t("chart.earlyReversal.marker", { score: row.early_reversal_score }, locale),
         });
       }
       if (row.reversal_candidate) {

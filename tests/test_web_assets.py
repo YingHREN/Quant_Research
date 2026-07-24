@@ -1823,6 +1823,11 @@ class WebAssetTest(unittest.TestCase):
               prior_high_breakout: true, descending_trendline: 100.5,
               trendline_breakout: true, higher_low_confirmed: false,
               reversal_signal_count: 2, reversal_candidate: true,
+              early_reversal_score: 100, early_reversal_watch: true,
+              early_reversal_conditions: ['prior_session_selloff', 'current_price_acceptance',
+                'descending_trendline_proximity', 'current_volume_support'],
+              early_prior_session_selloff: true, early_current_price_acceptance: true,
+              early_descending_trendline_proximity: true, early_current_volume_support: true,
               trendline_high_1_date: '2026-07-01', trendline_high_2_date: '2026-07-15',
               latest_confirmed_high_date: '2026-07-15',
               latest_confirmed_high_confirmed_date: '2026-07-18',
@@ -1834,20 +1839,30 @@ class WebAssetTest(unittest.TestCase):
             }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
             await new Promise((resolve) => setTimeout(resolve, 0));
             await Promise.resolve();
+            const markers = markerSets.at(-1);
+            const detailItems = chartModule.detailItems(row, 'en')
+              .map(item => [item.label, item.value]);
+            const priceLines = created[0].priceLines.map(line => line.title);
+            const volumeLines = created[1].series.filter(series => series.type === 'line')
+              .map(series => [series.options.title, series.data]);
+            const priceLineSeries = created[0].series.filter(series => series.type === 'line')
+              .map(series => [series.options.title, series.data]);
+            const forecastOptions = created[0].series.find(
+              series => series.options.title === 'Model forecast',
+            ).options;
+            controller.setLocale('zh-CN');
             console.log(JSON.stringify({{
-              priceLines: created[0].priceLines.map(line => line.title),
-              volumeLines: created[1].series.filter(series => series.type === 'line')
-                .map(series => [series.options.title, series.data]),
-              priceLineSeries: created[0].series.filter(series => series.type === 'line')
-                .map(series => [series.options.title, series.data]),
-              forecastOptions: created[0].series.find(
-                series => series.options.title === 'Model forecast',
-              ).options,
-              markers: markerSets.at(-1),
+              priceLines,
+              volumeLines,
+              priceLineSeries,
+              forecastOptions,
+              markers,
+              zhMarkers: markerSets.at(-1),
               requestedForecastDates,
               emptyDetail,
-              detail: chartModule.detailItems
-                ? chartModule.detailItems(row, 'en').map(item => [item.label, item.value]) : [],
+              detail: detailItems,
+              zhDetail: chartModule.detailItems(row, 'zh-CN')
+                .map(item => [item.label, item.value]),
             }}));
         """
         result = subprocess.run(
@@ -1869,6 +1884,14 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Reversal candidate 2/3", [marker["text"] for marker in actual["markers"]])
+        self.assertIn(
+            "Early reversal watch · 100",
+            [marker["text"] for marker in actual["markers"]],
+        )
+        self.assertIn(
+            "早期反转观察 · 100",
+            [marker["text"] for marker in actual["zhMarkers"]],
+        )
         self.assertEqual(
             next(line for line in actual["priceLineSeries"] if line[0] == "Descending resistance"),
             ["Descending resistance", [{"time": "2026-07-22", "value": 100.5}]],
@@ -1884,6 +1907,22 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["Prior-high breakout"], "Yes")
         self.assertEqual(details["Trendline breakout"], "Yes")
         self.assertEqual(details["Reversal conditions"], "2/3")
+        self.assertEqual(details["Early reversal watch"], "100/100")
+        self.assertEqual(
+            details["Early-watch state"],
+            "Observing · awaiting structural confirmation",
+        )
+        self.assertEqual(
+            details["Early-watch evidence"],
+            "Prior-session selloff · Current price acceptance · Near descending trendline · Current volume support",
+        )
+        zh_details = dict(actual["zhDetail"])
+        self.assertEqual(zh_details["早期反转观察"], "100/100")
+        self.assertEqual(zh_details["早期观察状态"], "观察中 · 等待结构确认")
+        self.assertEqual(
+            zh_details["早期观察依据"],
+            "前一日放量下跌 · 当日价格接受 · 接近下降趋势线 · 当日量能支持",
+        )
         self.assertEqual(details["Latest high confirmed"], "2026-07-18")
         self.assertEqual(details["Higher-low confirmation"], "2026-07-14")
         self.assertEqual(details["Higher-low pivots"], "2026-06-10 90 → 2026-07-10 94")

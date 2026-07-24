@@ -5,16 +5,16 @@ market-context, and data-source work discussed for the local dashboard.
 
 ## P0 — Early reversal observation
 
-- [ ] Implement the causal early-reversal watch defined in
+- [x] Implement the causal early-reversal watch defined in
   `docs/superpowers/specs/2026-07-25-early-reversal-watch-design.md`.
-- [ ] Detect the NBIS 2026-07-17 early observation point using only data
+- [x] Detect the NBIS 2026-07-17 early observation point using only data
   available through that close.
-- [ ] Score prior-session selloff, current-session price acceptance,
+- [x] Score prior-session selloff, current-session price acceptance,
   descending-trendline proximity, and current volume support.
-- [ ] Keep early observation separate from confirmed reversal conditions.
+- [x] Keep early observation separate from confirmed reversal conditions.
 - [ ] Distinguish intraday break, closing confirmation, and next-session
   confirmation.
-- [ ] Add localized chart markers, date details, factor explanations, and
+- [x] Add localized chart markers, date details, factor explanations, and
   scores.
 - [ ] Compare entry after the 2026-07-17 observation with entry after the
   2026-07-20 confirmation using next-open execution.
@@ -167,4 +167,3 @@ market-context, and data-source work discussed for the local dashboard.
 - [x] Prevent prediction updates and pointer gestures from moving the chart
   timeline.
 - [x] Write and commit the early-reversal-watch design specification.
-
