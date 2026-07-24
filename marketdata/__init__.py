@@ -5,7 +5,10 @@ from marketdata.base import (
     MarketEvent,
     ProviderCapabilities,
     QuoteEvent,
+    SubscriptionConfirmation,
     SubscriptionRequest,
+    TradeCancelEvent,
+    TradeCorrectionEvent,
     TradeEvent,
 )
 
@@ -16,6 +19,9 @@ __all__ = [
     "MarketEvent",
     "ProviderCapabilities",
     "QuoteEvent",
+    "SubscriptionConfirmation",
     "SubscriptionRequest",
+    "TradeCancelEvent",
+    "TradeCorrectionEvent",
     "TradeEvent",
 ]

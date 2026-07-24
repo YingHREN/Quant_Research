@@ -5,7 +5,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from marketdata.base import ProviderCapabilities, QuoteEvent, TradeEvent
+from marketdata.base import (
+    ProviderCapabilities,
+    QuoteEvent,
+    TradeCancelEvent,
+    TradeCorrectionEvent,
+    TradeEvent,
+)
 from marketdata.storage import IntradayStore
 
 
@@ -102,6 +108,146 @@ class IntradayStoreTest(unittest.TestCase):
             self.store.open_subscription("alpaca", ("AMD",), non_utc)
         with self.assertRaises(ValueError):
             self.store.close_subscription("alpaca", ("AMD",), naive)
+
+    def test_quotes_separated_only_by_800_nanoseconds_both_persist(self):
+        first = QuoteEvent(
+            "alpaca", "AMD", AT, AT, 149.0, 10.0, 151.0, 12.0, None,
+            "regular", event_ts_ns=1784903400000000100,
+        )
+        second = replace(first, event_ts_ns=1784903400000000900)
+        self.assertEqual(self.store.write_events((first, second)), 2)
+        with sqlite3.connect(self.path) as connection:
+            rows = connection.execute(
+                "SELECT event_ts_ns, trading_date FROM intraday_quotes "
+                "ORDER BY event_ts_ns"
+            ).fetchall()
+        self.assertEqual(
+            rows,
+            [
+                (1784903400000000100, "2026-07-24"),
+                (1784903400000000900, "2026-07-24"),
+            ],
+        )
+
+    def test_quote_size_unit_and_lot_provenance_are_persisted(self):
+        quote = QuoteEvent(
+            "alpaca", "AMD", AT, AT, 149.0, 300.0, 151.0, 400.0, None,
+            "regular", event_ts_ns=1784903400000000000,
+            size_unit="shares", lot_size=100,
+        )
+        self.assertTrue(self.store.write_event(quote))
+        with sqlite3.connect(self.path) as connection:
+            row = connection.execute(
+                "SELECT bid_size, ask_size, size_unit, lot_size "
+                "FROM intraday_quotes"
+            ).fetchone()
+        self.assertEqual(row, (300.0, 400.0, "shares", 100))
+
+    def test_trade_correction_and_cancel_preserve_raw_and_replay_effective_trades(self):
+        original = replace(
+            trade(sequence="trade-1"),
+            event_ts_ns=1784903400000000000,
+        )
+        correction = TradeCorrectionEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=1),
+            received_ts=AT,
+            event_ts_ns=1784903401000000000,
+            provider_trade_id="trade-1",
+            replacement_trade_id="trade-2",
+            price=151.0,
+            size=200.0,
+            exchange="V",
+            conditions=("@",),
+            session="regular",
+        )
+        self.assertEqual(self.store.write_events((original, correction, correction)), 2)
+        effective = self.store.read_effective_trades("alpaca", "AMD")
+        self.assertEqual(len(effective), 1)
+        self.assertEqual((effective[0].price, effective[0].size), (151.0, 200.0))
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM intraday_trades"
+                ).fetchone()[0],
+                1,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM intraday_trade_corrections"
+                ).fetchone()[0],
+                1,
+            )
+
+        cancel = TradeCancelEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=AT + timedelta(seconds=2),
+            received_ts=AT,
+            event_ts_ns=1784903402000000000,
+            provider_trade_id="trade-1",
+            cancel_code="cancel",
+            session="regular",
+        )
+        self.assertEqual(self.store.write_events((cancel, cancel)), 1)
+        self.assertEqual(self.store.read_effective_trades("alpaca", "AMD"), [])
+
+    def test_initialize_migrates_preceding_intraday_schema_without_touching_prices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.db"
+            with sqlite3.connect(path) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE prices (ticker TEXT PRIMARY KEY, close REAL);
+                    INSERT INTO prices VALUES ('AMD', 150.0);
+                    CREATE TABLE intraday_quotes (
+                        provider TEXT NOT NULL, symbol TEXT NOT NULL,
+                        event_ts TEXT NOT NULL, received_ts TEXT NOT NULL,
+                        bid_price REAL NOT NULL, bid_size REAL NOT NULL,
+                        ask_price REAL NOT NULL, ask_size REAL NOT NULL,
+                        source_sequence TEXT NOT NULL, session TEXT NOT NULL,
+                        PRIMARY KEY (provider, symbol, source_sequence)
+                    );
+                    INSERT INTO intraday_quotes VALUES (
+                        'alpaca', 'AMD', '2026-07-24T14:30:00+00:00',
+                        '2026-07-24T14:30:01+00:00', 149, 3, 151, 4,
+                        'legacy-1', 'regular'
+                    );
+                    """
+                )
+            IntradayStore(path).initialize()
+            with sqlite3.connect(path) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(intraday_quotes)"
+                    )
+                }
+                price = connection.execute(
+                    "SELECT ticker, close FROM prices"
+                ).fetchone()
+                migrated = connection.execute(
+                    "SELECT event_ts_ns, trading_date, size_unit, lot_size, "
+                    "bid_size, ask_size "
+                    "FROM intraday_quotes"
+                ).fetchone()
+            self.assertTrue(
+                {"event_ts_ns", "trading_date", "size_unit", "lot_size"}
+                <= columns
+            )
+            self.assertEqual(price, ("AMD", 150.0))
+            self.assertEqual(
+                migrated,
+                (
+                    1784903400000000000,
+                    "2026-07-24",
+                    "shares",
+                    100,
+                    300.0,
+                    400.0,
+                ),
+            )
 
 
 if __name__ == "__main__":

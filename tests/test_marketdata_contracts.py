@@ -1,5 +1,6 @@
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
+import math
 import unittest
 
 from marketdata.base import (
@@ -7,6 +8,8 @@ from marketdata.base import (
     ProviderCapabilities,
     QuoteEvent,
     SubscriptionRequest,
+    TradeCancelEvent,
+    TradeCorrectionEvent,
     TradeEvent,
 )
 
@@ -131,6 +134,108 @@ class MarketDataContractsTest(unittest.TestCase):
         )
         self.assertEqual(value.to_dict()["coverage"], "iex")
         self.assertNotIn("api_key", value.to_dict())
+
+    def test_provider_neutral_events_reject_non_finite_numbers(self):
+        trade_arguments = dict(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=datetime(2026, 7, 24, 14, 30, tzinfo=UTC),
+            received_ts=datetime(2026, 7, 24, 14, 30, 1, tzinfo=UTC),
+            price=150.25,
+            size=100.0,
+            exchange="V",
+            conditions=("@",),
+            direction="unknown",
+            direction_source="unknown",
+            source_sequence="42",
+            session="regular",
+        )
+        quote_arguments = dict(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=datetime(2026, 7, 24, 14, 30, tzinfo=UTC),
+            received_ts=datetime(2026, 7, 24, 14, 30, 1, tzinfo=UTC),
+            bid_price=150.0,
+            bid_size=10.0,
+            ask_price=150.1,
+            ask_size=12.0,
+            source_sequence=None,
+            session="regular",
+        )
+        for field in ("price", "size"):
+            for invalid in (math.nan, math.inf, -math.inf):
+                with self.subTest(event="trade", field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, "finite"):
+                        TradeEvent(**{**trade_arguments, field: invalid})
+        for field in ("bid_price", "bid_size", "ask_price", "ask_size"):
+            for invalid in (math.nan, math.inf, -math.inf):
+                with self.subTest(event="quote", field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, "finite"):
+                        QuoteEvent(**{**quote_arguments, field: invalid})
+
+    def test_bar_validates_shape_prices_counts_and_timestamp_order(self):
+        arguments = dict(
+            provider="alpaca",
+            symbol="AMD",
+            start_ts=datetime(2026, 7, 24, 14, 30, tzinfo=UTC),
+            end_ts=datetime(2026, 7, 24, 14, 31, tzinfo=UTC),
+            received_ts=datetime(2026, 7, 24, 14, 31, 1, tzinfo=UTC),
+            interval="1m",
+            open=150.0,
+            high=151.0,
+            low=149.0,
+            close=150.5,
+            volume=1000.0,
+            trade_count=10,
+            vwap=150.25,
+            locally_aggregated=False,
+        )
+        invalid_cases = (
+            ("timestamp", {"end_ts": arguments["start_ts"]}),
+            ("interval", {"interval": "minute"}),
+            ("OHLC", {"high": 149.5}),
+            ("OHLC", {"low": 150.25}),
+            ("finite", {"close": math.nan}),
+            ("volume", {"volume": -1.0}),
+            ("trade_count", {"trade_count": -1}),
+            ("trade_count", {"trade_count": 1.5}),
+            ("finite", {"vwap": math.inf}),
+        )
+        for message, changes in invalid_cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    BarEvent(**{**arguments, **changes})
+
+    def test_exact_timestamp_and_trade_adjustments_are_immutable(self):
+        event_ts = datetime(2026, 7, 24, 14, 30, tzinfo=UTC)
+        correction = TradeCorrectionEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=event_ts,
+            received_ts=event_ts,
+            event_ts_ns=1784903400000000800,
+            provider_trade_id="original-1",
+            replacement_trade_id="replacement-1",
+            price=151.0,
+            size=200.0,
+            exchange="V",
+            conditions=("@",),
+            session="regular",
+        )
+        cancel = TradeCancelEvent(
+            provider="alpaca",
+            symbol="AMD",
+            event_ts=event_ts,
+            received_ts=event_ts,
+            event_ts_ns=1784903400000000900,
+            provider_trade_id="original-1",
+            cancel_code="cancel",
+            session="regular",
+        )
+        self.assertEqual(correction.trading_date, "2026-07-24")
+        self.assertEqual(cancel.trading_date, "2026-07-24")
+        with self.assertRaises(FrozenInstanceError):
+            correction.price = 1.0
 
 
 if __name__ == "__main__":
