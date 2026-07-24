@@ -55,6 +55,39 @@ class TemporalMomentumTest(unittest.TestCase):
 
         pd.testing.assert_series_equal(after, before)
 
+    def test_high_volume_increases_recent_price_progress_confirmation(self):
+        close = np.full(70, 100.0)
+        close[-1] = 110.0
+        normal = ohlcv(close)
+        high_volume = normal.copy()
+        high_volume.loc[high_volume.index[-1], "Volume"] = 5_000_000.0
+
+        normal_value = stock_temporal_features(normal)[
+            "decay_volume_confirmation_1_20"
+        ].iloc[-1]
+        high_value = stock_temporal_features(high_volume)[
+            "decay_volume_confirmation_1_20"
+        ].iloc[-1]
+
+        self.assertGreater(high_value, normal_value)
+        self.assertGreater(normal_value, 0.0)
+
+    def test_high_volume_weak_close_has_negative_close_location_pressure(self):
+        history = ohlcv(np.full(70, 100.0))
+        latest = history.index[-1]
+        history.loc[latest, ["High", "Low", "Close", "Volume"]] = (
+            110.0,
+            90.0,
+            92.0,
+            5_000_000.0,
+        )
+
+        value = stock_temporal_features(history)[
+            "decay_close_location_pressure_1_20"
+        ].iloc[-1]
+
+        self.assertLess(value, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
