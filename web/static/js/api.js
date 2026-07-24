@@ -50,6 +50,19 @@ export function getStockForecast(ticker, date) {
   );
 }
 
+export function getMarketOverview({
+  asof = "",
+  horizon = 5,
+  sector = "semiconductor",
+} = {}) {
+  const params = new URLSearchParams({
+    horizon: String(horizon),
+    sector: String(sector),
+  });
+  if (asof) params.set("asof", String(asof));
+  return requestJson(`/api/market-overview?${params.toString()}`);
+}
+
 export function startUpdate() {
   return requestJson("/api/update", { method: "POST" });
 }
@@ -62,6 +75,7 @@ export const api = Object.freeze({
   getUniverse,
   getStock,
   getStockForecast,
+  getMarketOverview,
   startUpdate,
   getUpdateStatus,
 });

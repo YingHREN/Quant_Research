@@ -101,6 +101,26 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 
 .research-note, .secondary-copy, .safety-copy { margin-bottom: 0; color: var(--muted); }
 
+.dashboard-nav {
+  display: flex;
+  margin-top: 10px;
+  gap: 6px;
+}
+
+.dashboard-nav a {
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: .78rem;
+  text-decoration: none;
+}
+
+.dashboard-nav a[aria-current="page"] {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
 .market-status {
   display: flex;
   gap: 22px;

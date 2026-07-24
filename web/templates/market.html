@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title data-i18n="market.document.title">市场与板块 · 量化研究</title>
+  <link rel="stylesheet" href="/static/css/dashboard.css">
+  <link rel="stylesheet" href="/static/css/market.css">
+</head>
+<body class="market-page">
+  <a class="skip-link" href="#market-command-center" data-i18n="market.skip">
+    跳到市场指挥中心
+  </a>
+  <header class="market-header">
+    <div>
+      <a class="brand-link" href="/">Quant Research</a>
+      <p class="market-header-note" data-i18n="market.note">
+        大盘、板块、反转机会与抛压风险的时点一致诊断
+      </p>
+    </div>
+    <nav class="primary-nav" aria-label="主导航"
+         data-i18n-aria-label="market.nav.aria">
+      <a href="/" data-i18n="market.nav.stock">个股看板</a>
+      <a href="/market" aria-current="page"
+         data-i18n="market.nav.market">市场与板块</a>
+    </nav>
+    <div class="locale-control" role="group" aria-label="界面语言"
+         data-i18n-aria-label="locale.label">
+      <button type="button" data-locale="zh-CN" aria-pressed="true"
+              data-i18n="locale.zh">中文</button>
+      <button type="button" data-locale="en" aria-pressed="false"
+              data-i18n="locale.en">EN</button>
+    </div>
+  </header>
+
+  <main id="market-command-center" class="market-command-center" tabindex="-1">
+    <section class="market-hero" aria-labelledby="market-title">
+      <div>
+        <p class="eyebrow" data-i18n="market.eyebrow">Market command center</p>
+        <h1 id="market-title" data-i18n="market.title">市场与板块指挥中心</h1>
+        <p class="research-note" data-i18n="market.disclaimer">
+          分数用于组织证据，不是概率，也不构成投资建议。
+        </p>
+      </div>
+      <div class="market-meta">
+        <div>
+          <span data-i18n="market.asof">数据日期</span>
+          <strong id="market-asof">—</strong>
+        </div>
+        <div>
+          <span data-i18n="market.dataTier">证据层级</span>
+          <strong id="market-data-tier">—</strong>
+        </div>
+        <div>
+          <span data-i18n="market.coverage">覆盖率</span>
+          <strong id="market-coverage">—</strong>
+        </div>
+      </div>
+      <div class="market-horizon" role="group" aria-label="预测周期"
+           data-i18n-aria-label="market.horizon.aria">
+        <span data-i18n="market.horizon.label">观察周期</span>
+        <button type="button" data-horizon="5" aria-pressed="true"
+                data-i18n="market.horizon.5">5 日</button>
+        <button type="button" data-horizon="20" aria-pressed="false"
+                data-i18n="market.horizon.20">20 日</button>
+        <button type="button" data-horizon="60" aria-pressed="false"
+                data-i18n="market.horizon.60">60 日</button>
+      </div>
+      <p id="market-status" class="market-status-line" role="status"
+         aria-live="polite" data-i18n="market.loading">正在加载本地市场数据…</p>
+    </section>
+
+    <section class="market-card market-posture-card"
+             aria-labelledby="market-posture-title">
+      <div class="market-section-heading">
+        <div>
+          <p class="eyebrow" data-i18n="market.posture.eyebrow">Market posture</p>
+          <h2 id="market-posture-title" data-i18n="market.posture.title">
+            市场状态
+          </h2>
+        </div>
+      </div>
+      <div id="market-posture" class="market-summary-grid"></div>
+    </section>
+
+    <div class="market-main-grid">
+      <section class="market-card" aria-labelledby="sector-heatmap-title">
+        <div class="market-section-heading">
+          <div>
+            <p class="eyebrow" data-i18n="market.sectors.eyebrow">Rotation</p>
+            <h2 id="sector-heatmap-title" data-i18n="market.sectors.title">
+              板块热力图
+            </h2>
+          </div>
+          <span data-i18n="market.sectors.hint">点击板块查看明细</span>
+        </div>
+        <div id="sector-heatmap" class="sector-heatmap-shell"></div>
+      </section>
+
+      <aside class="market-card" aria-labelledby="market-evidence-title">
+        <div class="market-section-heading">
+          <div>
+            <p class="eyebrow" data-i18n="market.evidence.eyebrow">Audit trail</p>
+            <h2 id="market-evidence-title" data-i18n="market.evidence.title">
+              市场证据
+            </h2>
+          </div>
+        </div>
+        <div id="market-evidence"></div>
+      </aside>
+    </div>
+
+    <div class="market-lower-grid">
+      <section class="market-card" aria-labelledby="sector-drilldown-title">
+        <div class="market-section-heading">
+          <div>
+            <p class="eyebrow" data-i18n="market.drilldown.eyebrow">Drill-down</p>
+            <h2 id="sector-drilldown-title" data-i18n="market.drilldown.title">
+              板块与个股明细
+            </h2>
+          </div>
+        </div>
+        <div id="sector-drilldown"></div>
+      </section>
+
+      <aside class="market-card" aria-labelledby="market-events-title">
+        <div class="market-section-heading">
+          <div>
+            <p class="eyebrow" data-i18n="market.events.eyebrow">Changed today</p>
+            <h2 id="market-events-title" data-i18n="market.events.title">
+              关键变化
+            </h2>
+          </div>
+        </div>
+        <div id="market-events"></div>
+      </aside>
+    </div>
+
+    <section class="market-methodology" aria-labelledby="market-method-title">
+      <h2 id="market-method-title" data-i18n="market.method.title">数据说明</h2>
+      <p data-i18n="market.method.copy">
+        当前版本使用日线 OHLCV 构建买卖压力代理，不是逐笔成交或真实订单流。
+      </p>
+    </section>
+  </main>
+
+  <script type="module" src="/static/js/market.js"></script>
+</body>
+</html>
