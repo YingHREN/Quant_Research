@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import numpy as np
 import pandas as pd
 
@@ -18,6 +20,12 @@ TEMPORAL_CONFIRMATION_COLUMNS = (
     "decay_close_location_pressure_1_20",
 )
 TEMPORAL_STOCK_COLUMNS = (*DECAY_WINDOWS, *TEMPORAL_CONFIRMATION_COLUMNS)
+TEMPORAL_MARKET_COLUMNS = (
+    "decay_excess_qqq_1_20",
+    "decay_excess_sector_1_20",
+    "decay_market_agreement_1_20",
+)
+TEMPORAL_FEATURE_COLUMNS = (*TEMPORAL_STOCK_COLUMNS, *TEMPORAL_MARKET_COLUMNS)
 
 
 def decayed_return(
@@ -85,6 +93,61 @@ def stock_temporal_features(history: pd.DataFrame) -> pd.DataFrame:
     return features.loc[:, TEMPORAL_STOCK_COLUMNS]
 
 
+def temporal_feature_frame(
+    histories: Mapping[str, pd.DataFrame],
+    sector_members: Mapping[str, str | None],
+) -> pd.DataFrame:
+    """Build exact-date stock, QQQ, and sector temporal context features."""
+    if not isinstance(histories, Mapping):
+        raise TypeError("histories must be a mapping")
+    if not isinstance(sector_members, Mapping):
+        raise TypeError("sector_members must be a mapping")
+
+    stock_features = {
+        str(ticker): stock_temporal_features(history)
+        for ticker, history in histories.items()
+        if not history.empty
+    }
+    qqq_momentum = _context_momentum(stock_features.get("QQQ"))
+    frames = []
+    for ticker, features in stock_features.items():
+        result = features.copy()
+        stock_momentum = result["decay_mom_1_20"]
+        aligned_qqq = qqq_momentum.reindex(result.index)
+        result["decay_excess_qqq_1_20"] = stock_momentum - aligned_qqq
+
+        sector_ticker = sector_members.get(ticker)
+        sector_momentum = _context_momentum(
+            stock_features.get(str(sector_ticker))
+            if sector_ticker is not None
+            else None
+        )
+        aligned_sector = sector_momentum.reindex(result.index)
+        result["decay_excess_sector_1_20"] = stock_momentum - aligned_sector
+        result["decay_market_agreement_1_20"] = (
+            stock_momentum.abs()
+            * (
+                np.sign(stock_momentum) * np.sign(aligned_qqq)
+                + np.sign(stock_momentum) * np.sign(aligned_sector)
+            )
+            / 2.0
+        )
+        result = result.loc[:, TEMPORAL_FEATURE_COLUMNS]
+        result.index = pd.MultiIndex.from_arrays(
+            ([ticker] * len(result), result.index),
+            names=("ticker", "observation_date"),
+        )
+        frames.append(result)
+
+    if not frames:
+        index = pd.MultiIndex.from_arrays(
+            (pd.Index([], dtype=object), pd.DatetimeIndex([])),
+            names=("ticker", "observation_date"),
+        )
+        return pd.DataFrame(columns=TEMPORAL_FEATURE_COLUMNS, index=index)
+    return pd.concat(frames).sort_index()
+
+
 def _decayed_signal(
     signal: pd.Series,
     lags: np.ndarray,
@@ -97,3 +160,9 @@ def _decayed_signal(
     weighted = lagged.mul(weights, axis="columns")
     result = weighted.sum(axis=1, min_count=len(lags)) / float(weights.sum())
     return result.astype(float)
+
+
+def _context_momentum(features: pd.DataFrame | None) -> pd.Series:
+    if features is None:
+        return pd.Series(dtype=float)
+    return features["decay_mom_1_20"]

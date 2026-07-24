@@ -3,7 +3,10 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.temporal_momentum import stock_temporal_features
+from research.temporal_momentum import (
+    stock_temporal_features,
+    temporal_feature_frame,
+)
 
 
 def ohlcv(close, volume=None):
@@ -87,6 +90,45 @@ class TemporalMomentumTest(unittest.TestCase):
         ].iloc[-1]
 
         self.assertLess(value, 0.0)
+
+    def test_cross_market_context_requires_an_exact_session_match(self):
+        stock = ohlcv(np.linspace(100.0, 140.0, 70))
+        qqq = ohlcv(np.linspace(100.0, 120.0, 70)).iloc[:-1]
+        sector = ohlcv(np.linspace(100.0, 130.0, 70))
+
+        frame = temporal_feature_frame(
+            {"AAA": stock, "QQQ": qqq, "SOXX": sector},
+            {"AAA": "SOXX"},
+        )
+
+        latest = frame.loc[("AAA", stock.index[-1])]
+        prior = frame.loc[("AAA", stock.index[-2])]
+        self.assertTrue(np.isnan(latest["decay_excess_qqq_1_20"]))
+        self.assertTrue(np.isnan(latest["decay_market_agreement_1_20"]))
+        self.assertTrue(np.isfinite(prior["decay_excess_qqq_1_20"]))
+
+    def test_future_market_spike_cannot_change_prior_context(self):
+        stock = ohlcv(np.linspace(100.0, 140.0, 70))
+        qqq = ohlcv(np.linspace(100.0, 120.0, 70))
+        sector = ohlcv(np.linspace(100.0, 130.0, 70))
+        cutoff = stock.index[-1]
+        future_dates = pd.bdate_range(cutoff + pd.Timedelta(days=1), periods=2)
+        future_qqq = ohlcv([1_000.0, 10.0]).set_axis(future_dates)
+
+        before = temporal_feature_frame(
+            {"AAA": stock, "QQQ": qqq, "SOXX": sector},
+            {"AAA": "SOXX"},
+        ).loc[("AAA", cutoff)]
+        after = temporal_feature_frame(
+            {
+                "AAA": stock,
+                "QQQ": pd.concat((qqq, future_qqq)),
+                "SOXX": sector,
+            },
+            {"AAA": "SOXX"},
+        ).loc[("AAA", cutoff)]
+
+        pd.testing.assert_series_equal(after, before)
 
 
 if __name__ == "__main__":
