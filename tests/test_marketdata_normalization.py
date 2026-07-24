@@ -48,6 +48,61 @@ class AlpacaEventNormalizerTest(unittest.TestCase):
         )
         self.assertEqual(self.normalizer.drop_counts["invalid_quote"], 1)
 
+    def test_nanosecond_timestamp_is_truncated_to_utc_microseconds(self):
+        trade = self.normalizer.ingest(
+            {"T": "t", "S": "AMD", "t": "2026-07-24T14:30:00.639713735Z",
+             "p": 150.10, "s": 100, "i": 42},
+            NOW,
+        )
+        self.assertIsInstance(trade, TradeEvent)
+        self.assertEqual(
+            trade.event_ts,
+            datetime(2026, 7, 24, 14, 30, 0, 639713, tzinfo=UTC),
+        )
+        self.assertIs(trade.event_ts.tzinfo, UTC)
+
+    def test_nan_trade_is_dropped_without_polluting_previous_trade(self):
+        first = self.normalizer.ingest(
+            {"T": "t", "S": "AAA", "t": "2026-07-24T14:30:00Z",
+             "p": 100.0, "s": 1},
+            NOW,
+        )
+        invalid = self.normalizer.ingest(
+            {"T": "t", "S": "AAA", "t": "2026-07-24T14:30:00.1Z",
+             "p": float("nan"), "s": 1},
+            NOW,
+        )
+        after = self.normalizer.ingest(
+            {"T": "t", "S": "AAA", "t": "2026-07-24T14:30:00.2Z",
+             "p": 100.5, "s": 1},
+            NOW,
+        )
+        self.assertIsInstance(first, TradeEvent)
+        self.assertIsNone(invalid)
+        self.assertEqual(self.normalizer.drop_counts["invalid_trade"], 1)
+        self.assertEqual((after.direction, after.direction_source), ("buy", "tick_rule"))
+
+    def test_infinite_quote_is_dropped_without_polluting_latest_quote(self):
+        valid = self.normalizer.ingest(
+            {"T": "q", "S": "AMD", "t": "2026-07-24T14:30:00Z",
+             "bp": 100.0, "bs": 1, "ap": 101.0, "as": 1},
+            NOW,
+        )
+        invalid = self.normalizer.ingest(
+            {"T": "q", "S": "AMD", "t": "2026-07-24T14:30:00.1Z",
+             "bp": 100.0, "bs": 1, "ap": float("inf"), "as": 1},
+            NOW,
+        )
+        trade = self.normalizer.ingest(
+            {"T": "t", "S": "AMD", "t": "2026-07-24T14:30:00.2Z",
+             "p": 102.0, "s": 1},
+            NOW,
+        )
+        self.assertIsInstance(valid, QuoteEvent)
+        self.assertIsNone(invalid)
+        self.assertEqual(self.normalizer.drop_counts["invalid_quote"], 1)
+        self.assertEqual((trade.direction, trade.direction_source), ("buy", "quote_mid"))
+
 
 if __name__ == "__main__":
     unittest.main()

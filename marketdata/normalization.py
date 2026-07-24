@@ -2,12 +2,20 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, time, timezone
+from math import isfinite
+import re
 from zoneinfo import ZoneInfo
 
 from marketdata.base import QuoteEvent, TradeEvent
 
 
 def _timestamp(value: str) -> datetime:
+    nanosecond_timestamp = re.fullmatch(
+        r"(.*\.\d{6})\d{1,3}(Z|[+-]\d{2}:\d{2})",
+        value,
+    )
+    if nanosecond_timestamp is not None:
+        value = "".join(nanosecond_timestamp.groups())
     normalized = value.replace("Z", "+00:00")
     try:
         parsed = datetime.fromisoformat(normalized)
@@ -43,15 +51,21 @@ class AlpacaEventNormalizer:
 
     def _quote(self, payload, received_ts):
         try:
+            bid_price = float(payload["bp"])
+            bid_size = float(payload["bs"])
+            ask_price = float(payload["ap"])
+            ask_size = float(payload["as"])
+            if not all(isfinite(value) for value in (bid_price, bid_size, ask_price, ask_size)):
+                raise ValueError("quote values must be finite")
             quote = QuoteEvent(
                 provider="alpaca",
                 symbol=payload["S"],
                 event_ts=_timestamp(payload["t"]),
                 received_ts=received_ts.astimezone(timezone.utc),
-                bid_price=float(payload["bp"]),
-                bid_size=float(payload["bs"]),
-                ask_price=float(payload["ap"]),
-                ask_size=float(payload["as"]),
+                bid_price=bid_price,
+                bid_size=bid_size,
+                ask_price=ask_price,
+                ask_size=ask_size,
                 source_sequence=None if payload.get("i") is None else str(payload["i"]),
                 session=_session(_timestamp(payload["t"])),
             )
@@ -65,6 +79,9 @@ class AlpacaEventNormalizer:
         try:
             symbol = str(payload["S"]).upper()
             price = float(payload["p"])
+            size = float(payload["s"])
+            if not isfinite(price) or not isfinite(size):
+                raise ValueError("trade price and size must be finite")
             previous = self._previous_trade.get(symbol)
             quote = self._quotes.get(symbol)
             direction, source = self._direction(price, quote, previous)
@@ -75,7 +92,7 @@ class AlpacaEventNormalizer:
                 event_ts=event_ts,
                 received_ts=received_ts.astimezone(timezone.utc),
                 price=price,
-                size=float(payload["s"]),
+                size=size,
                 exchange=payload.get("x"),
                 conditions=tuple(str(value) for value in payload.get("c", ())),
                 direction=direction,
