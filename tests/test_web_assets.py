@@ -1256,8 +1256,8 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].forecastAutoScrolls, 0);
             assert.equal(created[0].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
             assert.equal(created[1].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
-            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, true);
-            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, true);
+            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, false);
+            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, false);
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(created[0].chartOptions.handleScroll.mouseWheel, true);
@@ -1355,9 +1355,9 @@ class WebAssetTest(unittest.TestCase):
 
             created[0].clickHandler({{time: '2026-07-18'}});
             assert.deepEqual(created[0].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: true}}}});
+              {{handleScroll: {{pressedMouseMove: false}}}});
             assert.deepEqual(created[1].appliedOptions.at(-1),
-              {{handleScroll: {{pressedMouseMove: true}}}});
+              {{handleScroll: {{pressedMouseMove: false}}}});
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(forecastMarkers.markers.length, 1);
@@ -1461,13 +1461,13 @@ class WebAssetTest(unittest.TestCase):
         self.assertNotIn("var(--up)", css)
         self.assertNotIn("var(--down)", css)
 
-    def test_chart_pan_state_has_distinct_cursors(self):
+    def test_chart_mouse_drag_is_never_used_for_panning(self):
         css = (STATIC / "css/dashboard.css").read_text()
         self.assertIn('[data-pan-locked="false"]', css)
         self.assertIn('[data-pan-locked="true"]', css)
-        self.assertIn("cursor: grab", css)
-        self.assertIn("cursor: grabbing", css)
         self.assertIn("cursor: crosshair", css)
+        self.assertNotIn("cursor: grab", css)
+        self.assertNotIn("cursor: grabbing", css)
 
     def test_historical_forecast_request_states_are_visible(self):
         chart_uri = (STATIC / "js/charts.js").as_uri()

@@ -206,7 +206,7 @@ function chartOptions(element) {
     rightPriceScale: { borderColor: COLORS.grid },
     handleScroll: {
       mouseWheel: true,
-      pressedMouseMove: true,
+      pressedMouseMove: false,
       horzTouchDrag: true,
       vertTouchDrag: true,
     },
@@ -345,7 +345,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function setPanLocked(locked) {
     const panLocked = Boolean(locked);
-    const options = { handleScroll: { pressedMouseMove: !panLocked } };
+    const options = { handleScroll: { pressedMouseMove: false } };
     priceChart.applyOptions(options);
     volumeChart.applyOptions(options);
     [priceEl, volumeEl].forEach((element) => {
