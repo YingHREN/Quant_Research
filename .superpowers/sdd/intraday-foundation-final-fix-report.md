@@ -9,6 +9,7 @@ Implementation commits:
 - `722af83` — `fix: harden intraday event and subscription truth`
 - `8cf0a2c` — `fix: persist collector state and batch event writes`
 - `d7484fa` — `fix: close intraday final review gaps`
+- `6f18adf` — `fix: harden intraday acknowledgement and fencing paths`
 
 No design, implementation-plan, or progress files were modified.
 
@@ -17,9 +18,127 @@ No design, implementation-plan, or progress files were modified.
 All nine Important findings and the requested minor hardening were addressed.
 The second-round final review's six Important findings and one Minor finding
 were also closed with focused counterexamples.
+The third-round final review's four Important findings and one Minor finding
+were closed with end-to-end scheduling, retry, cleanup, and takeover
+counterexamples.
 The implementation remains limited to the planned Alpaca IEX real-time
 foundation: it adds no historical-bars client, no real network calls in tests,
 and no unrelated scoring or dashboard feature work.
+
+## Third-round final review
+
+### 1. Same-frame update ACK barrier
+
+RED:
+
+- A WebSocket JSON array containing a dynamic subscription ACK followed by an
+  event for the new symbol invoked the event sink before the update task was
+  scheduled to reconcile the ACK.
+
+GREEN:
+
+- The pending ACK now carries an async confirmation barrier. The stream task
+  validates the ACK, updates provider state, and awaits the collector
+  reconciliation callback before resolving the update future or processing the
+  next payload in that frame.
+- The callback commits interval and status reconciliation before the new-symbol
+  event reaches the sink, without waiting on the update task and therefore
+  without a circular wait.
+
+Commit: `6f18adf`
+
+Key test:
+
+- `test_update_ack_barrier_precedes_later_event_in_same_frame`
+
+### 2. Dynamic ACK timeout reconnects instead of stopping
+
+RED:
+
+- A real `IntradayCollector` plus `AlpacaIEXProvider` fake-socket integration
+  timed out a dynamic ACK and ended in `stopped` because the update task closed
+  and cancelled the owning stream task.
+
+GREEN:
+
+- Dynamic ACK timeout raises a typed provider connection failure rather than
+  cancelling the stream from the update task.
+- The collector observes that failure, closes the connection, increments the
+  disconnect count, publishes safe `provider_error` while `retrying`, and
+  reconnects to the latest desired pool.
+
+Commit: `6f18adf`
+
+Key test:
+
+- `test_dynamic_ack_timeout_reconnects_collector_with_safe_error`
+
+### 3. Disconnect-path storage failure remains typed
+
+RED:
+
+- A provider disconnect followed by an interval-close storage failure escaped
+  as private `_CollectorStorageError`; successful cleanup then overwrote the
+  snapshot with `stopped`.
+
+GREEN:
+
+- Provider-disconnect transition handling catches interval/status storage
+  failures at their origin, marks `collector_error/storage_error`, and exits
+  retry handling.
+- Final cleanup still closes the provider and preserves the public
+  `collector_storage_failed` result and safe snapshot.
+
+Commit: `6f18adf`
+
+Key test:
+
+- `test_disconnect_close_storage_error_stays_typed_and_closes_provider`
+
+### 4. Event batches use the session fencing token
+
+RED:
+
+- Event writes accepted no session token, so an old owner could commit a queued
+  batch after a new collector took over.
+- A fenced writer failure did not count the permanently rejected event.
+
+GREEN:
+
+- Collector batch writes carry their session id. `IntradayStore` validates the
+  current token under the same `BEGIN IMMEDIATE` transaction that inserts the
+  events.
+- A takeover rejects the entire old batch with
+  `collector_session_fenced`; no row commits. The old collector classifies the
+  rejected batch as dropped, records zero retryable undrained events for it,
+  and surfaces safe `storage_error`.
+
+Commit: `6f18adf`
+
+Key tests:
+
+- `test_takeover_fences_old_session_event_batch`
+- `test_fenced_event_batch_is_dropped_and_counted`
+
+### 5. Authentication deadlines are absolute
+
+RED:
+
+- A stream of unrelated control frames indefinitely reset the full
+  authentication or initial-subscription ACK timeout.
+
+GREEN:
+
+- Authentication and initial-subscription phases use separate absolute
+  monotonic deadlines. Each receive waits only for the remaining duration, so
+  unrelated frames cannot extend either phase.
+
+Commit: `6f18adf`
+
+Key tests:
+
+- `test_authentication_deadline_is_not_extended_by_unrelated_frames`
+- `test_initial_subscription_deadline_is_not_extended_by_unrelated_frames`
 
 ## Second-round final review
 
@@ -442,8 +561,10 @@ Key tests:
 - CLI and Flask use the same absolute project-root database default.
 - Authentication and subscription ACK waits have bounded application-level
   timeouts with stable safe codes.
+- Authentication and initial-subscription timeouts use absolute monotonic
+  deadlines that unrelated frames cannot extend.
 
-Commits: `722af83`, `8cf0a2c`, `d7484fa`
+Commits: `722af83`, `8cf0a2c`, `d7484fa`, `6f18adf`
 
 ## Verification
 
@@ -451,7 +572,7 @@ Interpreter:
 
 `/Users/renyinghao.1/Project/stock_screener/venv/bin/python`
 
-Results at implementation head `d7484fa`:
+Results at implementation head `6f18adf`:
 
 - Focused intraday suites:
   `python -m unittest tests.test_marketdata_contracts
@@ -459,10 +580,10 @@ Results at implementation head `d7484fa`:
   tests.test_marketdata_subscriptions tests.test_marketdata_alpaca
   tests.test_marketdata_collector tests.test_web_intraday_status
   tests.test_collect_intraday -v`
-  — **112 passed**
+  — **119 passed**
 - Complete suite:
   `python -m unittest discover -s tests -v`
-  — **334 passed**
+  — **341 passed**
 - Repository Python compilation with
   `PYTHONPYCACHEPREFIX=/private/tmp/intraday-foundation-final-pycache`
   — **passed**
