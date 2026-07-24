@@ -70,27 +70,6 @@ function timeKey(time) {
   return null;
 }
 
-function forecastTimelineDates(payload) {
-  const dates = new Set();
-  const byDate = payload?.forecasts?.by_date;
-  if (!byDate || typeof byDate !== "object") return [];
-  Object.values(byDate).forEach((horizons) => {
-    if (!horizons || typeof horizons !== "object") return;
-    Object.values(horizons).forEach((forecast) => {
-      if (!forecast || typeof forecast !== "object") return;
-      if (typeof forecast.target_date === "string") {
-        dates.add(forecast.target_date);
-      }
-      if (Array.isArray(forecast.projection_dates)) {
-        forecast.projection_dates.forEach((date) => {
-          if (typeof date === "string") dates.add(date);
-        });
-      }
-    });
-  });
-  return [...dates].sort();
-}
-
 function numberText(value, maximumFractionDigits = 2) {
   if (!finite(value)) return "—";
   return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value);
@@ -275,13 +254,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     priceLineVisible: false,
     lastValueVisible: true,
   });
-  const timelineAnchorSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
-    title: "",
-    color: "transparent",
-    crosshairMarkerVisible: false,
-    priceLineVisible: false,
-    lastValueVisible: false,
-  });
   const forecastProjectionSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.forecastProjection", {}, locale),
     visible: false,
@@ -340,7 +312,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let forecastHorizon = DEFAULT_FORECAST_HORIZON;
   let shapeMarkerData = [];
   let forecastMarkerData = null;
-  let timelineAnchorDates = new Set();
   let paintingDetail = false;
 
   function setPanLocked(locked) {
@@ -358,64 +329,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   }
 
   setPanLocked(false);
-
-  function replaceTimelineAnchor(payload, reset = false) {
-    if (reset) timelineAnchorDates = new Set();
-    rows.forEach((row) => {
-      const date = timeKey(row.time);
-      if (date !== null) timelineAnchorDates.add(date);
-    });
-    forecastTimelineDates(payload).forEach((date) => {
-      timelineAnchorDates.add(date);
-    });
-    timelineAnchorSeries.setData(
-      [...timelineAnchorDates].sort().map((time) => ({ time })),
-    );
-  }
-
-  function setForecastProjectionData(points) {
-    const visibleRange = typeof priceScale.getVisibleLogicalRange === "function"
-      ? priceScale.getVisibleLogicalRange()
-      : null;
-    forecastProjectionSeries.setData(points);
-    if (
-      visibleRange
-      && finite(visibleRange.from)
-      && finite(visibleRange.to)
-    ) {
-      priceScale.setVisibleLogicalRange(visibleRange);
-    }
-  }
-
-  function updateForecastProjection(row, forecast) {
-    if (
-      !row
-      || !forecast
-      || !finite(forecast.predicted_return)
-      || typeof forecast.target_date !== "string"
-    ) {
-      setForecastProjectionData([]);
-      return;
-    }
-    const projectionDates = Array.isArray(forecast.projection_dates)
-      ? forecast.projection_dates.filter((value) => typeof value === "string")
-      : [];
-    const futurePoints = projectionDates.length
-      ? projectionDates.map((time, index) => ({
-        time,
-        value: row.close * (
-          1 + forecast.predicted_return * ((index + 1) / projectionDates.length)
-        ),
-      }))
-      : [{
-        time: forecast.target_date,
-        value: row.close * (1 + forecast.predicted_return),
-      }];
-    setForecastProjectionData([
-      { time: row.time, value: row.close },
-      ...futurePoints,
-    ]);
-  }
 
   function refreshMarkers() {
     const markers = [
@@ -464,7 +377,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       ) {
         forecastRequestStates.set(date, "loading");
       }
-      updateForecastProjection(row, forecast);
       forecastMarkerData = forecastMarker(forecast, date, locale);
       refreshMarkers();
       renderDetail(detailEl, row, locked, locale, {
@@ -745,7 +657,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     lastPayload = payload;
     rows = Array.isArray(payload && payload.chart) ? payload.chart : [];
     rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
-    replaceTimelineAnchor(payload, true);
     lockedTime = null;
     setPanLocked(false);
     forecastIndex = indexForecasts(payload);
@@ -784,7 +695,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function setForecasts(payload) {
     if (destroyed) return;
-    replaceTimelineAnchor(payload);
     const nextIndex = indexForecasts(payload);
     const computedDates = nextIndex.dateCoverage?.computed_dates;
     if (Array.isArray(computedDates)) {

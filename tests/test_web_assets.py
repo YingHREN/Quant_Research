@@ -864,7 +864,6 @@ class WebAssetTest(unittest.TestCase):
             "higher_low_confirmed",
             "reversal_signal_count",
             "whitespaceSeriesPoints",
-            "timelineAnchorSeries",
             "forecastProjectionSeries",
             "autoscaleInfoProvider",
             "onForecastDate",
@@ -873,8 +872,10 @@ class WebAssetTest(unittest.TestCase):
             self.assertIn(marker, source)
 
         self.assertEqual(source.count("LightweightCharts.CandlestickSeries"), 1)
+        self.assertNotIn("timelineAnchorSeries", source)
+        self.assertNotIn("forecastTimelineDates", source)
         self.assertEqual(source.count("LightweightCharts.HistogramSeries"), 1)
-        self.assertEqual(source.count("LightweightCharts.LineSeries"), 8)
+        self.assertEqual(source.count("LightweightCharts.LineSeries"), 7)
         for title_key in (
             "chart.pivot.strictVcp",
             "chart.pivot.tightPlatform",
@@ -1226,7 +1227,7 @@ class WebAssetTest(unittest.TestCase):
             controller.setChartData({{...payload, chart: rows, structures: {{annotations: [{{
               time: '2026-07-18', type: 'strict_vcp', label: 'Strict VCP',
             }}]}}}});
-            assert.equal(created[0].forecastDataEvents, 1);
+            assert.equal(created[0].forecastDataEvents, 0);
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
             const forecastSeries = created[0].series.find(
@@ -1269,15 +1270,6 @@ class WebAssetTest(unittest.TestCase):
               sharedTimesAfterHover.indexOf('2026-07-17'),
               selectedIndexBeforeHover,
             );
-            const timelineAnchor = created[0].series.find(
-              (series) => series.options.title === '',
-            );
-            assert.ok(timelineAnchor);
-            const timelineAnchorTimes = timelineAnchor.data.map((point) => point.time);
-            ['2026-07-17', '2026-07-18', '2026-07-20', '2026-08-14', '2026-08-17']
-              .forEach((date) => assert.ok(timelineAnchorTimes.includes(date), date));
-            assert.equal(new Set(timelineAnchorTimes).size, timelineAnchorTimes.length);
-            assert.ok(timelineAnchor.data.every((point) => !('value' in point)));
             assert.equal(
               created[0].crosshairPositions.length + created[1].crosshairPositions.length,
               2,
@@ -1303,6 +1295,42 @@ class WebAssetTest(unittest.TestCase):
             assert.match(zhUp, /基线比较/);
             assert.match(zhUp, /样本期 2025-01-03 — 2026-06-30/);
             assert.match(zhUp, /仅供研究/);
+
+            const unlockedTimesBeforeHistoricalForecast = created[0].sharedTimes();
+            const unlockedRangeBeforeHistoricalForecast = structuredClone(
+              created[0].timeScale().range,
+            );
+            controller.setForecasts({{
+              forecasts: {{
+                model: {{key: 'ridge_direction_v1', version: 'ridge-v1'}},
+                horizons: [5, 20, 60],
+                date_coverage: {{computed_dates: ['2026-07-17']}},
+                by_date: {{
+                  '2026-07-17': {{
+                    ...payload.forecasts.by_date['2026-07-17'],
+                    '20': {{direction: 'up', predicted_return: 0.04,
+                      target_date: '2026-09-01',
+                      projection_dates: ['2026-08-03', '2026-09-01'],
+                      asof_date: '2026-07-17', model_key: 'ridge_direction_v1',
+                      model_version: 'ridge-v1'}},
+                  }},
+                }},
+              }},
+              forecast_evaluation: payload.forecast_evaluation,
+            }});
+            assert.deepEqual(
+              created[0].sharedTimes(),
+              unlockedTimesBeforeHistoricalForecast,
+            );
+            assert.deepEqual(
+              created[0].timeScale().range,
+              unlockedRangeBeforeHistoricalForecast,
+            );
+            assert.deepEqual(
+              created[1].timeScale().range,
+              unlockedRangeBeforeHistoricalForecast,
+            );
+            assert.deepEqual(forecastSeries.data, []);
 
             const callsBeforeSwitch = forecastMarkers.calls;
             const rangeBeforeHorizonSwitch = structuredClone(
@@ -1338,6 +1366,42 @@ class WebAssetTest(unittest.TestCase):
               {{handleScroll: {{pressedMouseMove: false}}}});
             assert.equal(created[0].element.dataset.panLocked, 'true');
             assert.equal(created[1].element.dataset.panLocked, 'true');
+            const lockedTimesBeforeHistoricalForecast = created[0].sharedTimes();
+            const lockedRangeBeforeHistoricalForecast = structuredClone(
+              created[0].timeScale().range,
+            );
+            controller.setForecasts({{
+              forecasts: {{
+                model: {{key: 'ridge_direction_v1', version: 'ridge-v1'}},
+                horizons: [5, 20, 60],
+                date_coverage: {{computed_dates: ['2026-07-17']}},
+                by_date: {{
+                  '2026-07-17': {{
+                    ...payload.forecasts.by_date['2026-07-17'],
+                    '20': {{direction: 'down', predicted_return: -0.03,
+                      target_date: '2026-09-15',
+                      projection_dates: ['2026-08-17', '2026-09-15'],
+                      asof_date: '2026-07-17', model_key: 'ridge_direction_v1',
+                      model_version: 'ridge-v1'}},
+                  }},
+                }},
+              }},
+              forecast_evaluation: payload.forecast_evaluation,
+            }});
+            assert.deepEqual(created[0].sharedTimes(), lockedTimesBeforeHistoricalForecast);
+            assert.deepEqual(
+              created[0].timeScale().range,
+              lockedRangeBeforeHistoricalForecast,
+            );
+            assert.deepEqual(
+              created[1].timeScale().range,
+              lockedRangeBeforeHistoricalForecast,
+            );
+            assert.equal(created[0].element.dataset.panLocked, 'true');
+            assert.equal(created[1].element.dataset.panLocked, 'true');
+            assert.equal(created[0].crosshairPositions.at(-1).time, '2026-07-17');
+            assert.equal(created[1].crosshairPositions.at(-1).time, '2026-07-17');
+            assert.match(textTree(detail), /已锁定/);
             const lockedPositionsBeforeSwitch = created[0].crosshairPositions.length;
             controller.setForecastHorizon(20);
             assert.equal(created[0].crosshairPositions.length, lockedPositionsBeforeSwitch + 1);
@@ -1669,12 +1733,7 @@ class WebAssetTest(unittest.TestCase):
         projection = next(line for line in actual["priceLineSeries"] if line[0] == "Model forecast")
         self.assertEqual(actual["forecastOptions"]["lineWidth"], 3)
         self.assertEqual(actual["forecastOptions"]["lineStyle"], 0)
-        self.assertEqual(projection[1][0], {"time": "2026-07-22", "value": 101})
-        self.assertEqual(len(projection[1]), 21)
-        self.assertAlmostEqual(projection[1][1]["value"], 101.505)
-        self.assertEqual(projection[1][1]["time"], "2026-07-23")
-        self.assertAlmostEqual(projection[1][10]["value"], 106.05)
-        self.assertAlmostEqual(projection[1][-1]["value"], 111.1)
+        self.assertEqual(projection[1], [])
         details = dict(actual["detail"])
         self.assertEqual(details["Volume ratio change"], "+0.15×")
         self.assertEqual(details["Pivot-distance change"], "+0.75 pp")
