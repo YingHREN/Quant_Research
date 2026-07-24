@@ -49,6 +49,16 @@ class AlpacaEventNormalizer:
             return self._trade(payload, received_ts)
         return None
 
+    def clear_symbols(self, symbols):
+        for value in symbols:
+            symbol = str(value).upper()
+            self._quotes.pop(symbol, None)
+            self._previous_trade.pop(symbol, None)
+
+    def reset(self):
+        self._quotes.clear()
+        self._previous_trade.clear()
+
     def _quote(self, payload, received_ts):
         try:
             bid_price = float(payload["bp"])
