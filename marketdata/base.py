@@ -16,6 +16,10 @@ INTERVAL_PATTERN = re.compile(r"^[1-9][0-9]*[smhd]$")
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+class ProviderConnectionError(RuntimeError):
+    pass
+
+
 def _require_utc(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field} must be UTC-aware")

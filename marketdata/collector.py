@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 import threading
 import uuid
 
-from marketdata.base import SubscriptionConfirmation, SubscriptionRequest
+from marketdata.base import (
+    ProviderConnectionError,
+    SubscriptionConfirmation,
+    SubscriptionRequest,
+)
 from marketdata.subscriptions import build_pool
 
 
@@ -78,6 +82,7 @@ class IntradayCollector:
         self._event_queue = None
         self._writer_task = None
         self._storage_failure_event = None
+        self._provider_failure_event = None
         self._heartbeat_task = None
         self._queue_high_water = 0
         self._dropped_event_count = 0
@@ -134,6 +139,14 @@ class IntradayCollector:
             raise
         except _CollectorStorageError:
             self._mark_storage_error()
+        except ProviderConnectionError:
+            self._update_error = "provider_error"
+            self._publish_status_safely()
+            if (
+                self._storage_error is None
+                and self._provider_failure_event is not None
+            ):
+                self._provider_failure_event.set()
         except Exception:
             self._update_error = (
                 None
@@ -327,9 +340,15 @@ class IntradayCollector:
                 await asyncio.to_thread(
                     self._store.write_events,
                     tuple(batch),
+                    session_id=self._session_id,
                 )
-            except Exception:
-                self._undrained_event_count = len(batch) + queue.qsize()
+            except Exception as error:
+                rejected_count = len(batch) + queue.qsize()
+                if str(error) == "collector_session_fenced":
+                    self._dropped_event_count += rejected_count
+                    self._undrained_event_count = 0
+                else:
+                    self._undrained_event_count = rejected_count
                 self._mark_storage_error()
                 return
             for _event in batch:
@@ -443,6 +462,20 @@ class IntradayCollector:
             or self._update_error
         )
 
+    async def _record_provider_disconnect(self):
+        self._disconnect_count += 1
+        self._stream_error = "provider_error"
+        self._state = "retrying"
+        self._accepting_events = False
+        await self._cancel_update_worker()
+        try:
+            self._close_active()
+            self._publish_status()
+        except _CollectorStorageError:
+            self._mark_storage_error()
+            return False
+        return True
+
     async def run(self):
         cleanup_completion = self._cleanup_completion
         if cleanup_completion is not None:
@@ -465,6 +498,7 @@ class IntradayCollector:
         self._event_queue = asyncio.Queue(maxsize=self._queue_size)
         self._writer_task = None
         self._storage_failure_event = asyncio.Event()
+        self._provider_failure_event = asyncio.Event()
         self._heartbeat_task = None
         self._queue_high_water = 0
         self._dropped_event_count = 0
@@ -514,6 +548,7 @@ class IntradayCollector:
                 self._accepting_events = False
                 self._publish_status()
                 request = self._desired
+                self._provider_failure_event.clear()
                 stream_task = asyncio.create_task(
                     self._provider.stream_events(
                         request,
@@ -524,8 +559,15 @@ class IntradayCollector:
                 storage_wait = asyncio.create_task(
                     self._storage_failure_event.wait()
                 )
+                provider_failure_wait = asyncio.create_task(
+                    self._provider_failure_event.wait()
+                )
                 done, _pending = await asyncio.wait(
-                    (stream_task, storage_wait),
+                    (
+                        stream_task,
+                        storage_wait,
+                        provider_failure_wait,
+                    ),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 if storage_wait in done and self._storage_error is not None:
@@ -537,10 +579,48 @@ class IntradayCollector:
                         stream_task,
                         return_exceptions=True,
                     )
+                    provider_failure_wait.cancel()
+                    await asyncio.gather(
+                        provider_failure_wait,
+                        return_exceptions=True,
+                    )
                     break
+                if provider_failure_wait in done:
+                    storage_wait.cancel()
+                    await asyncio.gather(
+                        storage_wait,
+                        return_exceptions=True,
+                    )
+                    if not stream_task.done():
+                        await self._provider.close()
+                    if not stream_task.done():
+                        stream_task.cancel()
+                    await asyncio.gather(
+                        stream_task,
+                        return_exceptions=True,
+                    )
+                    if not await self._record_provider_disconnect():
+                        break
+                    delay = self._retry_delays[
+                        min(retry_index, len(self._retry_delays) - 1)
+                    ]
+                    retry_index += 1
+                    if delay <= 0:
+                        await asyncio.sleep(0)
+                    else:
+                        try:
+                            await asyncio.wait_for(
+                                self._stop_event.wait(),
+                                delay,
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+                    continue
                 storage_wait.cancel()
+                provider_failure_wait.cancel()
                 await asyncio.gather(
                     storage_wait,
+                    provider_failure_wait,
                     return_exceptions=True,
                 )
                 try:
@@ -553,13 +633,8 @@ class IntradayCollector:
                     self._mark_storage_error()
                     break
                 except Exception:
-                    self._disconnect_count += 1
-                    self._stream_error = "provider_error"
-                    self._state = "retrying"
-                    self._accepting_events = False
-                    await self._cancel_update_worker()
-                    self._close_active()
-                    self._publish_status()
+                    if not await self._record_provider_disconnect():
+                        break
                     delay = self._retry_delays[
                         min(retry_index, len(self._retry_delays) - 1)
                     ]

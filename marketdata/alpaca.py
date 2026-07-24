@@ -9,6 +9,7 @@ from math import isfinite
 from websockets.asyncio.client import connect as websocket_connect
 
 from marketdata.base import (
+    ProviderConnectionError,
     ProviderCapabilities,
     SubscriptionConfirmation,
     SubscriptionRequest,
@@ -102,34 +103,57 @@ class AlpacaIEXProvider:
                         "secret": self._api_secret,
                     }
                 )
+                clock = asyncio.get_running_loop().time
+                authentication_deadline = (
+                    clock() + self._ack_timeout_seconds
+                )
+                initial_subscription_deadline = None
                 iterator = socket.__aiter__()
                 while True:
                     timeout_code = None
+                    deadline = None
                     if not self._authenticated:
                         timeout_code = "alpaca_authentication_timeout"
+                        deadline = authentication_deadline
                     elif not self._initial_confirmed:
                         timeout_code = "alpaca_subscription_timeout"
-                    try:
-                        next_message = iterator.__anext__()
-                        raw = (
-                            await next_message
-                            if timeout_code is None
-                            else await asyncio.wait_for(
-                                next_message,
-                                timeout=self._ack_timeout_seconds,
+                        if initial_subscription_deadline is None:
+                            initial_subscription_deadline = (
+                                clock() + self._ack_timeout_seconds
                             )
-                        )
+                        deadline = initial_subscription_deadline
+                    try:
+                        if deadline is None:
+                            raw = await iterator.__anext__()
+                        else:
+                            remaining = deadline - clock()
+                            if remaining <= 0:
+                                raise asyncio.TimeoutError
+                            raw = await asyncio.wait_for(
+                                iterator.__anext__(),
+                                timeout=remaining,
+                            )
                     except StopAsyncIteration:
                         break
                     except asyncio.TimeoutError:
                         raise RuntimeError(timeout_code) from None
                     messages = self._decode_messages(raw)
                     for payload in messages:
+                        was_authenticated = self._authenticated
                         await self._handle_payload(
                             payload,
                             emit,
                             on_confirmed,
                         )
+                        if (
+                            not was_authenticated
+                            and self._authenticated
+                            and not self._initial_confirmed
+                            and initial_subscription_deadline is None
+                        ):
+                            initial_subscription_deadline = (
+                                clock() + self._ack_timeout_seconds
+                            )
                         if self._closing:
                             return
                 if not self._authenticated or not self._initial_confirmed:
@@ -170,9 +194,12 @@ class AlpacaIEXProvider:
         if message_type == "subscription":
             pending = self._pending_ack
             if pending is not None:
-                future, expected = pending
+                future, expected, apply_confirmation = pending
+                if future.done():
+                    return
                 try:
                     confirmation = self._validate_ack(payload, expected)
+                    await apply_confirmation(confirmation)
                 except RuntimeError as error:
                     if not future.done():
                         future.set_exception(error)
@@ -290,15 +317,19 @@ class AlpacaIEXProvider:
                 for symbol in self._symbols
                 if symbol not in removed
             )
-        confirmation = await self._send_and_wait_for_ack(
+
+        async def apply_confirmation(confirmation):
+            self._symbols = confirmation.symbols
+            if action == "unsubscribe":
+                self._normalizer.clear_symbols(changed_symbols)
+            await self._notify_confirmation(on_confirmed, confirmation)
+
+        await self._send_and_wait_for_ack(
             action,
             changed_symbols,
             expected,
+            apply_confirmation,
         )
-        self._symbols = confirmation.symbols
-        if action == "unsubscribe":
-            self._normalizer.clear_symbols(changed_symbols)
-        await self._notify_confirmation(on_confirmed, confirmation)
 
     @staticmethod
     async def _notify_confirmation(callback, confirmation):
@@ -313,11 +344,12 @@ class AlpacaIEXProvider:
         action,
         changed_symbols,
         expected,
+        apply_confirmation,
     ):
         if self._pending_ack is not None:
             raise RuntimeError("alpaca_subscription_update_in_progress")
         future = asyncio.get_running_loop().create_future()
-        pending = (future, tuple(expected))
+        pending = (future, tuple(expected), apply_confirmation)
         self._pending_ack = pending
         try:
             await self._send_subscription_action(action, changed_symbols)
@@ -327,8 +359,7 @@ class AlpacaIEXProvider:
                     timeout=self._ack_timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                await self.close()
-                raise RuntimeError(
+                raise ProviderConnectionError(
                     "alpaca_subscription_timeout"
                 ) from None
         finally:

@@ -259,14 +259,20 @@ class IntradayStore:
         if value.utcoffset().total_seconds() != 0:
             raise ValueError(f"{field} must be UTC")
 
-    def write_event(self, event):
-        return self.write_events((event,)) == 1
+    def write_event(self, event, session_id=None):
+        return self.write_events(
+            (event,),
+            session_id=session_id,
+        ) == 1
 
-    def write_events(self, events):
+    def write_events(self, events, session_id=None):
         values = tuple(events)
         if not values:
             return 0
         with self._connect() as connection:
+            if session_id is not None:
+                connection.execute("BEGIN IMMEDIATE")
+                self._require_current_session(connection, session_id)
             before = connection.total_changes
             for event in values:
                 self._insert_event(connection, event)

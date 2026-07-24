@@ -538,6 +538,38 @@ class IntradayStoreTest(unittest.TestCase):
             ).fetchall()
         self.assertEqual(open_rows, [])
 
+    def test_takeover_fences_old_session_event_batch(self):
+        old_at = AT - timedelta(minutes=1)
+        self.store.begin_collector_session(
+            session_id="old-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=old_at,
+            stale_after_seconds=30,
+        )
+        self.store.begin_collector_session(
+            session_id="new-session",
+            provider="alpaca",
+            coverage="iex",
+            started_at=AT,
+            stale_after_seconds=30,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_session_fenced$",
+        ):
+            self.store.write_events(
+                (trade(sequence="old-owner-trade"),),
+                session_id="old-session",
+            )
+
+        with sqlite3.connect(self.path) as connection:
+            persisted = connection.execute(
+                "SELECT COUNT(*) FROM intraday_trades"
+            ).fetchone()[0]
+        self.assertEqual(persisted, 0)
+
     def test_status_heartbeat_cannot_move_backward(self):
         self.store.begin_collector_session(
             session_id="session-1",

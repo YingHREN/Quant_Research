@@ -2,10 +2,14 @@ import asyncio
 from contextlib import redirect_stderr
 import io
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 from marketdata.alpaca import AlpacaIEXProvider
 from marketdata.base import SubscriptionRequest, TradeEvent
+from marketdata.collector import IntradayCollector
+from marketdata.storage import IntradayStore
 
 
 class FakeSocket:
@@ -78,6 +82,20 @@ class QueueFakeSocket(FakeSocket):
         message = await self.queue.get()
         if message is self.END:
             raise StopAsyncIteration
+        return json.dumps(message)
+
+
+class EndlessUnrelatedSocket(FakeSocket):
+    def __init__(self, initial_messages=()):
+        super().__init__(())
+        self.initial_messages = iter(initial_messages)
+
+    async def __anext__(self):
+        await asyncio.sleep(0.001)
+        try:
+            message = next(self.initial_messages)
+        except StopIteration:
+            message = [{"T": "success", "msg": "connected"}]
         return json.dumps(message)
 
 
@@ -170,6 +188,210 @@ async def eventually(predicate, timeout=0.5):
 
 
 class AlpacaIEXProviderTest(unittest.IsolatedAsyncioTestCase):
+    async def test_authentication_deadline_is_not_extended_by_unrelated_frames(self):
+        socket = EndlessUnrelatedSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+            ack_timeout_seconds=0.005,
+        )
+
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^alpaca_authentication_timeout$",
+            ):
+                await asyncio.wait_for(
+                    provider.stream_events(
+                        SubscriptionRequest(("AMD",)),
+                        lambda _event: None,
+                    ),
+                    0.05,
+                )
+        except asyncio.TimeoutError:
+            self.fail("unrelated frames extended authentication deadline")
+
+    async def test_initial_subscription_deadline_is_not_extended_by_unrelated_frames(self):
+        socket = EndlessUnrelatedSocket(
+            ([{"T": "success", "msg": "authenticated"}],)
+        )
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+            ack_timeout_seconds=0.005,
+        )
+
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^alpaca_subscription_timeout$",
+            ):
+                await asyncio.wait_for(
+                    provider.stream_events(
+                        SubscriptionRequest(("AMD",)),
+                        lambda _event: None,
+                    ),
+                    0.05,
+                )
+        except asyncio.TimeoutError:
+            self.fail(
+                "unrelated frames extended initial subscription deadline"
+            )
+
+    async def test_dynamic_ack_timeout_reconnects_collector_with_safe_error(self):
+        first_socket = QueueFakeSocket()
+        second_socket = QueueFakeSocket()
+        sockets = iter((first_socket, second_socket))
+        connection_calls = []
+
+        def connect(_url):
+            socket = next(sockets)
+            connection_calls.append(socket)
+            return FakeConnection(socket)
+
+        with tempfile.TemporaryDirectory() as directory:
+            provider = AlpacaIEXProvider(
+                "key",
+                "secret",
+                connect=connect,
+                ack_timeout_seconds=0.01,
+            )
+            collector = IntradayCollector(
+                provider,
+                IntradayStore(Path(directory) / "market.db"),
+                retry_delays=(0.2,),
+            )
+            collector.set_selection("AMD", (), ())
+            run_task = asyncio.create_task(collector.run())
+            try:
+                await eventually(lambda: len(first_socket.sent) == 1)
+                await first_socket.feed([
+                    {"T": "success", "msg": "authenticated"}
+                ])
+                await eventually(lambda: len(first_socket.sent) == 2)
+                initial_symbols = tuple(
+                    collector.snapshot()["desired_symbols"]
+                )
+                await first_socket.feed([
+                    {
+                        "T": "subscription",
+                        "trades": list(initial_symbols),
+                        "quotes": list(initial_symbols),
+                    }
+                ])
+                await eventually(
+                    lambda: collector.snapshot()["state"] == "running"
+                )
+
+                collector.set_selection("NVDA", (), ())
+                await eventually(lambda: len(first_socket.sent) == 3)
+                await eventually(
+                    lambda: collector.snapshot()["state"] == "retrying"
+                )
+                retrying = collector.snapshot()
+                self.assertEqual(retrying["state"], "retrying")
+                self.assertEqual(retrying["disconnect_count"], 1)
+                self.assertEqual(retrying["error"], "provider_error")
+                self.assertFalse(run_task.done())
+
+                await eventually(lambda: len(connection_calls) == 2)
+                await eventually(lambda: len(second_socket.sent) == 1)
+                await second_socket.feed([
+                    {"T": "success", "msg": "authenticated"}
+                ])
+                await eventually(lambda: len(second_socket.sent) == 2)
+                desired_symbols = tuple(
+                    collector.snapshot()["desired_symbols"]
+                )
+                await second_socket.feed([
+                    {
+                        "T": "subscription",
+                        "trades": list(desired_symbols),
+                        "quotes": list(desired_symbols),
+                    }
+                ])
+                await eventually(
+                    lambda: collector.snapshot()["state"] == "running"
+                    and collector.snapshot()["disconnect_count"] == 1
+                )
+                self.assertEqual(
+                    collector.snapshot()["subscribed_symbols"],
+                    list(desired_symbols),
+                )
+                self.assertIsNone(collector.snapshot()["error"])
+            finally:
+                if not run_task.done():
+                    await collector.stop()
+                await asyncio.gather(run_task, return_exceptions=True)
+
+    async def test_update_ack_barrier_precedes_later_event_in_same_frame(self):
+        socket = QueueFakeSocket()
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+        )
+        initial_confirmed = asyncio.Event()
+        operations = []
+
+        async def emit(event):
+            operations.append(("event", event.symbol))
+
+        stream = asyncio.create_task(
+            provider.stream_events(
+                SubscriptionRequest(("AMD",)),
+                emit,
+                lambda _confirmation: initial_confirmed.set(),
+            )
+        )
+        await socket.feed([{"T": "success", "msg": "authenticated"}])
+        await socket.feed([
+            {"T": "subscription", "trades": ["AMD"], "quotes": ["AMD"]}
+        ])
+        await initial_confirmed.wait()
+
+        update = asyncio.create_task(
+            provider.update_subscription(
+                SubscriptionRequest(("AMD", "NVDA")),
+                lambda confirmation: operations.append(
+                    ("reconcile", confirmation.symbols)
+                ),
+            )
+        )
+        await eventually(lambda: len(socket.sent) == 3)
+        await socket.feed([
+            {
+                "T": "subscription",
+                "trades": ["AMD", "NVDA"],
+                "quotes": ["AMD", "NVDA"],
+            },
+            {
+                "T": "t",
+                "S": "NVDA",
+                "t": "2026-07-24T14:30:00.000000100Z",
+                "p": 170.0,
+                "s": 1,
+                "x": "V",
+                "c": [],
+                "i": "trade-1",
+            },
+        ])
+
+        confirmation = await asyncio.wait_for(update, 0.2)
+        await eventually(lambda: len(operations) == 2)
+        self.assertEqual(confirmation.symbols, ("AMD", "NVDA"))
+        self.assertEqual(
+            operations,
+            [
+                ("reconcile", ("AMD", "NVDA")),
+                ("event", "NVDA"),
+            ],
+        )
+        await socket.finish()
+        await stream
+
     async def test_full_pool_swap_frees_capacity_before_subscribing_replacement(self):
         current = tuple(f"SYM{index:02d}" for index in range(30))
         desired = current[:-1] + ("NEW",)

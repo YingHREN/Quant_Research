@@ -34,7 +34,7 @@ class FakeStore:
         self.events.append(event)
         return True
 
-    def write_events(self, events):
+    def write_events(self, events, session_id=None):
         batch = tuple(events)
         self.batches.append(batch)
         self.events.extend(batch)
@@ -511,7 +511,7 @@ class BlockingBatchStore(FakeStore):
         self.write_started = threading.Event()
         self.release_write = threading.Event()
 
-    def write_events(self, events):
+    def write_events(self, events, session_id=None):
         batch = tuple(events)
         self.write_started.set()
         if not self.release_write.wait(timeout=2):
@@ -525,8 +525,18 @@ class FailingBatchStore(FakeStore):
     def write_event(self, event):
         raise RuntimeError("sensitive sqlite detail")
 
-    def write_events(self, events):
+    def write_events(self, events, session_id=None):
         raise RuntimeError("sensitive sqlite detail")
+
+
+class FencedBatchStore(FakeStore):
+    def __init__(self):
+        super().__init__()
+        self.batch_session_ids = []
+
+    def write_events(self, events, session_id=None):
+        self.batch_session_ids.append(session_id)
+        raise RuntimeError("collector_session_fenced")
 
 
 class FailingInitializeStore(FakeStore):
@@ -580,6 +590,49 @@ class PartialAckThenFailUpdateProvider(FakeProvider):
 
 
 class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_fenced_event_batch_is_dropped_and_counted(self):
+        provider = BurstProvider((market_event(1),))
+        store = FencedBatchStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            retry_delays=(60,),
+            queue_size=2,
+            batch_size=2,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_storage_failed$",
+        ):
+            await collector.run()
+
+        snapshot = collector.snapshot()
+        self.assertEqual(len(store.batch_session_ids), 1)
+        self.assertIsNotNone(store.batch_session_ids[0])
+        self.assertEqual(snapshot["dropped_event_count"], 1)
+        self.assertEqual(snapshot["undrained_event_count"], 0)
+        self.assertEqual(snapshot["error"], "storage_error")
+        self.assertEqual(store.events, [])
+
+    async def test_disconnect_close_storage_error_stays_typed_and_closes_provider(self):
+        provider = FailingProvider()
+        store = FailOnceCloseStore()
+        collector = IntradayCollector(provider, store, retry_delays=(0,))
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "^collector_storage_failed$",
+        ):
+            await collector.run()
+
+        snapshot = collector.snapshot()
+        self.assertEqual(snapshot["state"], "collector_error")
+        self.assertEqual(snapshot["error"], "storage_error")
+        self.assertEqual(snapshot["disconnect_count"], 1)
+        self.assertEqual(provider.close_calls, 1)
+        self.assertNotIn("sensitive close detail", str(snapshot))
+
     async def test_concurrent_status_writes_are_serialized(self):
         store = BlockingStatusStore()
         collector = IntradayCollector(FakeProvider(), store)
