@@ -204,6 +204,12 @@ function chartOptions(element) {
       horzLines: { color: COLORS.grid },
     },
     rightPriceScale: { borderColor: COLORS.grid },
+    handleScroll: {
+      mouseWheel: true,
+      pressedMouseMove: false,
+      horzTouchDrag: true,
+      vertTouchDrag: true,
+    },
     timeScale: {
       borderColor: COLORS.grid,
       timeVisible: false,

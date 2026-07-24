@@ -1254,6 +1254,11 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].forecastAutoScrolls, 0);
             assert.equal(created[0].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
             assert.equal(created[1].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
+            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, false);
+            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, false);
+            assert.equal(created[0].chartOptions.handleScroll.mouseWheel, true);
+            assert.equal(created[0].chartOptions.handleScroll.horzTouchDrag, true);
+            assert.equal(created[0].chartOptions.handleScroll.vertTouchDrag, true);
             const sharedTimesAfterHover = created[0].sharedTimes();
             assert.deepEqual(sharedTimesAfterHover, sharedTimesBeforeHover);
             assert.equal(
