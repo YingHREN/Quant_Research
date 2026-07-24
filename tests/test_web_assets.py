@@ -166,6 +166,37 @@ class WebAssetTest(unittest.TestCase):
             json.loads(result.stdout), ["MSFT", "AAPL", "OLD", None]
         )
 
+    def test_requested_ticker_is_read_from_url_and_can_override_restore(self):
+        module_uri = (STATIC / "js/store.js").as_uri()
+        script = f"""
+            import {{
+              chooseInitialTicker,
+              readRequestedTicker
+            }} from {json.dumps(module_uri)};
+            const rows = [
+              {{ticker: 'AAPL', inactive: false}},
+              {{ticker: 'AMD', inactive: false}}
+            ];
+            const requested = readRequestedTicker({{search: '?ticker=amd'}});
+            const missing = readRequestedTicker({{search: '?ticker='}});
+            console.log(JSON.stringify({{
+              requested,
+              missing,
+              selected: chooseInitialTicker(rows, 'AAPL', requested)
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            {"requested": "AMD", "missing": None, "selected": "AMD"},
+        )
+
     def test_i18n_module(self):
         module_uri = (STATIC / "js/i18n.js").as_uri()
         script = f"""

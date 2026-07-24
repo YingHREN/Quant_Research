@@ -305,39 +305,21 @@ def build_group_score_frame(histories, group: MarketGroup) -> pd.DataFrame:
     tickers = tuple(
         dict.fromkeys((*group.constituent_tickers, *group.related_tickers))
     )
-    records = []
-    index = []
     sector_available = sector is not None and not sector.empty
     qqq_available = "QQQ" in prepared
+    common = _historical_common_evidence(prepared.get("QQQ"), sector)
+    frames = {}
     for ticker in tickers:
         item = prepared.get(ticker)
         if item is None:
             continue
-        for observation_date in item.history.index:
-            opportunity, risk = _stock_scores(
-                ticker,
-                observation_date,
-                prepared,
-                sector,
-                required_available=sector_available and qqq_available,
-            )
-            close = float(item.history.at[observation_date, "Close"])
-            atr = _series_at(item.atr20, observation_date)
-            records.append(
-                {
-                    "reversal_opportunity_score": opportunity.score,
-                    "reversal_opportunity_coverage": opportunity.coverage,
-                    "downside_risk_score": risk.score,
-                    "downside_risk_coverage": risk.coverage,
-                    "atr20_pct": (
-                        None
-                        if atr is None or close == 0.0
-                        else atr / close * 100.0
-                    ),
-                }
-            )
-            index.append((ticker, observation_date))
-    if not records:
+        frames[ticker] = _historical_stock_score_frame(
+            item,
+            sector,
+            common,
+            required_available=sector_available and qqq_available,
+        )
+    if not frames:
         return _empty_multiindex_frame(
             (
                 "reversal_opportunity_score",
@@ -347,14 +329,301 @@ def build_group_score_frame(histories, group: MarketGroup) -> pd.DataFrame:
                 "atr20_pct",
             )
         )
-    result = pd.DataFrame(
-        records,
-        index=pd.MultiIndex.from_tuples(
-            index,
-            names=("ticker", "observation_date"),
+    return pd.concat(
+        frames,
+        names=("ticker", "observation_date"),
+    ).sort_index()
+
+
+def _historical_common_evidence(qqq, sector):
+    if qqq is None:
+        return {
+            key: None
+            for key in (
+                "qqq_not_new_20_low",
+                "qqq_cross_above_ema20",
+                "qqq_cross_below_ema20",
+                "qqq_downside_range_contracting",
+                "qqq_distribution_count_20",
+                "sector_relative_return_5",
+                "sector_relative_slope_20",
+            )
+        }
+    close = qqq.history["Close"].astype(float)
+    prior_low = close.shift(1).rolling(20, min_periods=20).min()
+    not_low = (close > prior_low).where(prior_low.notna())
+    cross_up = (
+        (close.shift(1) <= qqq.ema20.shift(1))
+        & (close > qqq.ema20)
+    ).where(qqq.ema20.shift(1).notna() & qqq.ema20.notna())
+    cross_down = (
+        (close.shift(1) >= qqq.ema20.shift(1))
+        & (close < qqq.ema20)
+    ).where(qqq.ema20.shift(1).notna() & qqq.ema20.notna())
+    previous = close.shift(1)
+    downside = pd.concat(
+        (
+            qqq.history["High"].astype(float)
+            - qqq.history["Low"].astype(float),
+            (qqq.history["Low"].astype(float) - previous).abs(),
+        ),
+        axis=1,
+    ).max(axis=1)
+    recent = downside.rolling(5, min_periods=5).mean()
+    preceding = downside.shift(5).rolling(5, min_periods=5).mean()
+    contracting = (recent < preceding).where(
+        recent.notna() & preceding.notna()
+    )
+    distribution = (
+        qqq.pressure["distribution_day"]
+        .astype(float)
+        .rolling(20, min_periods=20)
+        .sum()
+    )
+    relative_5 = _relative_strength_series(sector, close, 5)
+    relative_slope = _relative_slope_series(sector, close, 20)
+    return {
+        "qqq_not_new_20_low": not_low,
+        "qqq_cross_above_ema20": cross_up,
+        "qqq_cross_below_ema20": cross_down,
+        "qqq_downside_range_contracting": contracting,
+        "qqq_distribution_count_20": distribution,
+        "sector_relative_return_5": relative_5,
+        "sector_relative_slope_20": relative_slope,
+    }
+
+
+def _historical_stock_score_frame(
+    item,
+    sector,
+    common,
+    *,
+    required_available,
+):
+    index = item.history.index
+    aligned = {
+        key: _causal_reindex(series, index)
+        for key, series in common.items()
+    }
+    pressure = item.pressure
+    reversal = item.reversal
+    daily_return = (
+        item.history["Close"].astype(float)
+        / item.history["Close"].astype(float).shift(1)
+        - 1.0
+    )
+    up_volume = (
+        (daily_return > 0.0)
+        & (pressure["volume_ratio"] >= 1.2)
+        & (pressure["close_location"] >= 0.4)
+    ).where(
+        daily_return.notna()
+        & pressure["volume_ratio"].notna()
+        & pressure["close_location"].notna()
+    )
+    opportunity_rules = (
+        _boolean_rule(aligned["qqq_not_new_20_low"], 7.0),
+        _boolean_rule(aligned["qqq_cross_above_ema20"], 7.0),
+        _boolean_rule(aligned["qqq_downside_range_contracting"], 6.0),
+        _numeric_rule(
+            aligned["sector_relative_return_5"],
+            10.0,
+            0.00,
+            -0.005,
+        ),
+        _numeric_rule(
+            aligned["sector_relative_slope_20"],
+            10.0,
+            0.00,
+            -0.001,
+        ),
+        _boolean_rule(reversal["higher_low_confirmed"], 12.0),
+        _boolean_rule(reversal["trendline_breakout"], 12.0),
+        _boolean_rule(reversal["prior_high_breakout"], 11.0),
+        _boolean_rule(pressure["capitulation_recovery"], 10.0),
+        _numeric_rule(
+            pressure["signed_volume_proxy"],
+            7.5,
+            0.50,
+            0.00,
+        ),
+        _boolean_rule(up_volume, 7.5),
+    )
+    cross_below_ema = _cross_series(
+        item.history["Close"],
+        item.ema20,
+        direction="down",
+    )
+    cross_below_sma = _cross_series(
+        item.history["Close"],
+        item.sma50,
+        direction="down",
+    )
+    rs_breakdown = _relative_breakdown_series(
+        item.history["Close"],
+        sector,
+        20,
+    )
+    upper_supply = pressure["upper_wick_ratio"].where(
+        pressure["volume_ratio"] >= 1.2,
+        0.0,
+    ).where(
+        pressure["upper_wick_ratio"].notna()
+        & pressure["volume_ratio"].notna()
+    )
+    risk_rules = (
+        _boolean_rule(aligned["qqq_cross_below_ema20"], 10.0),
+        _numeric_rule(
+            aligned["qqq_distribution_count_20"],
+            10.0,
+            4.0,
+            2.0,
+        ),
+        _numeric_rule(
+            aligned["sector_relative_return_5"],
+            10.0,
+            -0.01,
+            0.00,
+            direction="low",
+        ),
+        _numeric_rule(
+            aligned["sector_relative_slope_20"],
+            10.0,
+            -0.001,
+            0.00,
+            direction="low",
+        ),
+        _boolean_rule(pressure["failed_breakout"], 12.0),
+        _boolean_rule(cross_below_ema, 8.0),
+        _boolean_rule(cross_below_sma, 8.0),
+        _boolean_rule(rs_breakdown, 7.0),
+        _boolean_rule(pressure["distribution_day"], 10.0),
+        _boolean_rule(pressure["high_volume_non_progress"], 6.0),
+        _numeric_rule(upper_supply, 5.0, 0.45, 0.30),
+        _numeric_rule(
+            pressure["signed_volume_proxy"],
+            4.0,
+            -0.50,
+            0.00,
+            direction="low",
         ),
     )
-    return result.sort_index()
+    opportunity, opportunity_coverage = _score_rule_series(
+        opportunity_rules,
+        index,
+        required_available,
+    )
+    risk, risk_coverage = _score_rule_series(
+        risk_rules,
+        index,
+        required_available,
+    )
+    close = item.history["Close"].replace(0.0, np.nan).astype(float)
+    return pd.DataFrame(
+        {
+            "reversal_opportunity_score": opportunity,
+            "reversal_opportunity_coverage": opportunity_coverage,
+            "downside_risk_score": risk,
+            "downside_risk_coverage": risk_coverage,
+            "atr20_pct": item.atr20 / close * 100.0,
+        },
+        index=index,
+    )
+
+
+def _boolean_rule(values, weight):
+    numeric = pd.to_numeric(values, errors="coerce")
+    available = numeric.notna().astype(float) * weight
+    points = (numeric.astype(float) != 0.0).astype(float) * weight
+    return points.where(numeric.notna(), 0.0), available
+
+
+def _numeric_rule(
+    values,
+    weight,
+    met_threshold,
+    near_threshold,
+    *,
+    direction="high",
+):
+    numeric = pd.to_numeric(values, errors="coerce")
+    available_mask = numeric.notna() & np.isfinite(numeric)
+    if direction == "high":
+        met = numeric >= met_threshold
+        near = (numeric < met_threshold) & (numeric >= near_threshold)
+    else:
+        met = numeric <= met_threshold
+        near = (numeric > met_threshold) & (numeric <= near_threshold)
+    points = pd.Series(0.0, index=numeric.index)
+    points.loc[near & available_mask] = weight / 2.0
+    points.loc[met & available_mask] = weight
+    available = available_mask.astype(float) * weight
+    return points, available
+
+
+def _score_rule_series(rules, index, required_available):
+    points = pd.Series(0.0, index=index)
+    available = pd.Series(0.0, index=index)
+    for rule_points, rule_available in rules:
+        points = points.add(rule_points.reindex(index), fill_value=0.0)
+        available = available.add(
+            rule_available.reindex(index),
+            fill_value=0.0,
+        )
+    coverage = available / 100.0
+    score = points / available.replace(0.0, np.nan) * 100.0
+    score = score.where(
+        bool(required_available) & (coverage >= MINIMUM_SCORE_COVERAGE)
+    )
+    return score.round(2), coverage
+
+
+def _cross_series(close, average, *, direction):
+    valid = (
+        close.shift(1).notna()
+        & average.shift(1).notna()
+        & close.notna()
+        & average.notna()
+    )
+    if direction == "up":
+        crossed = (close.shift(1) <= average.shift(1)) & (close > average)
+    else:
+        crossed = (close.shift(1) >= average.shift(1)) & (close < average)
+    return crossed.where(valid)
+
+
+def _relative_slope_series(first, second, window):
+    if first is None or second is None:
+        return None
+    first = first.sort_index().astype(float)
+    second_asof = second.sort_index().astype(float).reindex(
+        first.index,
+        method="ffill",
+    )
+    ratio = first / second_asof.replace(0.0, np.nan)
+    log_ratio = np.log(ratio.where(ratio > 0.0))
+    x = np.arange(window, dtype=float)
+    return log_ratio.rolling(window, min_periods=window).apply(
+        lambda values: float(np.polyfit(x, values, 1)[0]),
+        raw=True,
+    )
+
+
+def _relative_breakdown_series(close, sector, window):
+    if sector is None:
+        return pd.Series(np.nan, index=close.index, dtype=float)
+    sector_asof = sector.sort_index().reindex(close.index, method="ffill")
+    ratio = close.astype(float) / sector_asof.replace(0.0, np.nan)
+    average = ratio.rolling(window, min_periods=window).mean()
+    valid = (
+        ratio.shift(1).notna()
+        & average.shift(1).notna()
+        & ratio.notna()
+        & average.notna()
+    )
+    return (
+        (ratio.shift(1) >= average.shift(1)) & (ratio < average)
+    ).where(valid)
 
 
 def _prepare_histories(histories, cutoff) -> dict[str, _Prepared]:

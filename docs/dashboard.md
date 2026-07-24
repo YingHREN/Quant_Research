@@ -65,6 +65,140 @@ update`; already completed tickers are not repeated.
 Back up the database before an update if you need a restorable snapshot. Do not
 close the process while a ticker transaction is being committed.
 
+## Market and sector command center
+
+Open `http://127.0.0.1:5000/market`, or use the `市场与板块` / `Market &
+sectors` navigation link. The page reads
+`GET /api/market-overview?horizon=5&sector=semiconductor`; supported horizons
+are exactly 5, 20, and 60 observed sessions. Selecting a heat-map tile changes
+the sector query and drill-down while the stock links return to the existing
+stock dashboard. Page and API reads are local and never start a provider
+request or the intraday collector.
+
+The fixed reference pool is:
+
+```text
+SPY QQQ
+XLK XLC XLY XLP XLE XLF XLV XLI XLB XLRE XLU
+SOXX SMH
+```
+
+The eleven Select Sector SPDR symbols are ETF performance proxies. They are not
+treated as constituent breadth. Semiconductor context separately uses an
+equal-weight composite of aligned SOXX and SMH daily returns. If one is
+missing, its benchmark coverage is 50%; if both are missing, semiconductor
+opportunity and risk scores are unavailable. The versioned semiconductor stock
+list and the separately labelled AI-infrastructure-related list drive stock
+breadth and drill-down. For example, AMD is a semiconductor constituent while
+NBIS is related AI infrastructure; the UI does not relabel NBIS as a chip
+company. Other sector tiles remain ETF-proxy-only until a versioned constituent
+list is explicitly added.
+
+Every explicit price update unions the fixed reference pool with locally active
+tickers, removes duplicates, and preserves deterministic order. Thus a missing
+QQQ, sector ETF, SOXX, or SMH can be recovered with the normal `Update market
+data` action, subject to the provider's availability and rate limit. Reference
+ETFs are never fetched merely by opening `/market`.
+
+### Independent evidence scores
+
+The command center exposes three descriptive scores:
+
+- market posture;
+- reversal opportunity;
+- downside risk.
+
+Opportunity and downside risk are independent questions and are not forced to
+sum to 100. Each evidence row retains its raw value, met threshold, near
+threshold, direction, lookback window, state, points, and missing reason. A
+`near` state receives half weight. A composite is unavailable if a required
+benchmark group is missing or less than 80% of its evidence weight is
+available. These deterministic evidence scores are not probabilities.
+
+Only atomic evidence enters the ridge feature matrix:
+
+```text
+pressure_close_location
+pressure_upper_wick_ratio
+pressure_signed_volume_proxy
+pressure_distribution_day
+pressure_failed_breakout
+qqq_trend_state
+sector_relative_strength_20
+stock_sector_relative_strength_20
+```
+
+The three composite scores are deliberately excluded to avoid counting the
+same inputs twice. Stock/sector relative strength is populated only for the
+versioned semiconductor and related AI-infrastructure names in this release;
+no sector is inferred from similar-looking price behavior.
+
+### Daily OHLCV pressure proxies
+
+For a daily bar with range `R = High - Low` and a prior-20-session average
+volume that excludes the current session:
+
+```text
+close_location =
+    ((Close - Low) - (High - Close)) / R
+
+upper_wick_ratio =
+    (High - max(Open, Close)) / R
+
+volume_ratio =
+    Volume / mean(previous 20 session volumes)
+
+signed_volume_proxy =
+    close_location * volume_ratio
+```
+
+Zero-range or zero-baseline rows remain unavailable rather than infinite.
+`distribution_day` requires a negative close-to-close return, volume ratio at
+least 1.2, and close location at or below -0.4.
+`high_volume_non_progress` requires volume ratio at least 1.5 with absolute
+return no greater than 0.5%. `failed_breakout` means the session high clears
+the prior 20-session highest close while the close finishes back at or below
+that level. `capitulation_recovery` requires a high-volume weak close followed
+by an up close with close location at least 0.4.
+
+These are daily price/volume proxies. They are not bid/ask aggressor volume,
+level-2 depth, exchange order flow, or evidence of an identified buyer or
+seller. The API reports `evidence_tier: daily_proxy` and
+`intraday.state: unavailable`. A later broker integration may add an explicit
+`intraday_enhanced` tier without changing or silently reinterpreting the daily
+fields.
+
+### 5/20/60 outcome calibration
+
+Historical calibration keeps the opportunity and risk outcomes independent:
+
+```text
+opportunity_h =
+    terminal return after h sessions > {1%, 2%, 4%} for h={5,20,60}
+
+risk_barrier_h =
+    max({1%, 2%, 4%}, ATR20 / Close)
+
+downside_risk_h =
+    minimum close return during the next h sessions < -risk_barrier_h
+```
+
+Both outcomes can be true when price first falls through the risk barrier and
+then finishes above the opportunity band. Incomplete future windows remain
+missing, not false. A historical row is eligible only when its explicit
+`label_end_date < evaluation_asof`; equality is excluded. Monotonic empirical
+calibration requires at least 100 eligible score/outcome pairs and both
+classes. Otherwise probability stays `null` with
+`insufficient_calibration_samples`, `calibration_requires_both_classes`, or
+`score_unavailable`. The deterministic score remains visible even when
+calibration is unavailable.
+
+Safe unavailable codes identify missing market or sector benchmarks,
+insufficient coverage/history, and missing local market data without exposing
+database paths or provider details. Use the explicit update control to recover
+missing reference histories; do not weaken the coverage gate or substitute a
+future observation.
+
 ## Add or change factors
 
 The factor plug-in contract is `web/factors/base.py`. A factor supplies a unique

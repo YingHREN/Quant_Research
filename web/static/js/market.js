@@ -13,6 +13,7 @@ const state = {
   sector: "semiconductor",
   payload: null,
   requestId: 0,
+  status: { kind: "idle", error: null },
 };
 
 function text(node, value) {
@@ -297,9 +298,22 @@ function setStatus(message, tone = "") {
   else delete target.dataset.tone;
 }
 
+function renderStatus() {
+  if (state.status.kind === "loading") {
+    setStatus(t("market.loading"));
+    return;
+  }
+  if (state.status.kind === "error") {
+    setStatus(translateError(state.status.error), "error");
+    return;
+  }
+  setStatus("");
+}
+
 async function load() {
   const requestId = ++state.requestId;
-  setStatus(t("market.loading"));
+  state.status = { kind: "loading", error: null };
+  renderStatus();
   try {
     const payload = await getMarketOverview({
       horizon: state.horizon,
@@ -307,10 +321,12 @@ async function load() {
     });
     if (requestId !== state.requestId) return;
     render(payload);
-    setStatus("");
+    state.status = { kind: "idle", error: null };
+    renderStatus();
   } catch (error) {
     if (requestId !== state.requestId) return;
-    setStatus(translateError(error), "error");
+    state.status = { kind: "error", error };
+    renderStatus();
   }
 }
 
@@ -342,7 +358,10 @@ for (const control of document.querySelectorAll("[data-locale]")) {
 
 subscribeLocale((locale) => {
   applyDocumentLocale(document, locale);
-  if (state.payload) render(state.payload);
+  if (state.payload) {
+    render(state.payload);
+  }
+  renderStatus();
 });
 
 applyDocumentLocale(document, getLocale());

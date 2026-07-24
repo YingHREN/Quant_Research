@@ -36,6 +36,14 @@ class MarketAssetTest(unittest.TestCase):
         self.assertNotIn("downsideRiskScore(", source)
         self.assertNotIn("innerHTML", source)
 
+    def test_locale_change_renders_current_request_status(self):
+        source = (ROOT / "web/static/js/market.js").read_text()
+
+        self.assertIn('status: { kind: "idle", error: null }', source)
+        self.assertIn("function renderStatus()", source)
+        self.assertIn("renderStatus();", source)
+        self.assertNotIn('if (state.payload) {\n    render(state.payload);\n    setStatus("");', source)
+
     def test_market_keys_are_present_in_both_locales(self):
         source = (ROOT / "web/static/js/i18n.js").read_text()
         required = (

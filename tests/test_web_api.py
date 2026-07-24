@@ -1180,6 +1180,52 @@ class WebApiTest(unittest.TestCase):
         )
         service.build.assert_not_called()
 
+    def test_market_page_and_api_keep_daily_proxy_state_honest(self):
+        service = mock.Mock()
+        service.build.return_value = {
+            "asof": "2026-07-23",
+            "requested_horizon": 5,
+            "selected_sector": "semiconductor",
+            "evidence_tier": "daily_proxy",
+            "intraday": {
+                "state": "unavailable",
+                "reason": "intraday_not_integrated",
+            },
+            "market_posture": {
+                "score": None,
+                "coverage": 0.0,
+                "unavailable_reason": "missing_market_benchmark",
+                "evidence": [],
+            },
+            "sectors": [],
+            "selected_group": {
+                "key": "semiconductor",
+                "coverage": 0.0,
+            },
+            "constituents": [],
+            "changed_events": [],
+            "calibration": {},
+        }
+        app = create_app(
+            test_config(MARKET_OVERVIEW_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+        client = app.test_client()
+
+        page = client.get("/market")
+        payload = client.get(
+            "/api/market-overview?horizon=5&sector=semiconductor"
+        )
+
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(payload.status_code, 200)
+        self.assertEqual(payload.get_json()["evidence_tier"], "daily_proxy")
+        self.assertEqual(
+            payload.get_json()["intraday"]["state"],
+            "unavailable",
+        )
+
 
 class ForecastServiceTest(unittest.TestCase):
     def setUp(self):

@@ -104,6 +104,31 @@ class MarketOverviewServiceTest(unittest.TestCase):
         )
         self.assertEqual(payload["intraday"]["state"], "unavailable")
 
+    def test_revision_change_rebuilds_same_date_corrected_history(self):
+        histories = fixture_histories()
+        repository = FakeRepository(histories)
+        revision = [0]
+        service = MarketOverviewService(
+            repository,
+            revision_getter=lambda: revision[0],
+        )
+
+        first = service.build()
+        date = histories["AMD"].index[-1]
+        histories["AMD"].loc[
+            date,
+            ["Open", "High", "Low", "Close"],
+        ] = [170.0, 175.0, 165.0, 174.0]
+        cached = service.build()
+        revision[0] += 1
+        corrected = service.build()
+
+        self.assertEqual(cached, first)
+        self.assertNotEqual(
+            corrected["constituents"][0]["relative_strength_20"],
+            first["constituents"][0]["relative_strength_20"],
+        )
+
 
 class MarketOverviewRepositoryTest(unittest.TestCase):
     def test_snapshot_uses_one_normalized_cutoff_for_every_history(self):

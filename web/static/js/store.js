@@ -6,8 +6,14 @@ function normalizeTicker(value) {
   return typeof value === "string" ? value.trim().toUpperCase() : "";
 }
 
-export function chooseInitialTicker(rows, restoredTicker) {
+export function chooseInitialTicker(rows, restoredTicker, requestedTicker = null) {
   const candidates = Array.isArray(rows) ? rows : [];
+  const requested = normalizeTicker(requestedTicker);
+  const requestedRow = candidates.find(
+    (row) => normalizeTicker(row.ticker) === requested,
+  );
+  if (requestedRow) return normalizeTicker(requestedRow.ticker);
+
   const restored = normalizeTicker(restoredTicker);
   const restoredRow = candidates.find((row) => normalizeTicker(row.ticker) === restored);
   if (restoredRow) return normalizeTicker(restoredRow.ticker);
@@ -15,6 +21,15 @@ export function chooseInitialTicker(rows, restoredTicker) {
   const activeRow = candidates.find((row) => !row.inactive);
   const fallback = activeRow || candidates[0];
   return fallback ? normalizeTicker(fallback.ticker) : null;
+}
+
+export function readRequestedTicker(location = globalThis.location) {
+  try {
+    const value = new URLSearchParams(location?.search || "").get("ticker");
+    return normalizeTicker(value) || null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 export function readStoredTicker(storage = globalThis.localStorage) {

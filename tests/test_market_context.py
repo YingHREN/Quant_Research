@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -211,6 +212,26 @@ class MarketContextTest(unittest.TestCase):
             rows.index.get_level_values("observation_date").max(),
             histories["AMD"].index.max(),
         )
+
+    def test_group_score_history_does_not_rebuild_snapshot_scores_per_row(self):
+        histories = {
+            "QQQ": rising(periods=180),
+            "SPY": rising(periods=180),
+            "SOXX": rising(periods=180),
+            "SMH": rising(periods=180),
+            "AMD": rising(periods=180),
+        }
+
+        with mock.patch(
+            "research.market_context._stock_scores",
+            side_effect=AssertionError("row-wise snapshot scorer called"),
+        ):
+            rows = build_group_score_frame(
+                histories,
+                market_group("semiconductor"),
+            )
+
+        self.assertEqual(len(rows), 180)
 
 
 if __name__ == "__main__":

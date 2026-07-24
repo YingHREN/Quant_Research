@@ -13,6 +13,7 @@ import { renderScenarios } from "./scenarios.js";
 import {
   chooseInitialTicker,
   persistSelectedTicker,
+  readRequestedTicker,
   readStoredTicker,
   store,
 } from "./store.js";
@@ -213,7 +214,11 @@ async function loadUniverse() {
     const payload = await api.getUniverse();
     universeError = null;
     const rows = Array.isArray(payload.tickers) ? payload.tickers : [];
-    const selectedTicker = chooseInitialTicker(rows, readStoredTicker());
+    const selectedTicker = chooseInitialTicker(
+      rows,
+      readStoredTicker(),
+      readRequestedTicker(),
+    );
     store.setState({ universePayload: payload, universe: rows, selectedTicker });
     setText(elements.marketDate, payload.asof || t("header.noData", {}, store.getState().locale));
     setText(elements.marketCoverage, coverageText(payload));
