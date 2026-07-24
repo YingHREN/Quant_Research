@@ -38,6 +38,15 @@ function rawValueText(value) {
   return String(value);
 }
 
+function structuredRawValue(value) {
+  return value !== null && typeof value === "object";
+}
+
+function rawFieldCount(value) {
+  if (!structuredRawValue(value)) return 0;
+  return Array.isArray(value) ? value.length : Object.keys(value).length;
+}
+
 const LEGACY_REJECTION_REASON_CODES = new Map([
   ["历史不足", "insufficient_history"],
   ["价格未站上MA50", "below_ma50"],
@@ -103,7 +112,7 @@ function localizedRawValue(value, locale) {
         reason && (key === "reject_reason" || key === "reason") ? reason : nested,
       ]),
   );
-  return rawValueText(localized);
+  return JSON.stringify(localized, null, 2);
 }
 
 function ordinal(value) {
@@ -227,6 +236,8 @@ export function factorDetailRows(results, locale = getLocale()) {
       ),
       formattedValue: formattedValue == null ? "—" : formattedValue,
       rawValue: localizedRawValue(factor.raw_value, locale),
+      rawStructured: structuredRawValue(factor.raw_value),
+      rawFieldCount: rawFieldCount(factor.raw_value),
       percentile: percentileText(factor, locale),
       displayScore: finite(factor.display_score) ? factor.display_score.toFixed(1) : "—",
       observationDate: factor.observation_date || "—",
@@ -620,7 +631,23 @@ function renderDetailTable(tableBody, results, locale) {
     if (factor.missing) row.dataset.state = "missing";
     appendFactorLabel(row, "td", "factor-label", { ...factor, locale });
     appendText(row, "td", "factor-formatted", factor.formattedValue);
-    appendText(row, "td", "factor-raw", factor.rawValue);
+    const raw = document.createElement("td");
+    raw.className = "factor-raw";
+    if (factor.rawStructured) {
+      const details = document.createElement("details");
+      details.className = "factor-raw-details";
+      appendText(
+        details,
+        "summary",
+        "factor-raw-summary",
+        t("factor.rawFields", { count: factor.rawFieldCount }, locale),
+      );
+      appendText(details, "pre", "factor-raw-payload", factor.rawValue);
+      raw.append(details);
+    } else {
+      raw.textContent = factor.rawValue;
+    }
+    row.append(raw);
     appendText(row, "td", "", factor.percentile);
     appendText(row, "td", "numeric", factor.displayScore);
     appendText(row, "td", "", factor.observationDate);

@@ -514,6 +514,100 @@ class WebAssetTest(unittest.TestCase):
             check=True, capture_output=True, text=True,
         )
 
+    def test_structured_factor_raw_values_are_collapsible_and_readable(self):
+        module_uri = (STATIC / "js/factors.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+
+            class Node {{
+              constructor(tagName = 'div') {{
+                this.tagName = tagName.toUpperCase();
+                this.className = ''; this.children = []; this.attributes = {{}};
+                this.dataset = {{}}; this.style = {{}}; this.hidden = false;
+                this._textContent = '';
+              }}
+              get textContent() {{ return this._textContent; }}
+              set textContent(value) {{
+                this._textContent = value == null ? '' : String(value);
+                this.children = [];
+              }}
+              append(...items) {{ this.children.push(...items); }}
+              replaceChildren(...items) {{
+                this._textContent = ''; this.children = []; this.append(...items);
+              }}
+              setAttribute(name, value) {{ this.attributes[name] = String(value); }}
+              getAttribute(name) {{ return this.attributes[name]; }}
+              addEventListener() {{}}
+              removeEventListener() {{}}
+            }}
+            function descendants(node) {{
+              return node.children.flatMap(child => [child, ...descendants(child)]);
+            }}
+            function byClass(node, name) {{
+              return descendants(node).filter(child => child.className === name);
+            }}
+
+            const body = new Node('body');
+            globalThis.document = {{
+              body,
+              createElement: tag => new Node(tag),
+              createDocumentFragment: () => new Node('fragment'),
+              getElementById: () => null,
+              addEventListener() {{}},
+              removeEventListener() {{}},
+            }};
+            globalThis.window = {{addEventListener() {{}}, removeEventListener() {{}}}};
+
+            const {{renderFactors}} = await import({json.dumps(module_uri)});
+            const overview = new Node();
+            const tableBody = new Node('tbody');
+            renderFactors([{{
+              key: 'strict_vcp', label: 'Strict VCP', group: 'structure',
+              overview: false, display_score: null, formatted: null,
+              percentile: null, peer_count: null, observation_date: '2026-07-23',
+              missing: false, missing_reason: null,
+              description: 'Strict structure diagnostic.',
+              methodology: 'Causal VCP gates.', version: 'builtin-v1',
+              raw_value: {{
+                adaptive_pct: 3,
+                base_len: 0,
+                contractions: [],
+                reject_reason: 'base内峰谷不足',
+              }},
+            }}], {{overview, tableBody, locale: 'zh-CN'}});
+
+            const details = byClass(tableBody, 'factor-raw-details');
+            const summaries = byClass(tableBody, 'factor-raw-summary');
+            const payloads = byClass(tableBody, 'factor-raw-payload');
+            assert.equal(details.length, 1);
+            assert.equal(summaries.length, 1);
+            assert.equal(payloads.length, 1);
+            assert.equal(summaries[0].textContent, '查看 4 个原始字段');
+            assert.match(payloads[0].textContent, /^\\{{\\n/);
+            assert.match(payloads[0].textContent, /\\n  "adaptive_pct": 3,/);
+            assert.match(payloads[0].textContent, /基底内峰谷不足/);
+            assert.ok(payloads[0].textContent.split('\\n').length >= 6);
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        css = (STATIC / "css/dashboard.css").read_text()
+        table = re.search(r"#factor-table\s*\{([^}]*)\}", css)
+        raw = re.search(r"\.factor-raw\s*\{([^}]*)\}", css)
+        payload = re.search(r"\.factor-raw-payload\s*\{([^}]*)\}", css)
+        self.assertIsNotNone(table)
+        self.assertIsNotNone(raw)
+        self.assertIsNotNone(payload)
+        self.assertIn("min-width:", table.group(1))
+        self.assertIn("min-width:", raw.group(1))
+        self.assertIn("white-space: pre", payload.group(1))
+        self.assertIn("overflow: auto", payload.group(1))
+
     def test_factor_popover_supports_pointer_keyboard_aria_and_cleanup(self):
         module_uri = (STATIC / "js/factors.js").as_uri()
         script = f"""
@@ -2075,7 +2169,7 @@ class WebAssetTest(unittest.TestCase):
                     "Hidden method.",
                     "Visible method.",
                 ],
-                "raw": ["1.25", '{"window":12}', "2", "null"],
+                "raw": ["1.25", '{\n  "window": 12\n}', "2", "null"],
                 "percentiles": [
                     "75th percentile · 11 same-date peers",
                     "Unavailable · 4 same-date peers",
