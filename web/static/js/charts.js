@@ -184,11 +184,11 @@ function renderDetail(detailEl, row, locked, locale, forecastOptions = {}) {
   renderForecastDetail(detailEl, { ...forecastOptions, locale });
 }
 
-function chartInteractionOptions() {
+function chartInteractionOptions(panLocked = false) {
   return {
     handleScroll: {
       mouseWheel: false,
-      pressedMouseMove: false,
+      pressedMouseMove: !panLocked,
       horzTouchDrag: false,
       vertTouchDrag: false,
     },
@@ -342,7 +342,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
 
   function setPanLocked(locked) {
     const panLocked = Boolean(locked);
-    const options = chartInteractionOptions();
+    const options = chartInteractionOptions(panLocked);
     priceChart.applyOptions(options);
     volumeChart.applyOptions(options);
     [priceEl, volumeEl].forEach((element) => {

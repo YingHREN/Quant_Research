@@ -264,7 +264,9 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   padding-bottom: var(--chart-axis-gutter);
 }
 .chart-placeholder[data-pan-locked="false"],
-.volume-placeholder[data-pan-locked="false"],
+.volume-placeholder[data-pan-locked="false"] {
+  cursor: grab;
+}
 .chart-placeholder[data-pan-locked="true"],
 .volume-placeholder[data-pan-locked="true"] {
   cursor: crosshair;

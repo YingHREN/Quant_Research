@@ -1351,8 +1351,8 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(created[0].forecastAutoScrolls, 0);
             assert.equal(created[0].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
             assert.equal(created[1].chartOptions.timeScale.shiftVisibleRangeOnNewBar, false);
-            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, false);
-            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, false);
+            assert.equal(created[0].chartOptions.handleScroll.pressedMouseMove, true);
+            assert.equal(created[1].chartOptions.handleScroll.pressedMouseMove, true);
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
             assert.equal(created[0].chartOptions.handleScroll.mouseWheel, false);
@@ -1542,7 +1542,7 @@ class WebAssetTest(unittest.TestCase):
             assert.deepEqual(created[0].appliedOptions.at(-1), {{
               handleScroll: {{
                 mouseWheel: false,
-                pressedMouseMove: false,
+                pressedMouseMove: true,
                 horzTouchDrag: false,
                 vertTouchDrag: false,
               }},
@@ -1555,7 +1555,7 @@ class WebAssetTest(unittest.TestCase):
             assert.deepEqual(created[1].appliedOptions.at(-1), {{
               handleScroll: {{
                 mouseWheel: false,
-                pressedMouseMove: false,
+                pressedMouseMove: true,
                 horzTouchDrag: false,
                 vertTouchDrag: false,
               }},
@@ -1668,13 +1668,12 @@ class WebAssetTest(unittest.TestCase):
         self.assertNotIn("var(--up)", css)
         self.assertNotIn("var(--down)", css)
 
-    def test_chart_mouse_drag_is_never_used_for_panning(self):
+    def test_chart_drag_cursor_distinguishes_unlocked_and_locked_states(self):
         css = (STATIC / "css/dashboard.css").read_text()
         self.assertIn('[data-pan-locked="false"]', css)
         self.assertIn('[data-pan-locked="true"]', css)
         self.assertIn("cursor: crosshair", css)
-        self.assertNotIn("cursor: grab", css)
-        self.assertNotIn("cursor: grabbing", css)
+        self.assertIn("cursor: grab", css)
 
     def test_historical_forecast_request_states_are_visible(self):
         chart_uri = (STATIC / "js/charts.js").as_uri()
