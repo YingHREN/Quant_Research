@@ -503,6 +503,107 @@ class AlpacaIEXProviderTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await stream
 
+    async def test_close_closes_established_socket_before_stopping_stream(self):
+        socket = BlockingFakeSocket([
+            [{"T": "success", "msg": "authenticated"}],
+            [{"T": "subscription", "trades": ["AMD"], "quotes": ["AMD"]}],
+        ])
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+        )
+
+        async def emit(_event):
+            pass
+
+        stream = asyncio.create_task(
+            provider.stream_events(SubscriptionRequest(("AMD",)), emit)
+        )
+        await socket.waiting.wait()
+        await provider.close()
+
+        self.assertTrue(socket.closed)
+        self.assertIsNone(provider._socket)
+        with self.assertRaises(asyncio.CancelledError):
+            await stream
+
+    async def test_event_sink_can_close_its_own_stream_without_deadlock(self):
+        socket = FakeSocket([
+            [{"T": "success", "msg": "authenticated"}],
+            [{"T": "subscription", "trades": ["AMD"], "quotes": ["AMD"]}],
+            [{"T": "t", "S": "AMD", "t": "2026-07-24T14:30:00Z",
+              "p": 150, "s": 10, "i": 1}],
+        ])
+        provider = AlpacaIEXProvider(
+            "key",
+            "secret",
+            connect=lambda _url: FakeConnection(socket),
+        )
+
+        async def emit(_event):
+            await provider.close()
+
+        await asyncio.wait_for(
+            provider.stream_events(SubscriptionRequest(("AMD",)), emit),
+            timeout=1,
+        )
+        self.assertTrue(socket.closed)
+        self.assertIsNone(provider._socket)
+
+    async def test_second_concurrent_stream_is_rejected_without_replacing_first(self):
+        first_socket = BlockingFakeSocket([
+            [{"T": "success", "msg": "authenticated"}],
+            [{"T": "subscription", "trades": ["AMD"], "quotes": ["AMD"]}],
+        ])
+        second_socket = FakeSocket([
+            [{"T": "success", "msg": "authenticated"}],
+            [{"T": "subscription", "trades": ["NVDA"], "quotes": ["NVDA"]}],
+        ])
+        connections = iter((first_socket, second_socket))
+        connect_count = 0
+
+        def connect(_url):
+            nonlocal connect_count
+            connect_count += 1
+            return FakeConnection(next(connections))
+
+        provider = AlpacaIEXProvider("key", "secret", connect=connect)
+
+        async def emit(_event):
+            pass
+
+        first = asyncio.create_task(
+            provider.stream_events(SubscriptionRequest(("AMD",)), emit)
+        )
+        await first_socket.waiting.wait()
+        try:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "alpaca_stream_already_running",
+            ):
+                await provider.stream_events(
+                    SubscriptionRequest(("NVDA",)),
+                    emit,
+                )
+        finally:
+            if connect_count != 1:
+                first_socket.finish.set()
+                try:
+                    await first
+                except RuntimeError:
+                    pass
+
+        self.assertEqual(connect_count, 1)
+        self.assertEqual(
+            first_socket.sent[1],
+            {"action": "subscribe", "trades": ["AMD"], "quotes": ["AMD"]},
+        )
+        await provider.close()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+        self.assertTrue(first_socket.closed)
+
     async def test_invalid_frames_raise_stable_sanitized_protocol_error(self):
         invalid_frames = (
             "{not-json",

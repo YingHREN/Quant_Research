@@ -28,6 +28,7 @@ class AlpacaIEXProvider:
         self._normalizer = AlpacaEventNormalizer()
         self._write_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
+        self._lifecycle_lock = asyncio.Lock()
 
     def capabilities(self):
         reason = None if self._api_key and self._api_secret else "missing_credentials"
@@ -48,8 +49,11 @@ class AlpacaIEXProvider:
         if not self._api_key or not self._api_secret:
             raise ValueError("Alpaca credentials are required")
         current_task = asyncio.current_task()
-        self._stream_task = current_task
-        self._closing = False
+        async with self._lifecycle_lock:
+            if self._stream_task is not None and not self._stream_task.done():
+                raise RuntimeError("alpaca_stream_already_running")
+            self._stream_task = current_task
+            self._closing = False
         if self._desired_symbols is None:
             self._set_desired(request.symbols)
         socket = None
@@ -89,6 +93,8 @@ class AlpacaIEXProvider:
                         )
                         if event is not None:
                             await emit(event)
+                            if self._closing:
+                                return
                 if not self._authenticated or not subscribed:
                     raise RuntimeError("alpaca_stream_closed_before_subscription")
         finally:
@@ -96,8 +102,9 @@ class AlpacaIEXProvider:
                 async with self._write_lock:
                     if self._socket is socket:
                         self._clear_connection_state()
-            if self._stream_task is current_task:
-                self._stream_task = None
+            async with self._lifecycle_lock:
+                if self._stream_task is current_task:
+                    self._stream_task = None
 
     async def update_subscription(self, request):
         self._set_desired(request.symbols)
@@ -138,8 +145,10 @@ class AlpacaIEXProvider:
             await socket.send(json.dumps(payload))
 
     async def close(self):
-        self._closing = True
-        close_task = asyncio.create_task(self._close_socket())
+        caller_task = asyncio.current_task()
+        async with self._lifecycle_lock:
+            self._closing = True
+        close_task = asyncio.create_task(self._close_socket(caller_task))
         cancelled = False
         while not close_task.done():
             try:
@@ -150,11 +159,20 @@ class AlpacaIEXProvider:
         if cancelled:
             raise asyncio.CancelledError
 
-    async def _close_socket(self):
-        stream_task = self._stream_task
+    async def _close_socket(self, caller_task):
+        async with self._lifecycle_lock:
+            stream_task = self._stream_task
+        async with self._write_lock:
+            socket = self._socket
+            if socket is not None:
+                try:
+                    await socket.close()
+                finally:
+                    if self._socket is socket:
+                        self._clear_connection_state()
         if (
             stream_task is not None
-            and stream_task is not asyncio.current_task()
+            and stream_task is not caller_task
             and not stream_task.done()
         ):
             stream_task.cancel()
@@ -162,15 +180,6 @@ class AlpacaIEXProvider:
                 await stream_task
             except asyncio.CancelledError:
                 pass
-        async with self._write_lock:
-            socket = self._socket
-            if socket is None:
-                return
-            try:
-                await socket.close()
-            finally:
-                if self._socket is socket:
-                    self._clear_connection_state()
 
     def _clear_connection_state(self):
         self._authenticated = False
