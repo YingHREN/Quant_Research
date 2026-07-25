@@ -3,6 +3,7 @@ import unittest
 import pandas as pd
 
 from research.run_temporal_momentum_study import (
+    render_temporal_report,
     temporal_feature_sets,
     temporal_promotion_decision,
 )
@@ -25,6 +26,9 @@ def metric_row(
         "balanced_accuracy": balanced_accuracy,
         "macro_f1": balanced_accuracy,
         "down_recall": down_recall,
+        "mean_return_predicted_down": -0.01,
+        "mean_return_predicted_neutral": 0.0,
+        "mean_return_predicted_up": 0.01,
     }
 
 
@@ -106,6 +110,192 @@ class RunTemporalMomentumStudyTest(unittest.TestCase):
         rows[-1]["balanced_accuracy"] = 0.46
         passed = temporal_promotion_decision(pd.DataFrame(rows))
         self.assertTrue(passed["eligible"])
+
+    def test_promotion_rejects_economically_inverted_down_predictions(self):
+        rows = [
+            metric_row("majority_baseline", 0.333, 0.0),
+            metric_row("ridge_current", 0.400, 0.40),
+            metric_row("ridge_decay_market", 0.450, 0.41),
+            metric_row(
+                "ridge_current",
+                0.400,
+                0.40,
+                scope="semiconductor_ai",
+            ),
+            metric_row(
+                "ridge_decay_market",
+                0.410,
+                0.41,
+                scope="semiconductor_ai",
+            ),
+        ]
+        for fold in range(1, 6):
+            rows.append(metric_row("ridge_current", 0.40, 0.40, fold=fold))
+            rows.append(
+                metric_row(
+                    "ridge_decay_market",
+                    0.42,
+                    0.41,
+                    fold=fold,
+                )
+            )
+        rows[2]["mean_return_predicted_down"] = 0.008
+
+        decision = temporal_promotion_decision(pd.DataFrame(rows))
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn("predicted_down_return_not_negative", decision["reason"])
+
+    def test_promotion_requires_at_least_one_known_false_bull_correction(self):
+        rows = [
+            metric_row("majority_baseline", 0.333, 0.0),
+            metric_row("ridge_current", 0.400, 0.40),
+            metric_row("ridge_decay_market", 0.450, 0.41),
+            metric_row(
+                "ridge_current",
+                0.400,
+                0.40,
+                scope="semiconductor_ai",
+            ),
+            metric_row(
+                "ridge_decay_market",
+                0.410,
+                0.41,
+                scope="semiconductor_ai",
+            ),
+        ]
+        for fold in range(1, 6):
+            rows.append(metric_row("ridge_current", 0.40, 0.40, fold=fold))
+            rows.append(
+                metric_row(
+                    "ridge_decay_market",
+                    0.42,
+                    0.41,
+                    fold=fold,
+                )
+            )
+        diagnostics = pd.DataFrame(
+            [
+                {
+                    "ticker": "MU",
+                    "observation_date": pd.Timestamp("2026-06-25"),
+                    "specification": "ridge_current",
+                    "actual_direction": "down",
+                    "predicted_direction": "up",
+                },
+                {
+                    "ticker": "MU",
+                    "observation_date": pd.Timestamp("2026-06-25"),
+                    "specification": "ridge_decay_market",
+                    "actual_direction": "down",
+                    "predicted_direction": "up",
+                },
+            ]
+        )
+
+        failed = temporal_promotion_decision(
+            pd.DataFrame(rows),
+            diagnostics=diagnostics,
+        )
+
+        self.assertFalse(failed["eligible"])
+        diagnostics.loc[
+            diagnostics["specification"] == "ridge_decay_market",
+            "predicted_direction",
+        ] = "down"
+        passed = temporal_promotion_decision(
+            pd.DataFrame(rows),
+            diagnostics=diagnostics,
+        )
+        self.assertTrue(passed["eligible"])
+
+    def test_promotion_rejects_non_overlapping_sample_degradation(self):
+        rows = [
+            metric_row("majority_baseline", 0.333, 0.0),
+            metric_row("ridge_current", 0.400, 0.40),
+            metric_row("ridge_decay_market", 0.450, 0.41),
+            metric_row(
+                "ridge_current",
+                0.400,
+                0.40,
+                scope="semiconductor_ai",
+            ),
+            metric_row(
+                "ridge_decay_market",
+                0.410,
+                0.41,
+                scope="semiconductor_ai",
+            ),
+        ]
+        for fold in range(1, 6):
+            rows.append(metric_row("ridge_current", 0.40, 0.40, fold=fold))
+            rows.append(
+                metric_row(
+                    "ridge_decay_market",
+                    0.42,
+                    0.41,
+                    fold=fold,
+                )
+            )
+        non_overlapping = [
+            metric_row("majority_baseline", 0.333, 0.0),
+            metric_row("ridge_current", 0.400, 0.40),
+            metric_row("ridge_decay_market", 0.390, 0.41),
+        ]
+        for row in non_overlapping:
+            row["evaluation_mode"] = "non_overlapping"
+        for row in rows:
+            row["evaluation_mode"] = "overlapping"
+
+        decision = temporal_promotion_decision(pd.DataFrame(rows + non_overlapping))
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn("non_overlapping_accuracy_not_improved", decision["reason"])
+
+    def test_report_states_offline_decision_and_diagnostic_scopes(self):
+        metrics = pd.DataFrame(
+            [
+                metric_row("ridge_current", 0.40, 0.40),
+                metric_row("ridge_decay_market", 0.44, 0.42),
+                metric_row(
+                    "ridge_current",
+                    0.41,
+                    0.40,
+                    scope="semiconductor_ai",
+                ),
+            ]
+        )
+        diagnostics = pd.DataFrame(
+            [
+                {
+                    "ticker": "MU",
+                    "observation_date": "2026-06-25",
+                    "specification": "ridge_decay_market",
+                    "predicted_direction": "down",
+                },
+                {
+                    "ticker": "NBIS",
+                    "observation_date": "2026-07-01",
+                    "specification": "ridge_decay_market",
+                    "predicted_direction": "down",
+                },
+            ]
+        )
+
+        report = render_temporal_report(
+            metrics,
+            {"eligible": False, "reason": "fold_majority_not_improved"},
+            diagnostics=diagnostics,
+            latest_date="2026-07-23",
+            ticker_count=194,
+        )
+
+        self.assertIn("DO NOT PROMOTE", report)
+        self.assertIn("offline", report.lower())
+        self.assertIn("next-session open", report)
+        self.assertIn("semiconductor_ai", report)
+        self.assertIn("MU", report)
+        self.assertIn("NBIS", report)
 
 
 if __name__ == "__main__":

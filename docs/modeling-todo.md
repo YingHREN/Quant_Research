@@ -34,11 +34,14 @@ market-context, and data-source work discussed for the local dashboard.
   overlapping research sample.
 - [ ] Add time decay and ticker/sector hierarchy experiments. Class-balanced
   logistic and shallow boosted challengers were tested on 2026-07-25.
-- [ ] Evaluate the causal multi-scale recency-weighted momentum challenger
+- [x] Evaluate the causal multi-scale recency-weighted momentum challenger
   defined in
   `docs/superpowers/specs/2026-07-25-recency-weighted-momentum-design.md`.
-- [ ] Compare decay-only, decay-plus-volume, and decay-plus-market-context
-  ablations before considering a causal-attention sequence model.
+- [x] Compare decay-only, decay-plus-volume, and decay-plus-market-context
+  ablations before considering a causal-attention sequence model. The
+  2026-07-25 challenger was not promoted: the best direction classifier
+  improved balanced accuracy but its predicted-down bucket had positive
+  realized return and it did not correct the MU/NBIS false-bull cases.
 - [x] Report NBIS, semiconductor, and full-universe results separately.
 - [x] Re-evaluate the bearish-risk override independently; do not retain an
   override that reduces out-of-sample accuracy.

@@ -262,7 +262,7 @@ reasons.
 Run against the main checkout database without copying WAL files:
 
 ```bash
-../../venv/bin/python research/run_temporal_momentum_study.py \
+../../venv/bin/python -m research.run_temporal_momentum_study \
   --database ../../data/prices.db \
   --report docs/research/temporal-momentum-ablation-2026-07-25.md \
   --metrics docs/research/temporal-momentum-ablation-2026-07-25.csv
