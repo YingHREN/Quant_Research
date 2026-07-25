@@ -159,25 +159,26 @@ function modelCard(model, locale, { open = false } = {}) {
       enumLabel("modelOutput.evidence", model.evidence_status, locale),
     ));
   }
-  if (model.direction_accuracy !== undefined) {
+  const hasEvaluatedEvidence = model.evidence_status !== "not_precomputed";
+  if (hasEvaluatedEvidence && model.direction_accuracy !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.directionAccuracy", {}, locale),
       percent(model.direction_accuracy, locale),
     ));
   }
-  if (model.always_up_direction_accuracy !== undefined) {
+  if (hasEvaluatedEvidence && model.always_up_direction_accuracy !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.alwaysUpBaseline", {}, locale),
       percent(model.always_up_direction_accuracy, locale),
     ));
   }
-  if (model.balanced_accuracy !== undefined) {
+  if (hasEvaluatedEvidence && model.balanced_accuracy !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.balancedAccuracy", {}, locale),
       percent(model.balanced_accuracy, locale),
     ));
   }
-  if (model.non_overlapping_sample_count !== undefined) {
+  if (hasEvaluatedEvidence && model.non_overlapping_sample_count !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.nonOverlappingEvidence", {}, locale),
       t("modelOutput.value.nonOverlappingEvidence", {

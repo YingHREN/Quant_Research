@@ -143,6 +143,25 @@ assert.match(en, /Final direction/);
 assert.match(en, /Rule score, not a probability/);
 assert.match(en, /Planned/);
 
+const notPrecomputed = structuredClone(forecast);
+Object.assign(notPrecomputed.model_outputs.primary[0], {
+  evidence_status: "not_precomputed",
+  direction_accuracy: 0,
+  always_up_direction_accuracy: 0,
+  balanced_accuracy: 0,
+  non_overlapping_sample_count: 0,
+  non_overlapping_direction_accuracy: 0,
+});
+renderModelOutputs(container, {
+  forecast: notPrecomputed,
+  date: "2026-07-23",
+  locale: "zh-CN",
+});
+const notPrecomputedText = textTree(container);
+assert.match(notPrecomputedText, /尚未预计算/);
+assert.doesNotMatch(notPrecomputedText, /方向准确率/);
+assert.doesNotMatch(notPrecomputedText, /始终上涨基线/);
+
 renderModelOutputs(container, {
   forecast: null,
   date: "2026-06-30",
@@ -155,4 +174,6 @@ assert.match(loading, /2026-06-30/);
 assert.match(loading, /正在加载该日期的模型输出/);
 assert.ok(container.children.length > 0);
 
-console.log(JSON.stringify({ zh, en, loading, cardCount: cards.length }));
+console.log(JSON.stringify({
+  zh, en, notPrecomputedText, loading, cardCount: cards.length,
+}));
