@@ -258,6 +258,13 @@ class BuiltinFactorTest(unittest.TestCase):
                 "early_current_price_acceptance",
                 "early_descending_trendline_proximity",
                 "early_current_volume_support",
+                "near_resistance_lower",
+                "near_resistance_upper",
+                "near_resistance_mid",
+                "near_resistance_distance_pct",
+                "near_resistance_score",
+                "near_resistance_sources",
+                "far_resistance",
             },
         )
         self.assertEqual(last["time"], "2026-07-21")
@@ -289,6 +296,19 @@ class BuiltinFactorTest(unittest.TestCase):
         self.assertIn(last["early_reversal_score"], (0, 25, 50, 75, 100))
         self.assertIsInstance(last["early_reversal_watch"], bool)
         self.assertIsInstance(last["early_reversal_conditions"], list)
+        self.assertIsInstance(last["near_resistance_sources"], list)
+        for key in (
+            "near_resistance_lower",
+            "near_resistance_upper",
+            "near_resistance_mid",
+            "near_resistance_distance_pct",
+            "near_resistance_score",
+            "far_resistance",
+        ):
+            self.assertTrue(
+                last[key] is None or isinstance(last[key], (int, float)),
+                key,
+            )
 
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()

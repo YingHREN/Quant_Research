@@ -23,6 +23,7 @@ from factors.compute import (
 )
 from research.momentum import momentum_features
 from research.early_reversal import build_early_reversal_rows
+from research.resistance import build_near_resistance_rows
 from research.reversal import build_reversal_rows
 from run import market_uptrend
 from scoring.engine import evaluate
@@ -501,6 +502,7 @@ def build_chart_rows(context: AnalysisContext):
         above_sma50 = close >= sma50
         reversal_rows = build_reversal_rows(history)
         early_reversal_rows = build_early_reversal_rows(history, reversal_rows)
+        resistance_rows = build_near_resistance_rows(history, reversal_rows)
 
         rows = []
         for position, (timestamp, source) in enumerate(history.iterrows()):
@@ -556,6 +558,7 @@ def build_chart_rows(context: AnalysisContext):
                     ) if crossed_sma50 else None,
                     **reversal_rows[position],
                     **early_reversal_rows[position],
+                    **resistance_rows[position],
                 }
             )
         return rows
