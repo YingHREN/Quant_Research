@@ -104,7 +104,14 @@ function modelText(forecast, model) {
   return [key, version].filter(Boolean).join(" · ");
 }
 
-function adjustedByBearishRisk(forecast) {
+function decisionFor(forecast) {
+  const decision = forecast?.decision;
+  return decision && typeof decision === "object" ? decision : null;
+}
+
+function adjustedByRiskPolicy(forecast) {
+  const decision = decisionFor(forecast);
+  if (decision) return decision.action !== "retain";
   return forecast?.direction_adjustment_reason === "bearish_turn_risk"
     && forecast?.raw_direction
     && forecast.raw_direction !== forecast.direction;
@@ -179,7 +186,55 @@ export function renderForecastDetail(container, options = {}) {
   const values = document.createElement("dl");
   values.className = "forecast-values";
   if (available) {
-    const riskAdjusted = adjustedByBearishRisk(forecast);
+    const decision = decisionFor(forecast);
+    const riskAdjusted = adjustedByRiskPolicy(forecast);
+    if (decision) {
+      appendItem(
+        values,
+        t("forecast.field.decisionAction", {}, locale),
+        localizedCode("forecast.decisionAction", decision.action, locale),
+      );
+      appendItem(
+        values,
+        t("forecast.field.riskState", {}, locale),
+        localizedCode("forecast.riskState", decision.risk_state, locale),
+      );
+      appendItem(
+        values,
+        t("forecast.field.persistentRiskScore", {}, locale),
+        finite(decision.persistent_risk_score)
+          ? `${Number(decision.persistent_risk_score).toFixed(0)}/100`
+          : t("forecast.value.unavailable", {}, locale),
+      );
+      const memoryState = localizedCode(
+        "forecast.persistentRiskState",
+        decision.persistent_risk_state,
+        locale,
+      );
+      const memoryAge = Number.isInteger(decision.persistent_risk_age_sessions)
+        ? t(
+          "forecast.value.riskMemory",
+          { state: memoryState, sessions: decision.persistent_risk_age_sessions },
+          locale,
+        )
+        : memoryState;
+      appendItem(values, t("forecast.field.riskMemory", {}, locale), memoryAge);
+      const reasons = Array.isArray(decision.reasons)
+        ? decision.reasons
+          .map((reason) => localizedCode("forecast.decisionReason", reason, locale))
+          .join("、")
+        : "";
+      appendItem(
+        values,
+        t("forecast.field.decisionReasons", {}, locale),
+        reasons || t("forecast.value.noRiskReason", {}, locale),
+      );
+      appendItem(
+        values,
+        t("forecast.field.decisionPolicy", {}, locale),
+        [decision.policy_key, decision.policy_version].filter(Boolean).join(" · ") || "—",
+      );
+    }
     if (riskAdjusted) {
       appendItem(
         values,

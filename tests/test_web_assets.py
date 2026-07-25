@@ -1279,6 +1279,13 @@ class WebAssetTest(unittest.TestCase):
                       confidence_status: 'calibrated', confidence_reason: null, training_sample_count: 105,
                       training_cutoff: '2026-06-19', target_date: '2026-08-14',
                       projection_dates: ['2026-07-20', '2026-08-14'],
+                      raw_direction: 'up', decision: {{final_direction: 'up',
+                        risk_state: 'watch', action: 'retain',
+                        reasons: ['persistent_bearish_risk'],
+                        policy_key: 'forecast_decision_policy', policy_version: 'v1',
+                        persistent_risk_score: 25, persistent_risk_raw_score: 10,
+                        persistent_risk_state: 'fading',
+                        persistent_risk_age_sessions: 2, immediate_risk_score: 0}},
                       model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
                     '60': {{direction: 'down', predicted_return: -0.051, up_probability: null,
                       confidence_status: 'uncalibrated',
@@ -1398,6 +1405,12 @@ class WebAssetTest(unittest.TestCase):
             assert.match(zhUp, /当前值 0\.14/);
             assert.match(zhUp, /上涨概率 64\.0%/);
             assert.match(zhUp, /预测收益率 \+3\.40%/);
+            assert.match(zhUp, /统一决策 保留原方向/);
+            assert.match(zhUp, /持续风险状态 关注/);
+            assert.match(zhUp, /记忆风险分 25\/100/);
+            assert.match(zhUp, /风险记忆 衰减中 · 2 个交易日/);
+            assert.match(zhUp, /决策依据 持续向下风险/);
+            assert.match(zhUp, /决策策略 forecast_decision_policy · v1/);
             assert.match(zhUp, /训练样本 105/);
             assert.match(zhUp, /训练截止日期 2026-06-19/);
             assert.match(zhUp, /模型 ridge_direction_v1 · ridge-v1/);
