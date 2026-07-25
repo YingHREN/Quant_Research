@@ -922,8 +922,14 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(
             json.loads(result.stdout),
             [
-                {"status": "Current", "shape": "Strict VCP"},
-                {"status": "Stale", "shape": "Tight platform"},
+                {
+                    "status": "Current",
+                    "shape": "Bullish breakout setup (Strict VCP)",
+                },
+                {
+                    "status": "Stale",
+                    "shape": "Bullish breakout setup (tight platform)",
+                },
                 {"status": "Inactive", "shape": "Near pivot"},
             ],
         )
@@ -1891,22 +1897,34 @@ class WebAssetTest(unittest.TestCase):
         )
         actual = json.loads(result.stdout)
         self.assertEqual(actual["emptyDetail"], "No chart observations are available.")
-        self.assertEqual(actual["priceLines"], ["Strict VCP pivot", "Tight-platform pivot"])
+        self.assertEqual(
+            actual["priceLines"],
+            [
+                "Bullish breakout setup (Strict VCP) pivot",
+                "Bullish breakout setup (tight platform) pivot",
+            ],
+        )
         self.assertEqual(
             [line[0] for line in actual["volumeLines"]],
             ["Volume MA20", "Volume ratio"],
         )
-        self.assertEqual(actual["markers"][0]["text"], "Strict VCP")
+        self.assertEqual(
+            actual["markers"][0]["text"],
+            "Bullish breakout setup (Strict VCP)",
+        )
         self.assertEqual(actual["requestedForecastDates"], ["2026-07-22"])
         self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
-        self.assertIn("Reversal candidate 2/3", [marker["text"] for marker in actual["markers"]])
         self.assertIn(
-            "Early reversal watch · 100",
+            "Bullish structural reversal candidate 2/3",
             [marker["text"] for marker in actual["markers"]],
         )
         self.assertIn(
-            "早期反转观察 · 100",
+            "Early bullish reversal watch · 100",
+            [marker["text"] for marker in actual["markers"]],
+        )
+        self.assertIn(
+            "向上早期反转观察 · 100",
             [marker["text"] for marker in actual["zhMarkers"]],
         )
         self.assertEqual(
@@ -1923,8 +1941,8 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["EMA20 cross"], "Crossed above")
         self.assertEqual(details["Prior-high breakout"], "Yes")
         self.assertEqual(details["Trendline breakout"], "Yes")
-        self.assertEqual(details["Reversal conditions"], "2/3")
-        self.assertEqual(details["Early reversal watch"], "100/100")
+        self.assertEqual(details["Bullish structural reversal conditions"], "2/3")
+        self.assertEqual(details["Early bullish reversal watch"], "100/100")
         self.assertEqual(
             details["Early-watch state"],
             "Observing · awaiting structural confirmation",
@@ -1934,7 +1952,7 @@ class WebAssetTest(unittest.TestCase):
             "Prior-session selloff · Current price acceptance · Near descending trendline · Current volume support",
         )
         zh_details = dict(actual["zhDetail"])
-        self.assertEqual(zh_details["早期反转观察"], "100/100")
+        self.assertEqual(zh_details["向上早期反转观察"], "100/100")
         self.assertEqual(zh_details["早期观察状态"], "观察中 · 等待结构确认")
         self.assertEqual(
             zh_details["早期观察依据"],

@@ -195,17 +195,18 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
         for window in (1, 5, 20, 60)
     }
     group_raw_risk = _aggregate_score(risk_scores, benchmark_coverage)
-    group_state_risk = _aggregate_score(
+    aggregated_state_risk = _aggregate_score(
         risk_state_scores,
         benchmark_coverage,
     )
-    group_state_risk.update(
+    group_risk = dict(group_raw_risk)
+    group_risk.update(
         {
             "raw_score": group_raw_risk["score"],
-            "state_score": group_state_risk["score"],
+            "state_score": aggregated_state_risk["score"],
             "state": _aggregate_risk_state(
                 constituents,
-                group_state_risk["score"],
+                aggregated_state_risk["score"],
                 group_raw_risk["score"],
             ),
             "memory_half_life_sessions": (
@@ -228,7 +229,7 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
             opportunity_scores,
             benchmark_coverage,
         ),
-        "downside_risk": group_state_risk,
+        "downside_risk": group_risk,
     }
     return {
         "asof": _iso(common_asof),

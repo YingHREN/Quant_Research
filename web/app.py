@@ -593,14 +593,18 @@ def _structure_payload(factors, chart):
     annotations = []
     if _finite_number(strict_vcp_pivot):
         annotations.append(
-            {"time": latest["time"], "type": "strict_vcp", "label": "Strict VCP"}
+            {
+                "time": latest["time"],
+                "type": "strict_vcp",
+                "label": "Bullish breakout setup (Strict VCP)",
+            }
         )
     if _finite_number(tight_platform_pivot):
         annotations.append(
             {
                 "time": latest["time"],
                 "type": "tight_platform",
-                "label": "Tight platform",
+                "label": "Bullish breakout setup (tight platform)",
             }
         )
     return {

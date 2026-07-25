@@ -975,7 +975,13 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(structures["key_levels"].get("tight_platform_pivot"), 142.0)
         self.assertEqual(
             [(item["type"], item["label"]) for item in structures["annotations"]],
-            [("strict_vcp", "Strict VCP"), ("tight_platform", "Tight platform")],
+            [
+                ("strict_vcp", "Bullish breakout setup (Strict VCP)"),
+                (
+                    "tight_platform",
+                    "Bullish breakout setup (tight platform)",
+                ),
+            ],
         )
         self.assertTrue(
             all(item["time"] == response.json["observation_date"] for item in structures["annotations"])

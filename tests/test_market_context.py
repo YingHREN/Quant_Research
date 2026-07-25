@@ -298,6 +298,7 @@ class MarketContextTest(unittest.TestCase):
         group_risk = result["selected_group"]["downside_risk"]
         self.assertIn("raw_score", group_risk)
         self.assertIn("state_score", group_risk)
+        self.assertEqual(group_risk["score"], group_risk["raw_score"])
 
     def test_group_score_history_does_not_rebuild_snapshot_scores_per_row(self):
         histories = {

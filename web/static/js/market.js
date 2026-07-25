@@ -33,6 +33,37 @@ function formatScore(value) {
     : Number(value).toFixed(1);
 }
 
+function riskDisplayScore(risk = {}) {
+  return Number.isFinite(Number(risk.state_score))
+    ? risk.state_score
+    : risk.score;
+}
+
+function riskDetail(risk = {}) {
+  if (riskDisplayScore(risk) == null) {
+    return unavailableText(risk.unavailable_reason);
+  }
+  const stateLabel = localized(
+    `market.riskState.${risk.state || "unavailable"}`,
+    risk.state || "—",
+  );
+  return `${t("market.risk.detail", {
+    state: stateLabel,
+    raw: formatScore(risk.raw_score ?? risk.score),
+    age: risk.memory_age_sessions ?? "—",
+  })} · ${t("market.risk.modelSource")}`;
+}
+
+function riskCellText(risk = {}) {
+  const score = formatScore(riskDisplayScore(risk));
+  if (score === "—") return score;
+  const stateLabel = localized(
+    `market.riskState.${risk.state || "unavailable"}`,
+    risk.state || "—",
+  );
+  return `${score} · ${stateLabel}`;
+}
+
 function formatPercent(value, digits = 1) {
   return value == null || !Number.isFinite(Number(value))
     ? "—"
@@ -102,7 +133,7 @@ function sectorButton(row) {
   );
   const risk = text(
     element("small"),
-    `${t("market.risk")} ${formatScore(row.downside_risk?.score)}`,
+    `${t("market.risk")} ${formatScore(riskDisplayScore(row.downside_risk))}`,
   );
   button.append(label, relative, risk);
   return button;
@@ -196,8 +227,8 @@ function renderDrilldown(group = {}, constituents = []) {
     ),
     scoreBlock(
       t("market.risk"),
-      formatScore(group.downside_risk?.score),
-      unavailableText(group.downside_risk?.unavailable_reason),
+      formatScore(riskDisplayScore(group.downside_risk)),
+      riskDetail(group.downside_risk),
     ),
   );
   if (!constituents.length) {
@@ -231,7 +262,7 @@ function renderDrilldown(group = {}, constituents = []) {
       localized(`market.classification.${row.classification}`, row.classification),
       formatPercent(row.relative_strength_20),
       formatScore(row.reversal_opportunity?.score),
-      formatScore(row.downside_risk?.score),
+      riskCellText(row.downside_risk),
       localized(`market.pressure.${row.pressure_state}`, row.pressure_state),
       row.observation_date,
     ];

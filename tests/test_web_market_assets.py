@@ -32,6 +32,10 @@ class MarketAssetTest(unittest.TestCase):
         self.assertIn('setAttribute("aria-pressed"', source)
         self.assertIn("row.relative_return", source)
         self.assertIn("row.downside_risk", source)
+        self.assertIn("function riskDisplayScore(", source)
+        self.assertIn("risk.state_score", source)
+        self.assertIn("risk.raw_score", source)
+        self.assertIn("risk.memory_age_sessions", source)
         self.assertNotIn("reversalOpportunityScore(", source)
         self.assertNotIn("downsideRiskScore(", source)
         self.assertNotIn("innerHTML", source)
@@ -61,6 +65,12 @@ class MarketAssetTest(unittest.TestCase):
             "market.state.near",
             "market.state.unmet",
             "market.state.unavailable",
+            "market.riskState.new",
+            "market.riskState.persistent",
+            "market.riskState.fading",
+            "market.riskState.inactive",
+            "market.risk.detail",
+            "market.risk.modelSource",
             "market.unavailable.missing_sector_benchmark",
             "market.evidence.failed_breakout",
             "market.evidence.help.failed_breakout",
@@ -71,6 +81,29 @@ class MarketAssetTest(unittest.TestCase):
         for key in required:
             with self.subTest(key=key):
                 self.assertGreaterEqual(source.count(f'"{key}"'), 2)
+
+    def test_directional_signal_names_and_model_sources_are_bilingual(self):
+        source = (ROOT / "web/static/js/i18n.js").read_text()
+        for copy in (
+            "向上结构反转候选 {count}/3",
+            "三条件价格结构规则模型",
+            "向上早期反转观察",
+            "四条件规则评分模型",
+            "向下转折风险",
+            "12项市场/板块/个股规则评分模型",
+            "向上突破准备形态",
+            "VCP数学形态规则",
+            "Bullish structural reversal candidate {count}/3",
+            "Three-condition price-structure rule model",
+            "Early bullish reversal watch",
+            "Four-condition rule-scoring model",
+            "Bearish turn risk",
+            "12-rule market/sector/stock scoring model",
+            "Bullish breakout setup",
+            "VCP mathematical shape rules",
+        ):
+            with self.subTest(copy=copy):
+                self.assertIn(copy, source)
 
     def test_stock_dashboard_links_to_market_page(self):
         source = (ROOT / "web/templates/index.html").read_text()

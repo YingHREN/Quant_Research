@@ -320,13 +320,13 @@ if (mode === "success") {
   assert.match(tableZh, /收盘价相对时点一致的 20 日 EMA/);
   assert.match(scenarioZh, /基于观察日可用的非重叠周期收益/);
   assert.match(structureZh, /关键价位/);
-  assert.match(structureZh, /严格 VCP 枢轴点/);
+  assert.match(structureZh, /向上突破准备形态（严格 VCP）枢轴点/);
   assert.match(structureZh, /拒绝原因 历史数据不足/);
   assert.match(chartZh, /开盘价/);
   assert.match(chartZh, /向上交叉/);
   assert.match(chartZh, /已锁定/);
-  assert.deepEqual(priceLinesZh, ["严格 VCP 枢轴点"]);
-  assert.deepEqual(markersZh, ["严格 VCP"]);
+  assert.deepEqual(priceLinesZh, ["向上突破准备形态（严格 VCP）枢轴点"]);
+  assert.deepEqual(markersZh, ["向上突破准备形态（严格 VCP）"]);
   assert.ok(volumeTitlesZh.includes("成交量 MA20"));
   assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
   assert.deepEqual(datesZh, [["07-17", "2026-07-17"], ["07-17", "2026-07-17"]]);
@@ -341,14 +341,20 @@ if (mode === "success") {
   assert.doesNotMatch(popoverEn, /历史不足/);
   assert.match(scenarioEn, /Descriptive historical scenarios/);
   assert.match(structureEn, /Key Levels/);
-  assert.match(structureEn, /Strict VCP Pivot/);
+  assert.match(structureEn, /Bullish Breakout Setup \(Strict VCP\) Pivot/);
   assert.match(structureEn, /Reject Reason Insufficient history/);
   assert.doesNotMatch(structureEn, /历史不足/);
   assert.match(chartEn, /Open/);
   assert.match(chartEn, /Crossed above/);
   assert.match(chartEn, /Locked/);
-  assert.deepEqual(priceLinesEn, ["Strict VCP pivot"]);
-  assert.deepEqual(markersEn, ["Strict VCP"]);
+  assert.deepEqual(
+    priceLinesEn,
+    ["Bullish breakout setup (Strict VCP) pivot"],
+  );
+  assert.deepEqual(
+    markersEn,
+    ["Bullish breakout setup (Strict VCP)"],
+  );
   assert.ok(volumeTitlesEn.includes("Volume MA20"));
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
   assert.deepEqual(datesEn, datesZh);
