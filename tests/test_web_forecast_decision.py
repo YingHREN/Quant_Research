@@ -47,6 +47,10 @@ def high_risk_decision(**changes):
         "persistent_risk_state": "fading",
         "persistent_risk_age_sessions": 1,
         "immediate_risk_score": 57.0,
+        "persistent_risk_sources": ("individual", "group"),
+        "individual_risk_score": 34.0,
+        "group_risk_score": 41.0,
+        "slow_decline_risk_score": 12.0,
     }
     values.update(changes)
     return ForecastDecision(**values)
@@ -93,6 +97,10 @@ class ForecastDecisionContractTest(unittest.TestCase):
                 "persistent_risk_state": "fading",
                 "persistent_risk_age_sessions": 1,
                 "immediate_risk_score": 57.0,
+                "persistent_risk_sources": ["individual", "group"],
+                "individual_risk_score": 34.0,
+                "group_risk_score": 41.0,
+                "slow_decline_risk_score": 12.0,
             },
         )
 
@@ -109,6 +117,8 @@ class ForecastDecisionContractTest(unittest.TestCase):
             {"persistent_risk_state": "unknown"},
             {"persistent_risk_age_sessions": -1},
             {"immediate_risk_score": 101.0},
+            {"persistent_risk_sources": ("unknown",)},
+            {"group_risk_score": 101.0},
         )
 
         for changes in invalid:
@@ -161,6 +171,10 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "persistent_risk_score",
                 "persistent_risk_state",
                 "persistent_risk_age_sessions",
+                "persistent_risk_sources",
+                "individual_risk_score",
+                "group_risk_score",
+                "slow_decline_risk_score",
             ],
         )
         self.assertIn("MU", context.index.get_level_values("ticker"))
@@ -186,6 +200,66 @@ class ForecastRiskContextTest(unittest.TestCase):
         after = build_forecast_risk_context(extended)
 
         assert_frame_equal(after.loc[before.index], before)
+
+    def test_broad_semiconductor_stress_is_a_named_risk_source(self):
+        periods = 100
+        dates = pd.bdate_range(end="2026-07-23", periods=periods)
+        histories = {
+            "QQQ": rising(periods=periods, slope=0.2),
+            "SOXX": rising(periods=periods, slope=0.25),
+            "SMH": rising(periods=periods, slope=0.25),
+        }
+        for ticker in ("MU", "AMD", "NVDA"):
+            close = 100.0 + np.arange(periods) * 0.2
+            close[-5:] = close[-6] * np.array([0.97, 0.94, 0.90, 0.87, 0.84])
+            volume = np.full(periods, 1_000_000.0)
+            volume[-5:] = 2_500_000.0
+            histories[ticker] = pd.DataFrame(
+                {
+                    "Open": close * 1.01,
+                    "High": close * 1.02,
+                    "Low": close * 0.98,
+                    "Close": close,
+                    "Volume": volume,
+                },
+                index=dates,
+            )
+
+        context = build_forecast_risk_context(histories)
+        latest = context.loc[("MU", dates[-1])]
+
+        self.assertGreaterEqual(latest["group_risk_score"], 60.0)
+        self.assertIn("group", latest["persistent_risk_sources"])
+
+    def test_software_erosion_is_a_named_slow_decline_source(self):
+        periods = 140
+        dates = pd.bdate_range(end="2026-07-23", periods=periods)
+
+        def trend(start, end):
+            close = np.linspace(start, end, periods)
+            return pd.DataFrame(
+                {
+                    "Open": close * 1.002,
+                    "High": close * 1.008,
+                    "Low": close * 0.992,
+                    "Close": close,
+                    "Volume": np.full(periods, 1_000_000.0),
+                },
+                index=dates,
+            )
+
+        context = build_forecast_risk_context(
+            {
+                "QQQ": trend(100.0, 135.0),
+                "IGV": trend(100.0, 96.0),
+                "XSW": trend(100.0, 94.0),
+                "ADBE": trend(150.0, 95.0),
+            }
+        )
+        latest = context.loc[("ADBE", dates[-1])]
+
+        self.assertGreaterEqual(latest["slow_decline_risk_score"], 70.0)
+        self.assertIn("slow_decline", latest["persistent_risk_sources"])
 
     def test_duplicate_group_membership_is_rejected(self):
         semiconductor = market_group("semiconductor")
@@ -216,6 +290,10 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "persistent_risk_raw_score": score if raw is None else raw,
             "persistent_risk_state": state,
             "persistent_risk_age_sessions": age,
+            "persistent_risk_sources": ("individual",),
+            "individual_risk_score": score,
+            "group_risk_score": 0.0,
+            "slow_decline_risk_score": 0.0,
         }
 
     def test_unavailable_context_retains_raw_forecast(self):
@@ -262,6 +340,11 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
         self.assertEqual(result.decision.risk_state, "high")
         self.assertEqual(result.decision.action, "downgrade_to_neutral")
         self.assertEqual(result.predicted_return, 0.08)
+        self.assertIn("individual_bearish_risk", result.decision.reasons)
+        self.assertEqual(
+            result.decision.persistent_risk_sources,
+            ("individual",),
+        )
 
     def test_persistent_and_immediate_confluence_overrides_to_down(self):
         result = self.policy.decide(

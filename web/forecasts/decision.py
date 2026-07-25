@@ -7,9 +7,12 @@ from collections.abc import Mapping
 import math
 from numbers import Integral, Real
 
+import numpy as np
 import pandas as pd
 
 from research.market_context import build_group_score_frame
+from research.group_regime import build_group_regime_state
+from research.slow_decline import build_slow_decline_state
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
 from web.market_groups import modeled_market_groups
@@ -29,7 +32,12 @@ RISK_CONTEXT_COLUMNS = (
     "persistent_risk_score",
     "persistent_risk_state",
     "persistent_risk_age_sessions",
+    "persistent_risk_sources",
+    "individual_risk_score",
+    "group_risk_score",
+    "slow_decline_risk_score",
 )
+PERSISTENT_RISK_SOURCES = frozenset(("individual", "group", "slow_decline"))
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,10 @@ class ForecastDecision:
     persistent_risk_state: str = "unavailable"
     persistent_risk_age_sessions: int | None = None
     immediate_risk_score: float = 0.0
+    persistent_risk_sources: tuple[str, ...] = ()
+    individual_risk_score: float | None = None
+    group_risk_score: float | None = None
+    slow_decline_risk_score: float | None = None
 
     def __post_init__(self):
         if self.final_direction not in FORECAST_DIRECTIONS - {"unavailable"}:
@@ -85,6 +97,23 @@ class ForecastDecision:
         )
         if immediate_score is None:
             raise ValueError("immediate_risk_score is required")
+        sources = tuple(self.persistent_risk_sources)
+        if any(source not in PERSISTENT_RISK_SOURCES for source in sources):
+            raise ValueError("invalid persistent_risk_sources")
+        if len(sources) != len(set(sources)):
+            raise ValueError("persistent_risk_sources must be unique")
+        individual_score = _optional_score(
+            self.individual_risk_score,
+            "individual_risk_score",
+        )
+        group_score = _optional_score(
+            self.group_risk_score,
+            "group_risk_score",
+        )
+        slow_decline_score = _optional_score(
+            self.slow_decline_risk_score,
+            "slow_decline_risk_score",
+        )
         object.__setattr__(self, "reasons", reasons)
         object.__setattr__(self, "policy_key", policy_key)
         object.__setattr__(self, "policy_version", policy_version)
@@ -96,6 +125,14 @@ class ForecastDecision:
         )
         object.__setattr__(self, "persistent_risk_age_sessions", memory_age)
         object.__setattr__(self, "immediate_risk_score", immediate_score)
+        object.__setattr__(self, "persistent_risk_sources", sources)
+        object.__setattr__(self, "individual_risk_score", individual_score)
+        object.__setattr__(self, "group_risk_score", group_score)
+        object.__setattr__(
+            self,
+            "slow_decline_risk_score",
+            slow_decline_score,
+        )
 
     def to_dict(self):
         return {
@@ -112,6 +149,12 @@ class ForecastDecision:
             "persistent_risk_state": self.persistent_risk_state,
             "persistent_risk_age_sessions": self.persistent_risk_age_sessions,
             "immediate_risk_score": json_safe(self.immediate_risk_score),
+            "persistent_risk_sources": list(self.persistent_risk_sources),
+            "individual_risk_score": json_safe(self.individual_risk_score),
+            "group_risk_score": json_safe(self.group_risk_score),
+            "slow_decline_risk_score": json_safe(
+                self.slow_decline_risk_score
+            ),
         }
 
 
@@ -200,6 +243,12 @@ class ForecastDecisionPolicy:
             risk_state = "watch"
             reasons.append("persistent_bearish_risk")
 
+        if persistent is not None and risk_state in {"watch", "high", "confirmed"}:
+            reasons.extend(
+                f"{source}_bearish_risk"
+                for source in persistent["sources"]
+            )
+
         if final_direction == forecast.raw_direction:
             action = "retain"
         elif final_direction == "neutral":
@@ -227,6 +276,20 @@ class ForecastDecisionPolicy:
                 None if persistent is None else persistent["age"]
             ),
             immediate_risk_score=immediate,
+            persistent_risk_sources=(
+                () if persistent is None else persistent["sources"]
+            ),
+            individual_risk_score=(
+                None if persistent is None else persistent["individual_score"]
+            ),
+            group_risk_score=(
+                None if persistent is None else persistent["group_score"]
+            ),
+            slow_decline_risk_score=(
+                None
+                if persistent is None
+                else persistent["slow_decline_score"]
+            ),
         )
         return forecast.with_decision(decision)
 
@@ -266,13 +329,16 @@ def build_forecast_risk_context(
             ],
         ].rename(
             columns={
-                "downside_risk_score": "persistent_risk_raw_score",
-                "downside_risk_state_score": "persistent_risk_score",
-                "downside_risk_state": "persistent_risk_state",
-                "downside_risk_memory_age_sessions": (
-                    "persistent_risk_age_sessions"
-                ),
+                "downside_risk_score": "individual_risk_raw_score",
+                "downside_risk_state_score": "individual_risk_score",
+                "downside_risk_state": "individual_risk_state",
+                "downside_risk_memory_age_sessions": "individual_risk_age",
             }
+        )
+        selected = _attach_additional_risk_sources(
+            selected,
+            histories,
+            group,
         )
         if not selected.empty:
             frames.append(selected)
@@ -288,6 +354,83 @@ def build_forecast_risk_context(
     return result.loc[:, RISK_CONTEXT_COLUMNS]
 
 
+def _attach_additional_risk_sources(selected, histories, group):
+    group_state = build_group_regime_state(histories, group)
+    slow_state = build_slow_decline_state(histories, group)
+    dates = selected.index.get_level_values("observation_date")
+    selected["group_risk_raw_score"] = group_state["raw_score"].reindex(
+        dates
+    ).to_numpy()
+    selected["group_risk_score"] = group_state["state_score"].reindex(
+        dates
+    ).to_numpy()
+    selected["group_risk_state"] = group_state["state"].reindex(
+        dates
+    ).to_numpy()
+    selected["group_risk_age"] = group_state[
+        "memory_age_sessions"
+    ].reindex(dates).to_numpy()
+    aligned_slow = slow_state.reindex(selected.index)
+    selected["slow_decline_risk_raw_score"] = aligned_slow["raw_score"]
+    selected["slow_decline_risk_score"] = aligned_slow["state_score"]
+    selected["slow_decline_risk_state"] = aligned_slow["state"]
+    selected["slow_decline_risk_age"] = aligned_slow[
+        "memory_age_sessions"
+    ]
+    selected["persistent_risk_raw_score"] = selected[
+        [
+            "individual_risk_raw_score",
+            "group_risk_raw_score",
+            "slow_decline_risk_raw_score",
+        ]
+    ].max(axis=1, skipna=True)
+    source_columns = {
+        "individual": "individual_risk_score",
+        "group": "group_risk_score",
+        "slow_decline": "slow_decline_risk_score",
+    }
+    selected["persistent_risk_score"] = selected[
+        list(source_columns.values())
+    ].max(axis=1, skipna=True)
+
+    def source_values(row):
+        available = {
+            source: row[column]
+            for source, column in source_columns.items()
+            if pd.notna(row[column])
+        }
+        if not available:
+            return "unavailable", None, ()
+        maximum_source = max(available, key=available.get)
+        active = tuple(
+            source
+            for source, value in available.items()
+            if float(value) >= 20.0
+        )
+        return maximum_source, float(available[maximum_source]), active
+
+    combined = selected.apply(source_values, axis=1)
+    selected["persistent_risk_sources"] = combined.map(lambda value: value[2])
+    source_name = combined.map(lambda value: value[0])
+    selected["persistent_risk_state"] = [
+        (
+            "unavailable"
+            if source == "unavailable"
+            else row[f"{source}_risk_state"]
+        )
+        for source, (_, row) in zip(source_name, selected.iterrows())
+    ]
+    selected["persistent_risk_age_sessions"] = [
+        (
+            np.nan
+            if source == "unavailable"
+            else row[f"{source}_risk_age"]
+        )
+        for source, (_, row) in zip(source_name, selected.iterrows())
+    ]
+    return selected
+
+
 def _risk_context(row):
     if row is None:
         return None
@@ -296,6 +439,19 @@ def _risk_context(row):
         raw_score_value = row.get("persistent_risk_raw_score")
         state = row.get("persistent_risk_state")
         age = row.get("persistent_risk_age_sessions")
+        sources = tuple(row.get("persistent_risk_sources") or ())
+        individual_score = _optional_context_score(
+            row.get("individual_risk_score"),
+            "individual_risk_score",
+        )
+        group_score = _optional_context_score(
+            row.get("group_risk_score"),
+            "group_risk_score",
+        )
+        slow_decline_score = _optional_context_score(
+            row.get("slow_decline_risk_score"),
+            "slow_decline_risk_score",
+        )
         if any(
             pd.isna(value)
             for value in (score_value, raw_score_value, state, age)
@@ -323,11 +479,17 @@ def _risk_context(row):
                 "persistent_risk_age_sessions must not be negative"
             )
         age = int(age)
+    if any(source not in PERSISTENT_RISK_SOURCES for source in sources):
+        raise ValueError("invalid persistent_risk_sources")
     return {
         "score": score,
         "raw_score": raw_score,
         "state": state,
         "age": age,
+        "sources": sources,
+        "individual_score": individual_score,
+        "group_score": group_score,
+        "slow_decline_score": slow_decline_score,
     }
 
 
@@ -349,6 +511,12 @@ def _optional_score(value, name):
     if not math.isfinite(result) or not 0.0 <= result <= 100.0:
         raise ValueError(f"{name} must be between 0 and 100")
     return result
+
+
+def _optional_context_score(value, name):
+    if value is None or pd.isna(value):
+        return None
+    return _optional_score(value, name)
 
 
 def _required_score(value, name):

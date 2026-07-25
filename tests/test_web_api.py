@@ -1513,6 +1513,10 @@ class ForecastServiceTest(unittest.TestCase):
                 "persistent_risk_state": "new",
                 "persistent_risk_age_sessions": 0,
                 "immediate_risk_score": 0.0,
+                "persistent_risk_sources": [],
+                "individual_risk_score": None,
+                "group_risk_score": None,
+                "slow_decline_risk_score": None,
             },
         )
 

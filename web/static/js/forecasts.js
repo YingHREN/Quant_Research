@@ -229,6 +229,31 @@ export function renderForecastDetail(container, options = {}) {
         t("forecast.field.decisionReasons", {}, locale),
         reasons || t("forecast.value.noRiskReason", {}, locale),
       );
+      const sources = Array.isArray(decision.persistent_risk_sources)
+        ? decision.persistent_risk_sources
+          .map((source) => localizedCode("forecast.riskSource", source, locale))
+          .join("、")
+        : "";
+      appendItem(
+        values,
+        t("forecast.field.riskSources", {}, locale),
+        sources || t("forecast.value.noActiveRiskSource", {}, locale),
+      );
+      const sourceScores = [
+        ["individual", decision.individual_risk_score],
+        ["group", decision.group_risk_score],
+        ["slow_decline", decision.slow_decline_risk_score],
+      ]
+        .filter(([, score]) => finite(score))
+        .map(([source, score]) => (
+          `${localizedCode("forecast.riskSourceShort", source, locale)} ${Number(score).toFixed(0)}`
+        ))
+        .join(" · ");
+      appendItem(
+        values,
+        t("forecast.field.riskSourceScores", {}, locale),
+        sourceScores || t("forecast.value.unavailable", {}, locale),
+      );
       appendItem(
         values,
         t("forecast.field.decisionPolicy", {}, locale),

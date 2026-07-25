@@ -1285,7 +1285,10 @@ class WebAssetTest(unittest.TestCase):
                         policy_key: 'forecast_decision_policy', policy_version: 'v1',
                         persistent_risk_score: 25, persistent_risk_raw_score: 10,
                         persistent_risk_state: 'fading',
-                        persistent_risk_age_sessions: 2, immediate_risk_score: 0}},
+                        persistent_risk_age_sessions: 2, immediate_risk_score: 0,
+                        persistent_risk_sources: ['individual'],
+                        individual_risk_score: 25, group_risk_score: 18,
+                        slow_decline_risk_score: 12}},
                       model_key: 'ridge_direction_v1', model_version: 'ridge-v1'}},
                     '60': {{direction: 'down', predicted_return: -0.051, up_probability: null,
                       confidence_status: 'uncalibrated',
@@ -1410,6 +1413,8 @@ class WebAssetTest(unittest.TestCase):
             assert.match(zhUp, /记忆风险分 25\/100/);
             assert.match(zhUp, /风险记忆 衰减中 · 2 个交易日/);
             assert.match(zhUp, /决策依据 持续向下风险/);
+            assert.match(zhUp, /风险来源 个股下行状态/);
+            assert.match(zhUp, /来源分数 个股 25 · 板块 18 · 持续阴跌 12/);
             assert.match(zhUp, /决策策略 forecast_decision_policy · v1/);
             assert.match(zhUp, /训练样本 105/);
             assert.match(zhUp, /训练截止日期 2026-06-19/);
