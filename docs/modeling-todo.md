@@ -64,6 +64,8 @@ market-context, and data-source work discussed for the local dashboard.
 - [ ] Rename “反转候选” to “结构转强” and show the exact satisfied conditions.
 - [ ] Preserve the distinction between an event-day signal and a persistent
   structural state.
+- [x] Add separately calibrated individual, group-stress, and slow-decline
+  remembered sources to the unified decision layer.
 
 ## P1 — Selling pressure during an uptrend
 

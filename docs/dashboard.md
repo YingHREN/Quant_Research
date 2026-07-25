@@ -338,21 +338,29 @@ rescaling the raw return.
 The Ridge return and `raw_direction` remain immutable model outputs. Every
 available forecast also carries a nested, versioned `decision` record. The
 decision layer combines the same-date eight-condition bearish overlay with
-the point-in-time 5–10-session remembered downside-risk state:
+three point-in-time 5–10-session remembered downside-risk sources:
+
+- individual 12-rule market/sector/stock risk;
+- group breadth and volume stress;
+- persistent slow decline.
 
 ```text
 immediate >= 70                         -> override to down
-persistent >= 30 and immediate >= 40  -> override to down
-persistent >= 30                       -> downgrade raw up to neutral
-persistent >= 20                       -> watch; retain raw direction
+source-specific high + immediate >= 40 -> override to down
+source-specific high                   -> downgrade raw up to neutral
+source-specific watch                  -> watch; retain raw direction
 otherwise                              -> retain raw direction
 ```
+
+Version 2 source thresholds are individual 20/30, group 40/60, and slow
+decline 50/70 for watch/high. They differ because the source scores have
+different empirical distributions.
 
 The displayed `direction` is the final decision, while `raw_direction` and
 `predicted_return` continue to show exactly what Ridge produced. The decision
 also reports its action, stable reason codes, policy identity, raw and
-remembered risk scores, memory state, and memory age. Scores are rule scores,
-not calibrated probabilities. Tickers without an explicit market-group
+remembered risk scores, active sources, memory state, and memory age. Scores
+are rule scores, not calibrated probabilities. Tickers without an explicit market-group
 mapping report persistent risk as unavailable; the service does not infer or
 fabricate a sector.
 

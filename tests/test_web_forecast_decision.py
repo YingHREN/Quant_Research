@@ -284,16 +284,28 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
         self.policy = ForecastDecisionPolicy()
 
     @staticmethod
-    def context(score, raw=None, state="new", age=0):
+    def context(
+        score,
+        raw=None,
+        state="new",
+        age=0,
+        individual=None,
+        group=0.0,
+        slow_decline=0.0,
+        sources=None,
+    ):
+        individual_score = score if individual is None else individual
         return {
             "persistent_risk_score": score,
             "persistent_risk_raw_score": score if raw is None else raw,
             "persistent_risk_state": state,
             "persistent_risk_age_sessions": age,
-            "persistent_risk_sources": ("individual",),
-            "individual_risk_score": score,
-            "group_risk_score": 0.0,
-            "slow_decline_risk_score": 0.0,
+            "persistent_risk_sources": (
+                ("individual",) if sources is None else sources
+            ),
+            "individual_risk_score": individual_score,
+            "group_risk_score": group,
+            "slow_decline_risk_score": slow_decline,
         }
 
     def test_unavailable_context_retains_raw_forecast(self):
@@ -359,6 +371,53 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "persistent_immediate_confluence",
             result.decision.reasons,
         )
+
+    def test_group_and_slow_decline_use_source_specific_thresholds(self):
+        group_watch = self.policy.decide(
+            available_forecast(),
+            self.context(
+                59.0,
+                individual=0.0,
+                group=59.0,
+                sources=("group",),
+            ),
+        )
+        group_high = self.policy.decide(
+            available_forecast(),
+            self.context(
+                60.0,
+                individual=0.0,
+                group=60.0,
+                sources=("group",),
+            ),
+        )
+        slow_watch = self.policy.decide(
+            available_forecast(),
+            self.context(
+                69.0,
+                individual=0.0,
+                slow_decline=69.0,
+                sources=("slow_decline",),
+            ),
+        )
+        slow_high = self.policy.decide(
+            available_forecast(),
+            self.context(
+                70.0,
+                individual=0.0,
+                slow_decline=70.0,
+                sources=("slow_decline",),
+            ),
+        )
+
+        self.assertEqual(group_watch.direction, "up")
+        self.assertEqual(group_watch.decision.risk_state, "watch")
+        self.assertEqual(group_high.direction, "neutral")
+        self.assertEqual(group_high.decision.risk_state, "high")
+        self.assertEqual(slow_watch.direction, "up")
+        self.assertEqual(slow_watch.decision.risk_state, "watch")
+        self.assertEqual(slow_high.direction, "neutral")
+        self.assertEqual(slow_high.decision.risk_state, "high")
 
     def test_existing_immediate_override_is_normalized(self):
         forecast = available_forecast(

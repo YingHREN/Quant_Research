@@ -38,6 +38,16 @@ RISK_CONTEXT_COLUMNS = (
     "slow_decline_risk_score",
 )
 PERSISTENT_RISK_SOURCES = frozenset(("individual", "group", "slow_decline"))
+SOURCE_WATCH_THRESHOLDS = {
+    "individual": 20.0,
+    "group": 40.0,
+    "slow_decline": 50.0,
+}
+SOURCE_HIGH_THRESHOLDS = {
+    "individual": 30.0,
+    "group": 60.0,
+    "slow_decline": 70.0,
+}
 
 
 @dataclass(frozen=True)
@@ -170,7 +180,11 @@ class ForecastDecisionPolicy:
         high_threshold=30.0,
         immediate_confirm_threshold=70.0,
         joint_immediate_threshold=40.0,
-        policy_version="v1",
+        group_watch_threshold=SOURCE_WATCH_THRESHOLDS["group"],
+        group_high_threshold=SOURCE_HIGH_THRESHOLDS["group"],
+        slow_decline_watch_threshold=SOURCE_WATCH_THRESHOLDS["slow_decline"],
+        slow_decline_high_threshold=SOURCE_HIGH_THRESHOLDS["slow_decline"],
+        policy_version="v2",
     ):
         self.watch_threshold = _required_score(
             watch_threshold,
@@ -188,12 +202,40 @@ class ForecastDecisionPolicy:
             joint_immediate_threshold,
             "joint_immediate_threshold",
         )
+        self.group_watch_threshold = _required_score(
+            group_watch_threshold,
+            "group_watch_threshold",
+        )
+        self.group_high_threshold = _required_score(
+            group_high_threshold,
+            "group_high_threshold",
+        )
+        self.slow_decline_watch_threshold = _required_score(
+            slow_decline_watch_threshold,
+            "slow_decline_watch_threshold",
+        )
+        self.slow_decline_high_threshold = _required_score(
+            slow_decline_high_threshold,
+            "slow_decline_high_threshold",
+        )
         if self.watch_threshold > self.high_threshold:
             raise ValueError("watch_threshold must not exceed high_threshold")
         if self.joint_immediate_threshold > self.immediate_confirm_threshold:
             raise ValueError(
                 "joint_immediate_threshold must not exceed "
                 "immediate_confirm_threshold"
+            )
+        if self.group_watch_threshold > self.group_high_threshold:
+            raise ValueError(
+                "group_watch_threshold must not exceed group_high_threshold"
+            )
+        if (
+            self.slow_decline_watch_threshold
+            > self.slow_decline_high_threshold
+        ):
+            raise ValueError(
+                "slow_decline_watch_threshold must not exceed "
+                "slow_decline_high_threshold"
             )
         self.policy_version = _required_string(
             policy_version,
@@ -214,11 +256,12 @@ class ForecastDecisionPolicy:
         reasons = []
         final_direction = forecast.raw_direction
         risk_state = "unavailable" if persistent is None else "low"
+        persistent_level = self._persistent_level(persistent)
 
         immediate_confirmed = immediate >= self.immediate_confirm_threshold
         confluence = (
             persistent is not None
-            and persistent["score"] >= self.high_threshold
+            and persistent_level == "high"
             and immediate >= self.joint_immediate_threshold
         )
         if immediate_confirmed:
@@ -234,12 +277,12 @@ class ForecastDecisionPolicy:
                 )
             )
             final_direction = "down"
-        elif persistent is not None and persistent["score"] >= self.high_threshold:
+        elif persistent_level == "high":
             risk_state = "high"
             reasons.append("persistent_bearish_risk")
             if forecast.raw_direction == "up":
                 final_direction = "neutral"
-        elif persistent is not None and persistent["score"] >= self.watch_threshold:
+        elif persistent_level == "watch":
             risk_state = "watch"
             reasons.append("persistent_bearish_risk")
 
@@ -292,6 +335,44 @@ class ForecastDecisionPolicy:
             ),
         )
         return forecast.with_decision(decision)
+
+    def _persistent_level(self, persistent):
+        if persistent is None:
+            return "unavailable"
+        scores = (
+            (
+                persistent["individual_score"],
+                self.watch_threshold,
+                self.high_threshold,
+            ),
+            (
+                persistent["group_score"],
+                self.group_watch_threshold,
+                self.group_high_threshold,
+            ),
+            (
+                persistent["slow_decline_score"],
+                self.slow_decline_watch_threshold,
+                self.slow_decline_high_threshold,
+            ),
+        )
+        available = False
+        watch = False
+        for score, watch_threshold, high_threshold in scores:
+            if score is None:
+                continue
+            available = True
+            if score >= high_threshold:
+                return "high"
+            if score >= watch_threshold:
+                watch = True
+        if not available:
+            if persistent["score"] >= self.high_threshold:
+                return "high"
+            if persistent["score"] >= self.watch_threshold:
+                return "watch"
+            return "low"
+        return "watch" if watch else "low"
 
 
 def build_forecast_risk_context(
@@ -405,7 +486,7 @@ def _attach_additional_risk_sources(selected, histories, group):
         active = tuple(
             source
             for source, value in available.items()
-            if float(value) >= 20.0
+            if float(value) >= SOURCE_WATCH_THRESHOLDS[source]
         )
         return maximum_source, float(available[maximum_source]), active
 

@@ -1507,7 +1507,7 @@ class ForecastServiceTest(unittest.TestCase):
                 "action": "downgrade_to_neutral",
                 "reasons": ["persistent_bearish_risk"],
                 "policy_key": "forecast_decision_policy",
-                "policy_version": "v1",
+                "policy_version": "v2",
                 "persistent_risk_score": 34.0,
                 "persistent_risk_raw_score": 34.0,
                 "persistent_risk_state": "new",
