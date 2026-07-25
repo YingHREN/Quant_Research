@@ -18,7 +18,13 @@ def build_slow_decline_state(histories, group: MarketGroup) -> pd.DataFrame:
     if not isinstance(group, MarketGroup):
         raise TypeError("group must be a MarketGroup")
     prepared = _prepare(histories)
-    group_close = _group_composite(prepared, group.benchmark_tickers)
+    primary = tuple(
+        ticker for ticker in group.benchmark_tickers if ticker in prepared
+    )
+    group_close = _group_composite(
+        prepared,
+        primary or group.fallback_benchmark_tickers,
+    )
     qqq_close = (
         None if "QQQ" not in prepared else prepared["QQQ"]["Close"]
     )

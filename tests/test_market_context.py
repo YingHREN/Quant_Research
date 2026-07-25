@@ -48,6 +48,26 @@ class MarketContextTest(unittest.TestCase):
             "software_constituent",
         )
 
+    def test_software_uses_declared_xlk_fallback_without_fabricating_primary_coverage(self):
+        histories = {
+            ticker: rising()
+            for ticker in ("QQQ", "SPY", "XLK", "ADBE")
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("software"),
+            5,
+        )
+
+        self.assertEqual(result["selected_group"]["available_benchmarks"], [])
+        self.assertEqual(result["selected_group"]["source_tickers"], ["XLK"])
+        self.assertEqual(result["selected_group"]["coverage"], 0.0)
+        self.assertIsNotNone(
+            result["constituents"][0]["downside_risk"]["score"]
+        )
+
     def test_one_semiconductor_proxy_degrades_coverage_without_fabrication(self):
         histories = {
             "QQQ": rising(),

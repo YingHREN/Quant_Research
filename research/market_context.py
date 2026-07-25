@@ -162,6 +162,7 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
     available_benchmarks = [
         ticker for ticker in group.benchmark_tickers if ticker in prepared
     ]
+    source_tickers = _available_sector_sources(prepared, group)
     benchmark_coverage = (
         len(available_benchmarks) / len(group.benchmark_tickers)
         if group.benchmark_tickers
@@ -221,7 +222,7 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
         "label_key": group.label_key,
         "benchmark_tickers": list(group.benchmark_tickers),
         "available_benchmarks": available_benchmarks,
-        "source_tickers": available_benchmarks,
+        "source_tickers": list(source_tickers),
         "coverage": benchmark_coverage,
         "latest_source_date": _iso(common_asof),
         "returns": selected_returns,
@@ -787,7 +788,7 @@ def _prepare_histories(histories, cutoff) -> dict[str, _Prepared]:
 
 def _sector_composite(prepared, group):
     returns = {}
-    for ticker in group.benchmark_tickers:
+    for ticker in _available_sector_sources(prepared, group):
         item = prepared.get(ticker)
         if item is None:
             continue
@@ -797,6 +798,19 @@ def _sector_composite(prepared, group):
         return None
     mean_return = pd.concat(returns, axis=1).mean(axis=1, skipna=True)
     return (1.0 + mean_return.fillna(0.0)).cumprod()
+
+
+def _available_sector_sources(prepared, group):
+    primary = tuple(
+        ticker for ticker in group.benchmark_tickers if ticker in prepared
+    )
+    if primary:
+        return primary
+    return tuple(
+        ticker
+        for ticker in group.fallback_benchmark_tickers
+        if ticker in prepared
+    )
 
 
 def _market_score(prepared, sector, asof):

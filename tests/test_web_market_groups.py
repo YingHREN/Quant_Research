@@ -58,6 +58,7 @@ class MarketGroupTest(unittest.TestCase):
         group = market_group("software")
 
         self.assertEqual(group.benchmark_tickers, ("IGV", "XSW"))
+        self.assertEqual(group.fallback_benchmark_tickers, ("XLK",))
         self.assertIn("ADBE", group.constituent_tickers)
         self.assertIn("CRM", group.constituent_tickers)
 

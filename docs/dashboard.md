@@ -360,9 +360,15 @@ The displayed `direction` is the final decision, while `raw_direction` and
 `predicted_return` continue to show exactly what Ridge produced. The decision
 also reports its action, stable reason codes, policy identity, raw and
 remembered risk scores, active sources, memory state, and memory age. Scores
-are rule scores, not calibrated probabilities. Tickers without an explicit market-group
-mapping report persistent risk as unavailable; the service does not infer or
-fabricate a sector.
+are rule scores, not calibrated probabilities. Tickers without an explicit
+market-group mapping report persistent risk as unavailable; the service does
+not infer or fabricate a sector.
+
+The software group uses IGV and XSW as primary references. When neither is
+locally available, XLK is an explicitly declared fallback for constituent
+feature continuity; primary benchmark coverage remains 0% and the API reports
+`source_tickers: ["XLK"]`. The fallback is therefore visible rather than
+being misreported as complete software-sector evidence.
 
 `ForecastService` builds the risk context once per database revision and
 looks up only the exact `(ticker, observation_date)` row. Appending future

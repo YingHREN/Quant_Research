@@ -50,6 +50,7 @@ class MarketGroup:
     benchmark_tickers: tuple[str, ...]
     constituent_tickers: tuple[str, ...]
     related_tickers: tuple[str, ...] = ()
+    fallback_benchmark_tickers: tuple[str, ...] = ()
 
 
 _SEMICONDUCTORS = (
@@ -116,6 +117,7 @@ MARKET_GROUPS = MappingProxyType(
             label_key="market.group.software",
             benchmark_tickers=("IGV", "XSW"),
             constituent_tickers=_SOFTWARE,
+            fallback_benchmark_tickers=("XLK",),
         ),
     }
 )
