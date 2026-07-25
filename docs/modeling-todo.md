@@ -1,183 +1,154 @@
-# Quant Dashboard Modeling TODO
+# 全局量化建模 TODO
 
-This is the persistent backlog for the VCP, forecast, reversal, supply/demand,
-market-context, and data-source work discussed for the local dashboard.
+本文件是本项目唯一的全局任务表，覆盖 VCP、预测、反转、供需、大盘环境和数据源。新增事项先进入索引，再补充到对应章节；完成实现并通过验收后才标记为已完成。
 
-## P0 — Early reversal observation
+## 全局任务索引
 
-- [x] Implement the causal early-reversal watch defined in
-  `docs/superpowers/specs/2026-07-25-early-reversal-watch-design.md`.
-- [x] Detect the NBIS 2026-07-17 early observation point using only data
-  available through that close.
-- [x] Score prior-session selloff, current-session price acceptance,
-  descending-trendline proximity, and current volume support.
-- [x] Keep early observation separate from confirmed reversal conditions.
-- [ ] Distinguish intraday break, closing confirmation, and next-session
-  confirmation.
-- [x] Add localized chart markers, date details, factor explanations, and
-  scores.
-- [x] Compare entry after the 2026-07-17 observation with entry after the
-  2026-07-20 confirmation using next-open execution.
+| 编号 | 优先级 | 状态 | 任务 | 依赖 |
+|---|---:|---|---|---|
+| REV-001 | P0 | 已完成 | 因果向上早期反转观察 | 日线 OHLCV、下降趋势线 |
+| FCAST-001 | P0 | 实施中 | 修复 5 日预测并证明样本外优势 | 走步回测、基线 |
+| POLICY-001 | P1 | 实施中 | 分离 Ridge 收益预测与向下风险语义 | `forecast_decision_policy` |
+| SUPPLY-001 | P1 | 待实施 | 识别上涨过程中的抛压 | 个股、QQQ、板块日线 |
+| DEMAND-001 | P1 | 待实施 | 识别买盘与需求确认 | 个股、QQQ、板块日线 |
+| MODEL-001 | P2 | 实施中 | 训练反转与抛压模型 | 原子条件、标签净化 |
+| INTRA-001 | P2 | 待实施 | 接入盘中逐笔与报价分析 | 券商/行情接口 |
+| DATA-001 | P3 | 实施中 | 扩展数据和因子注册接口 | 免费日线、供应商适配器 |
+| MACRO-001 | P1 | 待调研 | 建立点时宏观环境风险模型 | 十年历史、FRED/ALFRED |
+| UI-001 | P1 | 已完成 | 因果近端压力区、图层和明细解释 | 日线结构、ATR20 |
 
-## P0 — Repair the five-session forecast
+## P0 — 向上早期反转观察
 
-- [ ] Stop presenting the five-session Ridge result as reliable direction
-  while it does not beat simple baselines.
-- [ ] Show zero-return, historical-mean, and always-up baselines beside model
-  evaluation.
-- [ ] Display “no demonstrated forecast advantage” when walk-forward results
-  do not beat the configured baseline.
-- [x] Replace the five-session return-to-direction conversion with a directly
-  evaluated classification objective.
-- [x] Use next-session open as the executable entry price.
-- [ ] Evaluate non-overlapping five-session outcomes in addition to the daily
-  overlapping research sample.
-- [ ] Add time decay and ticker/sector hierarchy experiments. Class-balanced
-  logistic and shallow boosted challengers were tested on 2026-07-25.
-- [ ] Evaluate the causal multi-scale recency-weighted momentum challenger
-  defined in
-  `docs/superpowers/specs/2026-07-25-recency-weighted-momentum-design.md`.
-- [ ] Compare decay-only, decay-plus-volume, and decay-plus-market-context
-  ablations before considering a causal-attention sequence model.
-- [x] Report NBIS, semiconductor, and full-universe results separately.
-- [x] Re-evaluate the bearish-risk override independently; do not retain an
-  override that reduces out-of-sample accuracy.
-- [ ] Require stable walk-forward improvement before restoring a prominent
-  direction label.
+- [x] 实现 `docs/superpowers/specs/2026-07-25-early-reversal-watch-design.md` 定义的因果早期观察。
+- [x] 仅使用截至当日收盘可见的数据，识别 NBIS 2026-07-17 的早期观察点。
+- [x] 对前一日抛售、当日价格承接、下降趋势线接近度和当日成交量支持评分。
+- [x] 将早期观察与已确认反转条件分开。
+- [ ] 区分盘中突破、收盘确认和下一交易日确认。
+- [x] 添加本地化图标、日期明细、因子解释和分数。
+- [x] 用次日开盘成交，比较 2026-07-17 观察后与 2026-07-20 确认后入场。
 
-## P1 — Separate forecast and risk semantics
+## P0 — 修复 5 日预测
 
-- [x] Display the raw Ridge return forecast independently from short-term
-  bearish-turn risk.
-- [x] Do not silently replace a positive predicted return with a negative
-  direction label.
-- [x] Add a combined state such as “medium-term positive, short-term high
-  risk” without claiming a probability.
-- [ ] Label every signal as intraday, close-confirmed, or next-session
-  executable.
-- [ ] Show each bearish condition’s actual value, threshold, and points.
-- [ ] Separate literal failed breakouts from the current composite
-  pivot-distance risk proxy.
-- [ ] Reduce correlated double-counting among distribution, abnormal volume,
-  volume expansion, weak close, and signed-volume pressure.
-- [ ] Use horizon-specific definitions and weights for 5, 20, and 60 sessions.
-- [ ] Rename “反转候选” to “结构转强” and show the exact satisfied conditions.
-- [ ] Preserve the distinction between an event-day signal and a persistent
-  structural state.
-- [x] Add separately calibrated individual, group-stress, and slow-decline
-  remembered sources to the unified decision layer.
+- [ ] 在 5 日 Ridge 未超过简单基线前，不把结果展示为可靠方向。
+- [ ] 在模型评估旁展示零收益、历史均值和始终上涨基线。
+- [ ] 走步结果未超过配置基线时显示“尚未证明预测优势”。
+- [x] 用直接评估的分类目标替代“5 日收益转方向”。
+- [x] 使用下一交易日开盘价作为可执行入场价。
+- [ ] 除每日重叠样本外，评估互不重叠的 5 日结果。
+- [ ] 增加时间衰减及股票/板块层级实验；2026-07-25 已测试类别平衡 Logistic 和浅层 Boosting 挑战模型。
+- [ ] 评估 `docs/superpowers/specs/2026-07-25-recency-weighted-momentum-design.md` 定义的因果多尺度近因加权动量模型。
+- [ ] 在考虑因果 Attention 序列模型前，比较仅衰减、衰减加成交量、衰减加市场环境的消融实验。
+- [x] 分别报告 NBIS、半导体组和全股票池结果。
+- [x] 独立重评向下风险覆盖；若降低样本外准确率则不得保留。
+- [ ] 恢复醒目方向标签前，要求稳定的走步回测提升。
 
-## P1 — Selling pressure during an uptrend
+## P1 — 分离预测和风险语义
 
-- [ ] Define the eligible uptrend regime using moving-average slopes,
-  higher-high/higher-low structure, and relative strength versus QQQ and the
-  sector proxy.
-- [ ] Add high-volume non-progress:
-  `volume_ratio >= 1.5` and `abs(daily_return) <= 0.5%`.
-- [ ] Add price-progress efficiency:
-  `abs(daily_return) / volume_ratio`.
-- [ ] Add upper-wick rejection using wick/range, close location, resistance
-  proximity, and volume support.
-- [ ] Add literal failed-breakout detection: intraday high above prior
-  resistance followed by a close back below resistance.
-- [ ] Measure repeated resistance tests with rising volume but declining price
-  progress.
-- [ ] Count persistent distribution sessions over rolling 5-, 10-, and
-  20-session windows.
-- [ ] Detect relative-strength deterioration before absolute price breakdown.
-- [ ] Add volume-confirmed EMA20 and higher-low breakdown states.
-- [ ] Detect weak, low-volume rebounds that fail to recover broken support.
-- [ ] Build an independent `supply_pressure_score`; do not define it as the
-  inverse of buying pressure.
-- [ ] Group correlated evidence before scoring so one high-volume down candle
-  cannot receive multiple full weights for the same information.
+- [x] 独立展示 Ridge 原始收益预测与短期向下转折风险。
+- [x] 不把正预测收益静默替换成负方向。
+- [x] 增加“中期偏正、短期高风险”等组合状态，但不冒充概率。
+- [ ] 给每个信号标明盘中、收盘确认或下一交易日可执行。
+- [ ] 显示每个向下条件的实际值、阈值和得分。
+- [ ] 将真实突破失败与当前综合枢轴距离风险代理分开。
+- [ ] 减少派发、异常量、放量、弱收盘和有符号成交压力的相关重复计分。
+- [ ] 为 5、20、60 日定义独立含义和权重。
+- [ ] 将“反转候选”改为“结构转强”，并展示实际满足的条件。
+- [ ] 保留事件日信号与持续结构状态的区别。
+- [x] 在统一决策层接入分别校准的个股、板块压力和持续阴跌记忆来源。
 
-## P1 — Buying pressure and demand confirmation
+## P1 — 上涨过程中的抛压
 
-- [ ] Add a close-location × volume-ratio daily buying/selling proxy.
-- [ ] Add strong-close and up-volume participation conditions.
-- [ ] Require closing acceptance and follow-through after resistance
-  breakouts.
-- [ ] Detect seller exhaustion: extreme sell volume without further downside.
-- [ ] Detect buyer absorption: high inferred selling pressure while price
-  holds or recovers.
-- [ ] Detect low-volume pullbacks followed by a confirmed higher low.
-- [ ] Add positive relative-strength turns versus sector and QQQ.
-- [ ] Build an independent `demand_confirmation_score`.
-- [ ] Display four states: healthy advance, two-sided high-volume battle,
-  distribution risk, and low-participation consolidation.
-- [ ] Backtest supply and demand scores independently and jointly.
+- [ ] 用均线斜率、更高高点/低点结构，以及相对 QQQ 和板块代理的强度定义有效上涨阶段。
+- [ ] 增加高成交量但价格不前进：`volume_ratio >= 1.5` 且 `abs(daily_return) <= 0.5%`。
+- [ ] 增加价格推进效率：`abs(daily_return) / volume_ratio`。
+- [ ] 用上影线/振幅、收盘位置、压力接近度和成交量支持识别冲高回落。
+- [ ] 检测真实突破失败：盘中高于前阻力、收盘重新落回阻力下方。
+- [ ] 统计反复测试压力位时成交量上升但价格推进减弱。
+- [ ] 统计滚动 5、10、20 日的持续派发日。
+- [ ] 检测绝对价格破位前的相对强度恶化。
+- [ ] 增加成交量确认的 EMA20 和更高低点破位状态。
+- [ ] 检测跌破支撑后无法收复的低量弱反弹。
+- [ ] 建立独立 `supply_pressure_score`，不得简单定义为买盘压力的相反数。
+- [ ] 对相关证据分组，避免同一根放量阴线因同一信息获得多次满分。
 
-## P2 — Trained reversal and pressure models
+## P1 — 买盘和需求确认
 
-- [x] Use the available atomic bearish and early-reversal conditions as
-  model features rather than treating hand-set scores as probabilities.
-- [x] Train separate future-5-session and future-20-session direction
-  classifiers; path-dependent downside classifiers remain separate follow-up.
-- [x] Compare raw Ridge, rules-only, logistic classification, and shallow
-  boosted classification. The rules-only bearish override had no full-universe
-  lift and must not be treated as a probability.
-- [x] Use expanding-window walk-forward evaluation with purged
-  label boundaries.
-- [ ] Report precision, recall, balanced accuracy, ROC AUC, PR AUC, coverage,
-  return, maximum drawdown, and turnover.
-- [ ] Calibrate probabilities only when sample and both-class requirements are
-  met.
-- [x] Study high-volatility semiconductor and AI-infrastructure stocks
-  separately.
-- [x] Maintain named NBIS and AMD event-case regressions without
-  training specifically to those dates.
-- [x] Measure incremental value from QQQ, sector, and stock-level agreement or
-  divergence.
-- [ ] Add time-decayed samples and a ticker/sector hierarchy without one-hot
-  memorization, then repeat the fixed promotion gate.
-- [ ] Train the path-dependent maximum-adverse-excursion classifier separately
-  from terminal direction; do not reuse terminal-return labels as “risk.”
+- [ ] 增加“收盘位置 × 成交量比率”的日级买卖盘代理。
+- [ ] 增加强收盘和上涨成交量参与条件。
+- [ ] 阻力突破后要求收盘承接和后续跟随。
+- [ ] 检测卖方衰竭：极端卖量但价格不再下跌。
+- [ ] 检测买方吸收：推断卖压很高但价格守住或回升。
+- [ ] 检测低量回调后确认更高低点。
+- [ ] 增加相对板块和 QQQ 的强度转正。
+- [ ] 建立独立 `demand_confirmation_score`。
+- [ ] 展示四种状态：健康上涨、双向放量争夺、派发风险、低参与盘整。
+- [ ] 分别及联合回测供给和需求分数。
 
-## P2 — Intraday trades and quotes
+## P2 — 训练反转与抛压模型
 
-- [ ] Preserve the provider-neutral broker interface for later full-market
-  trade and quote sources.
-- [ ] Infer aggressor side from trades and prevailing bid/ask quotes using a
-  tested Lee–Ready-style classifier.
-- [ ] Calculate buyer-initiated volume, seller-initiated volume, trade delta,
-  and cumulative volume delta.
-- [ ] Calculate top-of-book imbalance and order-flow imbalance from quote
-  updates, executions, additions, and cancellations.
-- [ ] Detect seller absorption: aggressive buying without corresponding
-  upward price progress.
-- [ ] Detect buyer absorption: aggressive selling without corresponding
-  downward price progress.
-- [ ] Add price impact per unit of signed flow and depth-normalized order-flow
-  imbalance.
-- [ ] Detect price/flow divergence, replenishing ask liquidity, and vanishing
-  bid liquidity.
-- [ ] Record coverage, venue, quote latency, correction/cancel handling, and
-  feed limitations with every intraday score.
-- [ ] Keep IEX-only or partial-market results visibly distinct from
-  consolidated-market results.
+- [x] 将已有向下和早期反转原子条件作为模型特征，不把手工分数当成概率。
+- [x] 分别训练未来 5 日和 20 日方向分类器；路径相关下行分类器作为独立后续任务。
+- [x] 比较原始 Ridge、纯规则、Logistic 和浅层 Boosting；纯规则向下覆盖未提升全股票池结果，不得解释为概率。
+- [x] 使用带标签净化边界的扩展窗口走步评估。
+- [ ] 报告精确率、召回率、平衡准确率、ROC AUC、PR AUC、覆盖率、收益、最大回撤和换手率。
+- [ ] 仅在样本量和正负类别均满足要求时校准概率。
+- [x] 单独研究高波动半导体和 AI 基础设施股票。
+- [x] 保留 NBIS 和 AMD 事件回归用例，但不得针对这些日期训练。
+- [x] 测量 QQQ、板块和个股一致或背离的增量价值。
+- [ ] 增加时间衰减及不依赖独热记忆的股票/板块层级，再重复固定晋级门槛。
+- [ ] 单独训练路径相关最大不利波动分类器，不得把终点收益标签复用为“风险”。
 
-## P3 — Data and interface extensions
+## P2 — 盘中逐笔与报价
 
-- [ ] Continue supporting free daily OHLCV as the minimum viable data layer.
-- [ ] Evaluate authenticated free intraday trades and quotes before purchasing
-  consolidated historical feeds.
-- [ ] Keep Alpaca, Futu, and future broker adapters behind the provider-neutral
-  market-data contracts.
-- [ ] Add a full-market TAQ-compatible adapter only when licensing and storage
-  requirements are defined.
-- [ ] Expose factor registration interfaces so new atomic evidence, scores,
-  explanations, and evaluation results can be added without chart rewrites.
+- [ ] 保留供应商无关的券商接口，以后接入全市场逐笔和报价。
+- [ ] 用经过测试的 Lee–Ready 类分类器，结合成交和当时买卖价推断主动方。
+- [ ] 计算主动买入量、主动卖出量、成交 Delta 和累计成交量 Delta。
+- [ ] 从报价更新、成交、挂单和撤单计算最优档不平衡与订单流不平衡。
+- [ ] 检测卖方吸收：主动买入很强但价格没有相应上涨。
+- [ ] 检测买方吸收：主动卖出很强但价格没有相应下跌。
+- [ ] 增加单位有符号流量的价格冲击和深度归一化订单流不平衡。
+- [ ] 检测价格/流量背离、卖盘流动性反复补充和买盘流动性消失。
+- [ ] 每个盘中分数记录覆盖率、场所、报价延迟、纠错/撤销处理和数据限制。
+- [ ] 明确区分仅 IEX/部分市场结果与全市场汇总结果。
 
-## Completed foundations
+## P3 — 数据与接口扩展
 
-- [x] Add VCP, momentum, reversal, market-context, and pressure foundations.
-- [x] Add prior-high breakout, descending-trendline breakout, and confirmed
-  higher-low events.
-- [x] Add the first bearish-turn risk score and expose its atomic conditions.
-- [x] Preserve raw forecast direction and direction-adjustment provenance.
-- [x] Add localized factor explanations and score panels.
-- [x] Add linked price/volume charts with locked historical inspection.
-- [x] Prevent prediction updates and pointer gestures from moving the chart
-  timeline.
-- [x] Write and commit the early-reversal-watch design specification.
+- [ ] 继续支持免费日线 OHLCV 作为最低数据层。
+- [ ] 购买全市场历史数据前，先评估需认证但免费的盘中成交和报价。
+- [ ] 将 Alpaca、Futu 和未来券商适配器保持在供应商无关的行情合约之后。
+- [ ] 只有明确许可和存储要求后，才增加全市场 TAQ 兼容适配器。
+- [ ] 暴露因子注册接口，使新增原子证据、分数、解释和评估结果无需重写图表。
+
+## P1 — 点时宏观环境风险（MACRO-001）
+
+- [ ] 扩充至少十年的股票、ETF 和宏观历史数据。
+- [ ] 建立包含 `available_at` 和历史版本信息的 FRED/ALFRED 点时数据层。
+- [ ] 计算利率压力、通胀/油价冲击、信用与流动性压力、市场避险压力。
+- [ ] 训练未来 5 日和 20 日回撤风险模型。
+- [ ] 估计半导体和软件板块的宏观敏感度。
+- [ ] 作为第四类风险来源接入 `forecast_decision_policy`。
+- [ ] 在界面展示宏观分数、状态、贡献因素及其对 Ridge 的影响。
+- [ ] 用扩展窗口、标签净化和禁入期完成严格点时走步回测。
+
+验收：所有输入仅在真实发布日期之后可用；独立展示 Ridge 原始值与宏观调整；对比 Ridge、现有风险策略及无技巧基线；不得通过把多数上涨降为中性获得表面改善；在多个宏观阶段以及半导体、软件分组报告校准、下跌召回、误报和回撤。
+
+## 已完成基础
+
+- [x] 增加 VCP、动量、反转、市场环境和压力分析基础。
+- [x] 增加突破前高、突破下降趋势线和确认更高低点事件。
+- [x] 增加第一版向下转折风险分及其原子条件。
+- [x] 保留原始预测方向和方向调整来源。
+- [x] 增加本地化因子解释和评分面板。
+- [x] 增加价格/成交量联动图和锁定历史日期检查。
+- [x] 防止预测更新和指针手势移动图表时间轴。
+- [x] 编写并提交向上早期反转观察设计。
+- [x] 计算只使用当时可见数据的近端压力区，展示上下沿、中心、距离、来源、强度和远端压力。
+- [x] 图表压力带只随锁定/解锁日期切换，不随自由悬停变化，也不参与价格轴自动缩放。
+
+## 维护规则
+
+- 新讨论事项先进入全局索引，再补充详细子任务。
+- 状态变化时同步更新索引和详细章节。
+- 实现完成不等于任务完成；通过验收后才能标记已完成。
+- 无样本外增益或被否决的实验保留结论，并移入研究记录。
+- 修改只触及相关任务，避免无关任务状态漂移。

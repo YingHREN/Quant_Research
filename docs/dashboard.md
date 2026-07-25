@@ -265,6 +265,22 @@ count, and the two source high dates. The price and volume panels reduce the
 chart canvas by a dedicated bottom gutter so both time axes remain readable
 instead of being clipped by the following panel.
 
+The chart also exposes a causal near-resistance zone for every observation
+date. Candidate levels include EMA20, SMA50, SMA200, the preceding 10-session
+high, confirmed swing highs, the then-known descending trendline, and the
+preceding 20-session pivot. Adjacent candidates within `0.5 * ATR20` are
+clustered; the nearest cluster strictly above the selected close becomes the
+zone. The selected-date details show its lower and upper edges, center,
+distance from the close, evidence sources, a 0–100 descriptive strength score,
+and an optional farther structural resistance.
+
+The orange zone layer uses the latest observation while the chart is unlocked
+and the locked observation while a historical date is pinned. Free hover never
+changes the layer. It uses only existing chart dates and opts out of price-axis
+autoscaling, so inspecting a different date cannot extend, shift, or rescale
+the timeline. These levels describe where supply may appear; they are not
+price targets or trading instructions.
+
 Historical model projections are loaded lazily. Hovering or locking a date
 without a forecast calls
 `GET /api/stocks/<ticker>/forecasts/<YYYY-MM-DD>` for that trading session
