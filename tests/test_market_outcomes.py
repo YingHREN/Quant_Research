@@ -39,6 +39,35 @@ def calibration_frame(size, classes):
 
 
 class MarketOutcomeTest(unittest.TestCase):
+    def test_empty_score_frame_returns_typed_empty_outcome_columns(self):
+        index = pd.MultiIndex.from_arrays(
+            ([], []),
+            names=("ticker", "observation_date"),
+        )
+        scores = pd.DataFrame(
+            columns=(
+                "reversal_opportunity_score",
+                "downside_risk_score",
+                "atr20_pct",
+            ),
+            index=index,
+        )
+
+        result = attach_market_outcomes(scores, {}, horizons=(5,))
+
+        self.assertTrue(result.empty)
+        for column in (
+            "opportunity_outcome_5",
+            "downside_risk_outcome_5",
+            "opportunity_label_end_date_5",
+            "downside_risk_label_end_date_5",
+        ):
+            self.assertIn(column, result)
+        self.assertEqual(
+            result.index.names,
+            ["ticker", "observation_date"],
+        )
+
     def test_opportunity_and_risk_labels_can_both_be_true(self):
         index = pd.bdate_range("2025-01-02", periods=70)
         close = pd.Series(100.0, index=index)

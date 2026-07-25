@@ -62,6 +62,27 @@ class FakeRepository:
 
 
 class MarketOverviewServiceTest(unittest.TestCase):
+    def test_proxy_only_sector_returns_empty_calibration_without_error(self):
+        histories = {
+            "QQQ": history(),
+            "SPY": history(),
+            "XLK": history(slope=0.25),
+        }
+        service = MarketOverviewService(FakeRepository(histories))
+
+        payload = service.build(
+            asof="2026-07-23",
+            horizon=5,
+            sector="technology",
+        )
+
+        self.assertEqual(payload["selected_group"]["key"], "technology")
+        self.assertEqual(payload["constituents"], [])
+        self.assertEqual(
+            payload["calibration"]["downside_risk"]["5"]["sample_count"],
+            0,
+        )
+
     def test_build_reads_one_snapshot_and_returns_daily_proxy(self):
         repository = FakeRepository(fixture_histories())
         service = MarketOverviewService(repository)

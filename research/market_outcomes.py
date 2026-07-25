@@ -41,6 +41,25 @@ def attach_market_outcomes(
     if len(set(checked_horizons)) != len(checked_horizons):
         raise ValueError("horizons must be unique")
     result = score_frame.copy(deep=True)
+    if result.empty:
+        for horizon in checked_horizons:
+            result[f"opportunity_outcome_{horizon}"] = pd.Series(
+                index=result.index,
+                dtype=float,
+            )
+            result[f"downside_risk_outcome_{horizon}"] = pd.Series(
+                index=result.index,
+                dtype=float,
+            )
+            result[f"opportunity_label_end_date_{horizon}"] = pd.Series(
+                index=result.index,
+                dtype="datetime64[ns]",
+            )
+            result[f"downside_risk_label_end_date_{horizon}"] = pd.Series(
+                index=result.index,
+                dtype="datetime64[ns]",
+            )
+        return result
     tickers = set(score_frame.index.get_level_values("ticker"))
     close_frames = {}
     for raw_ticker, history in dict(histories).items():
