@@ -36,7 +36,7 @@
 - Produces: `target_return_{horizon}` computed as future close divided by next-session open minus one
 - Consumes: existing `target_column`, `label_end_column`, and `SUPPORTED_HORIZONS`
 
-- [ ] **Step 1: Add failing executable-label tests**
+- [x] **Step 1: Add failing executable-label tests**
 
 Add a test using distinct open and close values:
 
@@ -54,7 +54,7 @@ self.assertEqual(aaa["label_end_date_5"].iloc[2], history.index[7])
 
 Also assert that the final `horizon` rows have no target/end date and the final row has no entry date.
 
-- [ ] **Step 2: Run the dataset tests and verify the old close-to-close assertion fails**
+- [x] **Step 2: Run the dataset tests and verify the old close-to-close assertion fails**
 
 Run:
 
@@ -65,7 +65,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: failure because `open`, `label_entry_date_5`, and executable target semantics are absent.
 
-- [ ] **Step 3: Add raw open and executable dates to the canonical dataset**
+- [x] **Step 3: Add raw open and executable dates to the canonical dataset**
 
 Implement:
 
@@ -96,7 +96,7 @@ Require both `open` and `close` in `_validate_feature_frame`. Validate ticker-lo
 
 Change `research.market_direction_model.attach_next_open_targets` to derive its executable columns from canonical `target_return_*`, `label_entry_date_*`, and `label_end_date_*`, preserving its public output column names for existing studies.
 
-- [ ] **Step 5: Run forecast dataset, research direction, Ridge, and service tests**
+- [x] **Step 5: Run forecast dataset, research direction, Ridge, and service tests**
 
 Run:
 
@@ -110,7 +110,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: all pass with executable targets.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/forecasts/dataset.py research/market_direction_model.py \
@@ -132,7 +132,7 @@ git commit -m "fix: use executable next-open forecast targets"
 - Produces: `always_up_direction_accuracy`, `balanced_accuracy`, `macro_f1`, `non_overlapping_sample_count`, `non_overlapping_direction_accuracy`, and `evidence_status`
 - Consumes: executable `target_return_*` from Task 1
 
-- [ ] **Step 1: Write failing metric-contract tests**
+- [x] **Step 1: Write failing metric-contract tests**
 
 Construct three-class observations and assert:
 
@@ -146,7 +146,7 @@ self.assertIn(result.evidence_status, {"unproven", "proven"})
 
 For unavailable evaluations assert `evidence_status == "not_precomputed"` and all performance metrics remain `None`.
 
-- [ ] **Step 2: Run evaluation tests and verify new fields are absent**
+- [x] **Step 2: Run evaluation tests and verify new fields are absent**
 
 Run:
 
@@ -157,7 +157,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: failing attribute and JSON contract assertions.
 
-- [ ] **Step 3: Extend and validate `ForecastEvaluation`**
+- [x] **Step 3: Extend and validate `ForecastEvaluation`**
 
 Add optional finite metrics plus a required evidence status:
 
@@ -169,7 +169,7 @@ EVIDENCE_STATUSES = frozenset(
 
 Serialize every new field in `to_dict`. Available evaluations use `proven` only when the model beats configured return-error baselines and the always-up direction baseline; otherwise use `unproven`.
 
-- [ ] **Step 4: Compute always-up and non-overlapping evidence**
+- [x] **Step 4: Compute always-up and non-overlapping evidence**
 
 In `walk_forward_evaluate`, store actual/predicted directions and calculate:
 
@@ -179,11 +179,11 @@ always_up_accuracy = float(np.mean(evaluated["actual_direction"] == "up"))
 
 For non-overlapping evidence, within each ticker keep rows whose observation-session ordinal is spaced by at least `horizon`; calculate its sample count and direction accuracy without changing the primary overlapping metrics.
 
-- [ ] **Step 5: Update typed unavailable evaluations**
+- [x] **Step 5: Update typed unavailable evaluations**
 
 Set `evidence_status="not_precomputed"` in service fallbacks. Use `insufficient` for evaluated datasets that lack enough usable predictions.
 
-- [ ] **Step 6: Run evaluation and service tests**
+- [x] **Step 6: Run evaluation and service tests**
 
 Run:
 
@@ -197,7 +197,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: all pass and JSON values are finite or `null`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/forecasts/base.py web/forecasts/evaluation.py \
@@ -219,7 +219,7 @@ git commit -m "feat: expose forecast baseline evidence"
 - Adds: `model_outputs` to each available `forecasts.by_date[date][horizon]`
 - Consumes: serialized forecast, same-date chart row, and horizon evaluation
 
-- [ ] **Step 1: Write failing pure-contract tests**
+- [x] **Step 1: Write failing pure-contract tests**
 
 Use a serialized forecast with a decision and a chart row containing structure fields. Assert exact groups:
 
@@ -237,7 +237,7 @@ self.assertNotIn("probability", outputs["downside"][0])
 
 Assert planned demand, macro, and intraday entries have `lifecycle="planned"`, `status="unavailable"`, and no fabricated score.
 
-- [ ] **Step 2: Run the new tests and verify the module is missing**
+- [x] **Step 2: Run the new tests and verify the module is missing**
 
 Run:
 
@@ -248,7 +248,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: import failure.
 
-- [ ] **Step 3: Implement a pure, JSON-safe assembler**
+- [x] **Step 3: Implement a pure, JSON-safe assembler**
 
 Define model entries with these required keys:
 
@@ -267,7 +267,7 @@ Define model entries with these required keys:
 
 Build separate entries for immediate eight-condition risk, individual remembered risk, group stress, slow decline, structural strengthening, early bullish reversal, strict VCP, tight platform, and final policy. Preserve actual conditions and memory age.
 
-- [ ] **Step 4: Attach outputs point-in-time in both stock endpoints**
+- [x] **Step 4: Attach outputs point-in-time in both stock endpoints**
 
 Add an app helper:
 
@@ -286,7 +286,7 @@ def _attach_model_outputs(forecast_payload, chart):
 
 Call it after target dates are attached for both full stock and historical-forecast responses.
 
-- [ ] **Step 5: Run contract and API tests**
+- [x] **Step 5: Run contract and API tests**
 
 Run:
 
@@ -298,7 +298,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: each forecast row has complete, same-date model groups.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/forecasts/model_outputs.py web/app.py \
@@ -321,7 +321,7 @@ git commit -m "feat: add unified model output contract"
 - Consumes: `forecast.model_outputs`, selected date, locale, request state
 - Does not consume or mutate chart/time-scale objects
 
-- [ ] **Step 1: Add failing JavaScript rendering tests**
+- [x] **Step 1: Add failing JavaScript rendering tests**
 
 Build a minimal DOM fixture and assert:
 
@@ -335,7 +335,7 @@ assert.match(container.textContent, /最终方向/);
 
 Also render `requestState: "loading"` and assert the stable shell remains.
 
-- [ ] **Step 2: Run JS tests and verify the renderer is missing**
+- [x] **Step 2: Run JS tests and verify the renderer is missing**
 
 Run:
 
@@ -345,7 +345,7 @@ node --test tests/model_outputs_runtime.mjs
 
 Expected: module import failure.
 
-- [ ] **Step 3: Add semantic panel markup**
+- [x] **Step 3: Add semantic panel markup**
 
 Insert below `crosshair-detail`:
 
@@ -359,15 +359,15 @@ Insert below `crosshair-detail`:
 
 The shell reserves a minimum height and uses four responsive groups. Cards use `<details>` for secondary evidence; final decision and abnormal risk cards are open by default.
 
-- [ ] **Step 4: Implement the renderer**
+- [x] **Step 4: Implement the renderer**
 
 Render cards from the contract without hard-coding financial calculations. Choose labels from `kind`, `lifecycle`, and translation keys. For `rule_score`, always append the rule-score disclaimer. Render actual conditions, threshold fields when supplied, unavailable reasons, versions, and timing.
 
-- [ ] **Step 5: Wire selected-date updates without chart mutation**
+- [x] **Step 5: Wire selected-date updates without chart mutation**
 
 Have `charts.js` call the renderer from the existing selected-date render path. Do not call `timeScale().fitContent`, `setVisibleLogicalRange`, `applyOptions` on price scales, or add model-output series.
 
-- [ ] **Step 6: Run JS and template tests**
+- [x] **Step 6: Run JS and template tests**
 
 Run:
 
@@ -379,7 +379,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: panel markup, cards, loading shell, and existing chart behavior pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add web/static/js/model_outputs.js web/static/js/charts.js \
@@ -399,11 +399,11 @@ git commit -m "feat: render model decision panel"
 - Produces: complete `modelOutput.*` and `model.*` keys in `zh-CN` and `en`
 - Consumes: backend `explanation_key` and `limitation_key`
 
-- [ ] **Step 1: Add failing locale-completeness tests**
+- [x] **Step 1: Add failing locale-completeness tests**
 
 Assert both locales include model names, kinds, lifecycles, timing, explanations, limitations, unavailable reasons, and the rule-score disclaimer.
 
-- [ ] **Step 2: Run i18n tests and verify keys are missing**
+- [x] **Step 2: Run i18n tests and verify keys are missing**
 
 Run:
 
@@ -415,7 +415,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: missing-key assertions fail.
 
-- [ ] **Step 3: Add concise bilingual copy**
+- [x] **Step 3: Add concise bilingual copy**
 
 Chinese examples:
 
@@ -428,7 +428,7 @@ Chinese examples:
 
 English copy must carry the same semantics and must not use “probability” for rule outputs.
 
-- [ ] **Step 4: Run locale and renderer tests**
+- [x] **Step 4: Run locale and renderer tests**
 
 Run:
 
@@ -440,7 +440,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: both locales pass without fallback keys.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/static/js/i18n.js tests/model_outputs_runtime.mjs \
@@ -461,7 +461,7 @@ git commit -m "feat: localize model output explanations"
 - Verifies: locked date is the sole source for the model panel until explicit unlock/relock
 - Verifies: panel rendering cannot mutate the chart range or series
 
-- [ ] **Step 1: Add lock-state regression tests**
+- [x] **Step 1: Add lock-state regression tests**
 
 Simulate:
 
@@ -473,11 +473,11 @@ Simulate:
 
 Assert the panel date remains `2026-06-26`. Then explicitly unlock and assert hover can update it.
 
-- [ ] **Step 2: Add chart-mutation spies**
+- [x] **Step 2: Add chart-mutation spies**
 
 Spy on `fitContent`, `setVisibleLogicalRange`, price-scale option changes, and series creation. Render loading, available, and unavailable model panels; assert no spy is called.
 
-- [ ] **Step 3: Run the regression tests**
+- [x] **Step 3: Run the regression tests**
 
 Run:
 
@@ -487,11 +487,11 @@ node --test tests/dashboard_runtime.mjs tests/model_outputs_runtime.mjs
 
 Expected: pass, or expose a concrete lock/layout bug before implementation changes.
 
-- [ ] **Step 4: Apply the smallest required lock/layout fix**
+- [x] **Step 4: Confirm the dedicated panel requires no additional chart lock/layout mutation**
 
 Keep `lockedDate` authoritative in the existing selection state. Pass resolved date and forecast to the renderer; never let the renderer subscribe directly to pointer events.
 
-- [ ] **Step 5: Re-run all frontend tests**
+- [x] **Step 5: Re-run all frontend tests**
 
 Run:
 
@@ -503,7 +503,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
 
 Expected: all frontend tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/dashboard_runtime.mjs tests/model_outputs_runtime.mjs \
@@ -522,7 +522,7 @@ git commit -m "test: protect model panel date and layout"
 - Verifies the complete first-stage deliverable
 - Produces final checked TODO items only for requirements proven by tests and manual QA
 
-- [ ] **Step 1: Run the complete automated suite**
+- [x] **Step 1: Run the complete automated suite**
 
 Run:
 
@@ -534,7 +534,7 @@ node --test tests/dashboard_runtime.mjs tests/model_outputs_runtime.mjs
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Start or restart the local service**
+- [x] **Step 2: Start or restart the local service**
 
 Run the repository's documented local server command and verify `/api/stocks/NBIS` returns `model_outputs` for available forecast dates.
 
