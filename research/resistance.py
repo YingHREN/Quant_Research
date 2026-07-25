@@ -1,4 +1,4 @@
-"""Causal near-resistance zones derived from daily price structure."""
+"""Causal near-resistance and near-support zones from daily price structure."""
 
 from __future__ import annotations
 
@@ -18,6 +18,13 @@ OUTPUT_KEYS = (
     "near_resistance_score",
     "near_resistance_sources",
     "far_resistance",
+    "near_support_lower",
+    "near_support_upper",
+    "near_support_mid",
+    "near_support_distance_pct",
+    "near_support_score",
+    "near_support_sources",
+    "near_support_state",
 )
 SOURCE_ORDER = (
     "ema20",
@@ -31,6 +38,14 @@ SOURCE_ORDER = (
 FAR_SOURCES = frozenset(
     ("confirmed_swing_high", "descending_trendline", "twenty_session_pivot")
 )
+SUPPORT_SOURCE_ORDER = (
+    "ema20",
+    "sma50",
+    "sma200",
+    "recent_low_10",
+    "confirmed_swing_low",
+    "breakout_retest_20",
+)
 
 
 def _empty_row() -> dict[str, object]:
@@ -42,6 +57,13 @@ def _empty_row() -> dict[str, object]:
         "near_resistance_score": None,
         "near_resistance_sources": [],
         "far_resistance": None,
+        "near_support_lower": None,
+        "near_support_upper": None,
+        "near_support_mid": None,
+        "near_support_distance_pct": None,
+        "near_support_score": None,
+        "near_support_sources": [],
+        "near_support_state": "unavailable",
     }
 
 
@@ -57,6 +79,13 @@ def _candidate(source: str, value, close: float):
         return None
     price = float(value)
     return (price, source) if price > close else None
+
+
+def _support_candidate(source: str, value, close: float):
+    if not _finite(value):
+        return None
+    price = float(value)
+    return (price, source) if 0.0 < price <= close else None
 
 
 def _clusters(candidates, maximum_gap: float):
@@ -83,6 +112,13 @@ def _resolved_swing_high(
     if timestamp not in close.index:
         return None
     return float(close.loc[timestamp])
+
+
+def _resolved_swing_low(reversal_row: Mapping[str, object]):
+    value = reversal_row.get("latest_confirmed_low_price")
+    if not _finite(value) or float(value) <= 0.0:
+        return None
+    return float(value)
 
 
 def _strength_score(
@@ -130,6 +166,53 @@ def _strength_score(
     )
 
 
+def _support_strength_score(
+    frame: pd.DataFrame,
+    position: int,
+    lower: float,
+    upper: float,
+    atr: float,
+    source_count: int,
+    volume_ratio: pd.Series,
+) -> int:
+    start = max(0, position - 19)
+    recent = frame.iloc[start : position + 1]
+    tolerance = atr * 0.25
+    tested = (recent["High"] >= lower - tolerance) & (
+        recent["Low"] <= upper + tolerance
+    )
+    accepted = tested & (recent["Close"] >= upper)
+
+    confirmation = False
+    for offset, was_accepted in enumerate(accepted):
+        if not bool(was_accepted):
+            continue
+        row_position = start + offset
+        source = frame.iloc[row_position]
+        candle_range = float(source["High"] - source["Low"])
+        lower_wick = float(
+            min(source["Open"], source["Close"]) - source["Low"]
+        )
+        wick_confirmed = (
+            candle_range > 0.0 and lower_wick / candle_range >= 0.4
+        )
+        row_volume_ratio = volume_ratio.iloc[row_position]
+        volume_confirmed = (
+            _finite(row_volume_ratio) and float(row_volume_ratio) >= 1.2
+        )
+        if wick_confirmed or volume_confirmed:
+            confirmation = True
+            break
+
+    return min(
+        100,
+        min(45, source_count * 15)
+        + min(30, int(tested.sum()) * 10)
+        + min(20, int(accepted.sum()) * 10)
+        + (5 if confirmation else 0),
+    )
+
+
 def build_near_resistance_rows(
     history: pd.DataFrame,
     reversal_rows: Sequence[Mapping[str, object]],
@@ -161,7 +244,9 @@ def build_near_resistance_rows(
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
     recent_high_10 = frame["High"].rolling(10).max()
+    recent_low_10 = frame["Low"].shift(1).rolling(10).min()
     prior_pivot = close.shift(1).rolling(20).max()
+    breakout_retest_20 = close.shift(1).rolling(20).max()
     volume_ratio = frame["Volume"] / frame["Volume"].rolling(20).mean()
 
     rows = []
@@ -200,61 +285,140 @@ def build_near_resistance_rows(
             ),
         )
         candidates = [candidate for candidate in raw_candidates if candidate]
-        if not candidates:
-            rows.append(row)
-            continue
+        if candidates:
+            groups = _clusters(candidates, atr * 0.5)
+            selected = groups[0]
+            prices = [price for price, _ in selected]
+            sources = [
+                key
+                for key in SOURCE_ORDER
+                if any(source_key == key for _, source_key in selected)
+            ]
+            if len(selected) == 1:
+                center = prices[0]
+                lower = max(current_close, center - atr * 0.15)
+                upper = center + atr * 0.15
+            else:
+                lower = min(prices)
+                upper = max(prices)
+            midpoint = (lower + upper) / 2.0
 
-        groups = _clusters(candidates, atr * 0.5)
-        selected = groups[0]
-        prices = [price for price, _ in selected]
-        sources = [
-            key
-            for key in SOURCE_ORDER
-            if any(source_key == key for _, source_key in selected)
-        ]
-        if len(selected) == 1:
-            center = prices[0]
-            lower = max(current_close, center - atr * 0.15)
-            upper = center + atr * 0.15
-        else:
-            lower = min(prices)
-            upper = max(prices)
-        midpoint = (lower + upper) / 2.0
+            far_candidates = [
+                price
+                for price, source_key in candidates
+                if source_key in FAR_SOURCES and price > upper + atr * 0.5
+            ]
+            far_resistance = min(far_candidates) if far_candidates else None
+            row.update(
+                {
+                    "near_resistance_lower": float(lower),
+                    "near_resistance_upper": float(upper),
+                    "near_resistance_mid": float(midpoint),
+                    "near_resistance_distance_pct": float(
+                        (lower / current_close - 1.0) * 100.0
+                    ),
+                    "near_resistance_score": _strength_score(
+                        frame,
+                        position,
+                        lower,
+                        upper,
+                        atr,
+                        len(sources),
+                        volume_ratio,
+                    ),
+                    "near_resistance_sources": sources,
+                    "far_resistance": (
+                        None if far_resistance is None else float(far_resistance)
+                    ),
+                }
+            )
 
-        far_candidates = [
-            price
-            for price, source_key in candidates
-            if source_key in FAR_SOURCES and price > upper + atr * 0.5
-        ]
-        far_resistance = min(far_candidates) if far_candidates else None
-        row.update(
-            {
-                "near_resistance_lower": float(lower),
-                "near_resistance_upper": float(upper),
-                "near_resistance_mid": float(midpoint),
-                "near_resistance_distance_pct": float(
-                    (lower / current_close - 1.0) * 100.0
-                ),
-                "near_resistance_score": _strength_score(
-                    frame,
-                    position,
-                    lower,
-                    upper,
-                    atr,
-                    len(sources),
-                    volume_ratio,
-                ),
-                "near_resistance_sources": sources,
-                "far_resistance": (
-                    None if far_resistance is None else float(far_resistance)
-                ),
-            }
+        raw_support_candidates = (
+            _support_candidate("ema20", ema20.iloc[position], current_close),
+            _support_candidate("sma50", sma50.iloc[position], current_close),
+            _support_candidate("sma200", sma200.iloc[position], current_close),
+            _support_candidate(
+                "recent_low_10",
+                recent_low_10.iloc[position],
+                current_close,
+            ),
+            _support_candidate(
+                "confirmed_swing_low",
+                _resolved_swing_low(reversal),
+                current_close,
+            ),
+            _support_candidate(
+                "breakout_retest_20",
+                breakout_retest_20.iloc[position],
+                current_close,
+            ),
         )
+        support_candidates = [
+            candidate for candidate in raw_support_candidates if candidate
+        ]
+        if support_candidates:
+            support_groups = _clusters(support_candidates, atr * 0.5)
+            selected_support = support_groups[-1]
+            support_prices = [price for price, _ in selected_support]
+            support_sources = [
+                key
+                for key in SUPPORT_SOURCE_ORDER
+                if any(
+                    source_key == key
+                    for _, source_key in selected_support
+                )
+            ]
+            if len(selected_support) == 1:
+                center = support_prices[0]
+                support_lower = max(0.0, center - atr * 0.15)
+                support_upper = min(
+                    current_close,
+                    center + atr * 0.15,
+                )
+            else:
+                support_lower = min(support_prices)
+                support_upper = max(support_prices)
+            support_mid = (support_lower + support_upper) / 2.0
+            if support_lower <= current_close <= support_upper:
+                support_state = "inside"
+            elif current_close - support_upper <= atr * 0.5:
+                support_state = "testing"
+            else:
+                support_state = "above"
+            row.update(
+                {
+                    "near_support_lower": float(support_lower),
+                    "near_support_upper": float(support_upper),
+                    "near_support_mid": float(support_mid),
+                    "near_support_distance_pct": float(
+                        max(
+                            0.0,
+                            (current_close / support_upper - 1.0) * 100.0,
+                        )
+                    ),
+                    "near_support_score": _support_strength_score(
+                        frame,
+                        position,
+                        support_lower,
+                        support_upper,
+                        atr,
+                        len(support_sources),
+                        volume_ratio,
+                    ),
+                    "near_support_sources": support_sources,
+                    "near_support_state": support_state,
+                }
+            )
         if not all(
             value is None or _finite(value)
             for key, value in row.items()
-            if key != "near_resistance_sources"
+            if key
+            not in {
+                "near_resistance_sources",
+                "near_support_sources",
+                "near_support_state",
+            }
         ):
-            raise ValueError("near-resistance output must be finite or null")
+            raise ValueError("structure-zone output must be finite or null")
         rows.append(row)
     return rows

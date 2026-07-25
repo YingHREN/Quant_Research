@@ -657,6 +657,9 @@ class WebApiTest(unittest.TestCase):
             "trendline_high_2_date",
             "latest_confirmed_high_date",
             "latest_confirmed_high_confirmed_date",
+            "latest_confirmed_low_date",
+            "latest_confirmed_low_price",
+            "latest_confirmed_low_confirmed_date",
             "higher_low_confirmed",
             "higher_low_previous_date",
             "higher_low_previous_price",
@@ -672,6 +675,13 @@ class WebApiTest(unittest.TestCase):
             "early_current_price_acceptance",
             "early_descending_trendline_proximity",
             "early_current_volume_support",
+            "near_support_lower",
+            "near_support_upper",
+            "near_support_mid",
+            "near_support_distance_pct",
+            "near_support_score",
+            "near_support_sources",
+            "near_support_state",
         )
         for row in payload["chart"]:
             for key in reversal_keys:
@@ -680,6 +690,22 @@ class WebApiTest(unittest.TestCase):
             self.assertIn(row["early_reversal_score"], (0, 25, 50, 75, 100))
             self.assertIsInstance(row["early_reversal_watch"], bool)
             self.assertIsInstance(row["early_reversal_conditions"], list)
+            self.assertIsInstance(row["near_support_sources"], list)
+            self.assertIn(
+                row["near_support_state"],
+                {"above", "testing", "inside", "unavailable"},
+            )
+            for key in (
+                "near_support_lower",
+                "near_support_upper",
+                "near_support_mid",
+                "near_support_distance_pct",
+                "near_support_score",
+            ):
+                self.assertTrue(
+                    row[key] is None or isinstance(row[key], (int, float)),
+                    key,
+                )
 
     def test_semiconductor_stock_chart_exposes_historical_risk_memory(self):
         repository = FakeRepository()

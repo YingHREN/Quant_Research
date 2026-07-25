@@ -243,6 +243,9 @@ class BuiltinFactorTest(unittest.TestCase):
                 "trendline_high_2_date",
                 "latest_confirmed_high_date",
                 "latest_confirmed_high_confirmed_date",
+                "latest_confirmed_low_date",
+                "latest_confirmed_low_price",
+                "latest_confirmed_low_confirmed_date",
                 "higher_low_confirmed",
                 "higher_low_previous_date",
                 "higher_low_previous_price",
@@ -265,6 +268,13 @@ class BuiltinFactorTest(unittest.TestCase):
                 "near_resistance_score",
                 "near_resistance_sources",
                 "far_resistance",
+                "near_support_lower",
+                "near_support_upper",
+                "near_support_mid",
+                "near_support_distance_pct",
+                "near_support_score",
+                "near_support_sources",
+                "near_support_state",
             },
         )
         self.assertEqual(last["time"], "2026-07-21")
@@ -297,6 +307,11 @@ class BuiltinFactorTest(unittest.TestCase):
         self.assertIsInstance(last["early_reversal_watch"], bool)
         self.assertIsInstance(last["early_reversal_conditions"], list)
         self.assertIsInstance(last["near_resistance_sources"], list)
+        self.assertIsInstance(last["near_support_sources"], list)
+        self.assertIn(
+            last["near_support_state"],
+            {"above", "testing", "inside", "unavailable"},
+        )
         for key in (
             "near_resistance_lower",
             "near_resistance_upper",
@@ -304,6 +319,17 @@ class BuiltinFactorTest(unittest.TestCase):
             "near_resistance_distance_pct",
             "near_resistance_score",
             "far_resistance",
+        ):
+            self.assertTrue(
+                last[key] is None or isinstance(last[key], (int, float)),
+                key,
+            )
+        for key in (
+            "near_support_lower",
+            "near_support_upper",
+            "near_support_mid",
+            "near_support_distance_pct",
+            "near_support_score",
         ):
             self.assertTrue(
                 last[key] is None or isinstance(last[key], (int, float)),

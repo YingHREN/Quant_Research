@@ -84,6 +84,50 @@ def nbis_shaped_history():
 
 
 class NearResistanceTest(unittest.TestCase):
+    def test_nearest_support_group_is_below_close_and_has_a_state(self):
+        history = frame_from_closes(list(range(61, 101)))
+
+        row = build_near_resistance_rows(
+            history,
+            build_reversal_rows(history),
+        )[-1]
+
+        self.assertLessEqual(row["near_support_lower"], row["near_support_mid"])
+        self.assertLessEqual(row["near_support_mid"], row["near_support_upper"])
+        self.assertLessEqual(row["near_support_upper"], history["Close"].iloc[-1])
+        self.assertIn(row["near_support_state"], {"above", "testing", "inside"})
+        self.assertGreaterEqual(row["near_support_score"], 0)
+        self.assertLessEqual(row["near_support_score"], 100)
+        self.assertTrue(row["near_support_sources"])
+
+    def test_observation_day_low_cannot_create_its_own_support(self):
+        history = frame_from_closes(list(range(130, 99, -1)))
+        history.loc[history.index[-1], "Low"] = 50.0
+
+        row = build_near_resistance_rows(
+            history,
+            build_reversal_rows(history),
+        )[-1]
+
+        self.assertEqual(row["near_support_sources"], ["recent_low_10"])
+        self.assertGreater(row["near_support_mid"], 80.0)
+
+    def test_short_history_returns_explicit_missing_support(self):
+        history = frame_from_closes([105, 104, 103, 102, 101])
+
+        row = build_near_resistance_rows(
+            history,
+            build_reversal_rows(history),
+        )[-1]
+
+        self.assertIsNone(row["near_support_lower"])
+        self.assertIsNone(row["near_support_upper"])
+        self.assertIsNone(row["near_support_mid"])
+        self.assertIsNone(row["near_support_distance_pct"])
+        self.assertIsNone(row["near_support_score"])
+        self.assertEqual(row["near_support_sources"], [])
+        self.assertEqual(row["near_support_state"], "unavailable")
+
     def test_nearest_candidate_cluster_beats_far_twenty_day_pivot(self):
         history = nbis_shaped_history()
 
@@ -121,18 +165,14 @@ class NearResistanceTest(unittest.TestCase):
             build_reversal_rows(history),
         )[-1]
 
-        self.assertEqual(
-            row,
-            {
-                "near_resistance_lower": None,
-                "near_resistance_upper": None,
-                "near_resistance_mid": None,
-                "near_resistance_distance_pct": None,
-                "near_resistance_score": None,
-                "near_resistance_sources": [],
-                "far_resistance": None,
-            },
-        )
+        self.assertIsNone(row["near_resistance_lower"])
+        self.assertIsNone(row["near_resistance_upper"])
+        self.assertIsNone(row["near_resistance_mid"])
+        self.assertIsNone(row["near_resistance_distance_pct"])
+        self.assertIsNone(row["near_resistance_score"])
+        self.assertEqual(row["near_resistance_sources"], [])
+        self.assertIsNone(row["far_resistance"])
+        self.assertLessEqual(row["near_support_upper"], history["Close"].iloc[-1])
 
     def test_appending_future_rows_does_not_change_historical_zones(self):
         prefix = nbis_shaped_history()
