@@ -249,11 +249,55 @@ class MarketContextTest(unittest.TestCase):
         )
         self.assertIn("reversal_opportunity_score", rows)
         self.assertIn("downside_risk_score", rows)
+        self.assertIn("downside_risk_state_score", rows)
+        self.assertIn("downside_risk_state", rows)
+        self.assertIn("downside_risk_memory_age_sessions", rows)
         self.assertIn("atr20_pct", rows)
+        available = rows["downside_risk_score"].notna()
+        self.assertTrue(
+            (
+                rows.loc[available, "downside_risk_state_score"]
+                >= rows.loc[available, "downside_risk_score"]
+            ).all()
+        )
         self.assertEqual(
             rows.index.get_level_values("observation_date").max(),
             histories["AMD"].index.max(),
         )
+
+    def test_snapshot_exposes_raw_and_remembered_bearish_turn_risk(self):
+        histories = {
+            "QQQ": rising(),
+            "SPY": rising(),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "AMD": rising(slope=0.4),
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("semiconductor"),
+            5,
+        )
+
+        risk = result["constituents"][0]["downside_risk"]
+        self.assertEqual(risk["raw_score"], risk["score"])
+        self.assertGreaterEqual(risk["state_score"], risk["raw_score"])
+        self.assertIn(
+            risk["state"],
+            {"new", "persistent", "fading", "inactive"},
+        )
+        self.assertEqual(risk["memory_half_life_sessions"], 5)
+        self.assertEqual(risk["memory_window_sessions"], 10)
+        self.assertEqual(
+            risk["model_key"],
+            "bearish_turn_risk_rules_v2",
+        )
+
+        group_risk = result["selected_group"]["downside_risk"]
+        self.assertIn("raw_score", group_risk)
+        self.assertIn("state_score", group_risk)
 
     def test_group_score_history_does_not_rebuild_snapshot_scores_per_row(self):
         histories = {

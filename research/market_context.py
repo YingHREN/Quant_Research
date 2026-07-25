@@ -11,6 +11,12 @@ import pandas as pd
 from research.market_pressure import Evidence, build_pressure_rows
 from research.early_reversal import build_early_reversal_rows
 from research.reversal import build_reversal_rows
+from research.risk_memory import (
+    RISK_MEMORY_ACTIVE_THRESHOLD,
+    RISK_MEMORY_HALF_LIFE_SESSIONS,
+    RISK_MEMORY_WINDOW_SESSIONS,
+    build_risk_memory_state,
+)
 from web.market_groups import (
     REFERENCE_TICKERS,
     SECTOR_ETFS,
@@ -179,10 +185,36 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
         for row in constituents
         if row["downside_risk"]["score"] is not None
     ]
+    risk_state_scores = [
+        row["downside_risk"]["state_score"]
+        for row in constituents
+        if row["downside_risk"]["state_score"] is not None
+    ]
     selected_returns = {
         str(window): _return_at(sector, common_asof, window)
         for window in (1, 5, 20, 60)
     }
+    group_raw_risk = _aggregate_score(risk_scores, benchmark_coverage)
+    group_state_risk = _aggregate_score(
+        risk_state_scores,
+        benchmark_coverage,
+    )
+    group_state_risk.update(
+        {
+            "raw_score": group_raw_risk["score"],
+            "state_score": group_state_risk["score"],
+            "state": _aggregate_risk_state(
+                constituents,
+                group_state_risk["score"],
+                group_raw_risk["score"],
+            ),
+            "memory_half_life_sessions": (
+                RISK_MEMORY_HALF_LIFE_SESSIONS
+            ),
+            "memory_window_sessions": RISK_MEMORY_WINDOW_SESSIONS,
+            "model_key": "bearish_turn_risk_rules_v2",
+        }
+    )
     selected_group = {
         "key": group.key,
         "label_key": group.label_key,
@@ -196,7 +228,7 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
             opportunity_scores,
             benchmark_coverage,
         ),
-        "downside_risk": _aggregate_score(risk_scores, benchmark_coverage),
+        "downside_risk": group_state_risk,
     }
     return {
         "asof": _iso(common_asof),
@@ -399,6 +431,9 @@ def build_group_score_frame(histories, group: MarketGroup) -> pd.DataFrame:
                 "reversal_opportunity_coverage",
                 "downside_risk_score",
                 "downside_risk_coverage",
+                "downside_risk_state_score",
+                "downside_risk_state",
+                "downside_risk_memory_age_sessions",
                 "atr20_pct",
             )
         )
@@ -592,7 +627,7 @@ def _historical_stock_score_frame(
         required_available,
     )
     close = item.history["Close"].replace(0.0, np.nan).astype(float)
-    return pd.DataFrame(
+    result = pd.DataFrame(
         {
             "reversal_opportunity_score": opportunity,
             "reversal_opportunity_coverage": opportunity_coverage,
@@ -602,6 +637,13 @@ def _historical_stock_score_frame(
         },
         index=index,
     )
+    memory = build_risk_memory_state(result["downside_risk_score"])
+    result["downside_risk_state_score"] = memory["state_score"]
+    result["downside_risk_state"] = memory["state"]
+    result["downside_risk_memory_age_sessions"] = memory[
+        "memory_age_sessions"
+    ]
+    return result
 
 
 def _boolean_rule(values, weight):
@@ -880,6 +922,10 @@ def _market_score(prepared, sector, asof):
 
 def _constituent_payloads(prepared, group, sector, asof):
     rows = []
+    required_available = (
+        sector is not None and not sector.empty and "QQQ" in prepared
+    )
+    common = _historical_common_evidence(prepared.get("QQQ"), sector)
     for ticker in (*group.constituent_tickers, *group.related_tickers):
         item = prepared.get(ticker)
         if item is None:
@@ -890,10 +936,15 @@ def _constituent_payloads(prepared, group, sector, asof):
             observation_date,
             prepared,
             sector,
-            required_available=(
-                sector is not None and not sector.empty and "QQQ" in prepared
-            ),
+            required_available=required_available,
         )
+        historical_scores = _historical_stock_score_frame(
+            item,
+            sector,
+            common,
+            required_available=required_available,
+        )
+        memory_row = historical_scores.loc[:observation_date].iloc[-1]
         pressure = item.pressure.loc[:observation_date].iloc[-1]
         relative_strength = _stock_sector_relative_return(
             item.history["Close"],
@@ -902,6 +953,24 @@ def _constituent_payloads(prepared, group, sector, asof):
             20,
         )
         signed = _finite_or_none(pressure["signed_volume_proxy"])
+        risk_payload = risk.to_dict()
+        risk_payload.update(
+            {
+                "raw_score": risk.score,
+                "state_score": _finite_or_none(
+                    memory_row["downside_risk_state_score"]
+                ),
+                "state": str(memory_row["downside_risk_state"]),
+                "memory_age_sessions": _integer_or_none(
+                    memory_row["downside_risk_memory_age_sessions"]
+                ),
+                "memory_half_life_sessions": (
+                    RISK_MEMORY_HALF_LIFE_SESSIONS
+                ),
+                "memory_window_sessions": RISK_MEMORY_WINDOW_SESSIONS,
+                "model_key": "bearish_turn_risk_rules_v2",
+            }
+        )
         rows.append(
             {
                 "ticker": ticker,
@@ -922,7 +991,7 @@ def _constituent_payloads(prepared, group, sector, asof):
                     else "balanced"
                 ),
                 "reversal_opportunity": opportunity.to_dict(),
-                "downside_risk": risk.to_dict(),
+                "downside_risk": risk_payload,
             }
         )
     return rows
@@ -1565,6 +1634,24 @@ def _aggregate_score(scores, coverage):
     }
 
 
+def _aggregate_risk_state(constituents, state_score, raw_score):
+    if state_score is None:
+        return "unavailable"
+    if state_score < RISK_MEMORY_ACTIVE_THRESHOLD:
+        return "inactive"
+    states = {
+        row["downside_risk"].get("state")
+        for row in constituents
+    }
+    if "new" in states:
+        return "new"
+    if "persistent" in states:
+        return "persistent"
+    if raw_score is not None and state_score > raw_score:
+        return "fading"
+    return "persistent"
+
+
 def _evidence_dict(item):
     return {
         "key": item.key,
@@ -1594,6 +1681,11 @@ def _finite_or_none(value):
     except (TypeError, ValueError):
         return None
     return checked if np.isfinite(checked) else None
+
+
+def _integer_or_none(value):
+    checked = _finite_or_none(value)
+    return None if checked is None else int(checked)
 
 
 def _json_scalar(value):
