@@ -80,6 +80,13 @@ const forecast = {
       predicted_return: 0.1269,
       direction: "up",
       evidence_status: "unproven",
+      training_sample_count: 90076,
+      training_cutoff: "2026-06-30",
+      direction_accuracy: 0.48,
+      always_up_direction_accuracy: 0.61,
+      balanced_accuracy: 0.46,
+      non_overlapping_sample_count: 120,
+      non_overlapping_direction_accuracy: 0.47,
     }],
     downside: [{
       ...identity("bearish_turn_immediate_v1", "model.immediateRisk.name", "rule_score"),
@@ -122,6 +129,9 @@ assert.match(zh, /最终方向/);
 assert.match(zh, /下跌/);
 assert.match(zh, /规则分数，不是概率/);
 assert.match(zh, /计划中/);
+assert.match(zh, /90,076/);
+assert.match(zh, /始终上涨基线 \+61/);
+assert.match(zh, /阈值 70/);
 
 renderModelOutputs(container, {
   forecast,

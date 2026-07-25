@@ -65,7 +65,10 @@ class ModelOutputContractTest(unittest.TestCase):
     def test_groups_models_by_semantics_without_rule_probabilities(self):
         forecast = forecast_payload()
         row = chart_row()
-        evaluation = {"evidence_status": "unproven"}
+        evaluation = {
+            "evidence_status": "unproven",
+            "always_up_direction_accuracy": 0.61,
+        }
         original = copy.deepcopy((forecast, row, evaluation))
 
         outputs = build_model_outputs(forecast, row, evaluation)
@@ -75,6 +78,10 @@ class ModelOutputContractTest(unittest.TestCase):
             {"primary", "downside", "bullish_structure", "decision"},
         )
         self.assertEqual(outputs["primary"][0]["kind"], "statistical_forecast")
+        self.assertEqual(
+            outputs["primary"][0]["always_up_direction_accuracy"],
+            evaluation["always_up_direction_accuracy"],
+        )
         self.assertEqual(outputs["primary"][0]["timing"], "next_session_open")
         self.assertEqual(outputs["primary"][0]["evidence_status"], "unproven")
         self.assertEqual(

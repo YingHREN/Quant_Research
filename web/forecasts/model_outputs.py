@@ -89,6 +89,18 @@ def _primary_output(forecast, evaluation):
         "confidence_status": forecast.get("confidence_status"),
         "confidence_reason": forecast.get("confidence_reason"),
         "evidence_status": evaluation.get("evidence_status", "not_precomputed"),
+        "direction_accuracy": json_safe(evaluation.get("direction_accuracy")),
+        "always_up_direction_accuracy": json_safe(
+            evaluation.get("always_up_direction_accuracy")
+        ),
+        "balanced_accuracy": json_safe(evaluation.get("balanced_accuracy")),
+        "macro_f1": json_safe(evaluation.get("macro_f1")),
+        "non_overlapping_sample_count": evaluation.get(
+            "non_overlapping_sample_count"
+        ),
+        "non_overlapping_direction_accuracy": json_safe(
+            evaluation.get("non_overlapping_direction_accuracy")
+        ),
         "unavailable_reason": forecast.get("unavailable_reason"),
     }
 

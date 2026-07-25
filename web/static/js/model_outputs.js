@@ -34,6 +34,12 @@ function percent(value, locale) {
   }).format(number);
 }
 
+function number(value, locale) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(numeric);
+}
+
 function scoreText(model, locale) {
   if (model.score === null || model.score === undefined) return "—";
   const maximum = model.maximum_score ?? 100;
@@ -121,6 +127,83 @@ function modelCard(model, locale, { open = false } = {}) {
     values.append(labeledValue(
       t("modelOutput.field.score", {}, locale),
       scoreText(model, locale),
+    ));
+  }
+  if (model.threshold !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.threshold", {}, locale),
+      number(model.threshold, locale),
+    ));
+  }
+  if (model.horizon_sessions !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.horizon", {}, locale),
+      t("forecast.value.horizon", { sessions: model.horizon_sessions }, locale),
+    ));
+  }
+  if (model.training_sample_count !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.trainingSamples", {}, locale),
+      number(model.training_sample_count, locale),
+    ));
+  }
+  if (model.training_cutoff !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.trainingCutoff", {}, locale),
+      model.training_cutoff || "—",
+    ));
+  }
+  if (model.evidence_status !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.evidenceStatus", {}, locale),
+      enumLabel("modelOutput.evidence", model.evidence_status, locale),
+    ));
+  }
+  if (model.direction_accuracy !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.directionAccuracy", {}, locale),
+      percent(model.direction_accuracy, locale),
+    ));
+  }
+  if (model.always_up_direction_accuracy !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.alwaysUpBaseline", {}, locale),
+      percent(model.always_up_direction_accuracy, locale),
+    ));
+  }
+  if (model.balanced_accuracy !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.balancedAccuracy", {}, locale),
+      percent(model.balanced_accuracy, locale),
+    ));
+  }
+  if (model.non_overlapping_sample_count !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.nonOverlappingEvidence", {}, locale),
+      t("modelOutput.value.nonOverlappingEvidence", {
+        accuracy: percent(model.non_overlapping_direction_accuracy, locale),
+        samples: number(model.non_overlapping_sample_count, locale),
+      }, locale),
+    ));
+  }
+  if (model.state !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.state", {}, locale),
+      enumLabel("forecast.persistentRiskState", model.state, locale),
+    ));
+  }
+  if (model.memory_age_sessions !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.memoryAge", {}, locale),
+      t("modelOutput.value.sessions", {
+        sessions: model.memory_age_sessions ?? "—",
+      }, locale),
+    ));
+  }
+  if (model.risk_state !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.riskState", {}, locale),
+      enumLabel("forecast.riskState", model.risk_state, locale),
     ));
   }
   values.append(labeledValue(
