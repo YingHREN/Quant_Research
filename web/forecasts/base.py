@@ -21,6 +21,9 @@ CONFIDENCE_STATUSES = frozenset(("calibrated", "uncalibrated", "unavailable"))
 CONFIDENCE_REASONS = frozenset(
     ("insufficient_calibration_samples", "calibration_requires_both_classes")
 )
+EVIDENCE_STATUSES = frozenset(
+    ("proven", "unproven", "insufficient", "not_precomputed")
+)
 
 
 class UnavailableReason(str, Enum):
@@ -237,6 +240,12 @@ class ForecastEvaluation:
     model_key: str = ""
     model_version: str = ""
     unavailable_reason: UnavailableReason | EvaluationUnavailableReason | str | None = None
+    always_up_direction_accuracy: float | None = None
+    balanced_accuracy: float | None = None
+    macro_f1: float | None = None
+    non_overlapping_sample_count: int = 0
+    non_overlapping_direction_accuracy: float | None = None
+    evidence_status: str = "not_precomputed"
 
     def __post_init__(self):
         model_key = _required_string(self.model_key, "model_key")
@@ -249,6 +258,14 @@ class ForecastEvaluation:
         if int(self.sample_count) < 0:
             raise ValueError("sample_count must not be negative")
         reason = _normalize_evaluation_reason(self.unavailable_reason)
+        if self.evidence_status not in EVIDENCE_STATUSES:
+            raise ValueError("invalid evidence_status")
+        if isinstance(self.non_overlapping_sample_count, bool) or not isinstance(
+            self.non_overlapping_sample_count, Integral
+        ):
+            raise TypeError("non_overlapping_sample_count must be an integer")
+        if int(self.non_overlapping_sample_count) < 0:
+            raise ValueError("non_overlapping_sample_count must not be negative")
         if not isinstance(self.signal_bucket_returns, Mapping):
             raise TypeError("signal_bucket_returns must be a mapping")
         buckets = MappingProxyType(
@@ -269,6 +286,10 @@ class ForecastEvaluation:
                 "zero_return_mae",
                 "historical_mean_mae",
                 "rank_ic",
+                "always_up_direction_accuracy",
+                "balanced_accuracy",
+                "macro_f1",
+                "non_overlapping_direction_accuracy",
             )
         }
         evaluation_start = _optional_date(self.evaluation_start, "evaluation_start")
@@ -316,6 +337,11 @@ class ForecastEvaluation:
         object.__setattr__(self, "model_version", model_version)
         object.__setattr__(self, "horizon_sessions", int(self.horizon_sessions))
         object.__setattr__(self, "sample_count", int(self.sample_count))
+        object.__setattr__(
+            self,
+            "non_overlapping_sample_count",
+            int(self.non_overlapping_sample_count),
+        )
         for name, value in metrics.items():
             object.__setattr__(self, name, value)
         object.__setattr__(self, "evaluation_start", evaluation_start)
@@ -334,6 +360,16 @@ class ForecastEvaluation:
             "direction_accuracy": json_safe(self.direction_accuracy),
             "zero_return_mae": json_safe(self.zero_return_mae),
             "historical_mean_mae": json_safe(self.historical_mean_mae),
+            "always_up_direction_accuracy": json_safe(
+                self.always_up_direction_accuracy
+            ),
+            "balanced_accuracy": json_safe(self.balanced_accuracy),
+            "macro_f1": json_safe(self.macro_f1),
+            "non_overlapping_sample_count": self.non_overlapping_sample_count,
+            "non_overlapping_direction_accuracy": json_safe(
+                self.non_overlapping_direction_accuracy
+            ),
+            "evidence_status": self.evidence_status,
             "rank_ic": json_safe(self.rank_ic),
             "signal_bucket_returns": json_safe(dict(self.signal_bucket_returns)),
             "evaluation_start": iso_date(self.evaluation_start),

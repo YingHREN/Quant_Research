@@ -23,6 +23,7 @@ from web.forecasts.ridge import direction_for_return
 CROSS_SECTION_MINIMUM = 5
 SIGNAL_BUCKETS = ("down", "neutral", "up")
 CALIBRATION_MINIMUM_SAMPLES = 100
+EVIDENCE_MINIMUM_SAMPLES = 100
 CALIBRATION_INSUFFICIENT_SAMPLES = "insufficient_calibration_samples"
 CALIBRATION_INSUFFICIENT_CLASSES = "calibration_requires_both_classes"
 
@@ -117,18 +118,47 @@ def walk_forward_evaluate(frame, horizon, provider):
     residual = prediction - actual
     historical_mean = evaluated["historical_mean"].to_numpy(dtype=float)
     adequate = _adequate_cross_sections(evaluated)
+    direction_accuracy = float(
+        np.mean(evaluated["predicted_direction"] == evaluated["actual_direction"])
+    )
+    always_up_accuracy = float(np.mean(evaluated["actual_direction"] == "up"))
+    balanced_accuracy, macro_f1 = _classification_metrics(evaluated)
+    non_overlapping = _non_overlapping_rows(evaluated, checked_horizon)
+    non_overlapping_accuracy = float(
+        np.mean(
+            non_overlapping["predicted_direction"]
+            == non_overlapping["actual_direction"]
+        )
+    )
+    mae = float(np.mean(np.abs(residual)))
+    zero_return_mae = float(np.mean(np.abs(actual)))
+    historical_mean_mae = float(np.mean(np.abs(historical_mean - actual)))
+    if len(evaluated) < EVIDENCE_MINIMUM_SAMPLES:
+        evidence_status = "insufficient"
+    elif (
+        mae < zero_return_mae
+        and mae < historical_mean_mae
+        and direction_accuracy > always_up_accuracy
+    ):
+        evidence_status = "proven"
+    else:
+        evidence_status = "unproven"
 
     return ForecastEvaluation(
         horizon_sessions=checked_horizon,
         sample_count=len(evaluated),
         coverage=len(evaluated) / len(candidates),
-        mae=float(np.mean(np.abs(residual))),
+        mae=mae,
         rmse=float(math.sqrt(float(np.mean(residual**2)))),
-        direction_accuracy=float(
-            np.mean(evaluated["predicted_direction"] == evaluated["actual_direction"])
-        ),
-        zero_return_mae=float(np.mean(np.abs(actual))),
-        historical_mean_mae=float(np.mean(np.abs(historical_mean - actual))),
+        direction_accuracy=direction_accuracy,
+        zero_return_mae=zero_return_mae,
+        historical_mean_mae=historical_mean_mae,
+        always_up_direction_accuracy=always_up_accuracy,
+        balanced_accuracy=balanced_accuracy,
+        macro_f1=macro_f1,
+        non_overlapping_sample_count=len(non_overlapping),
+        non_overlapping_direction_accuracy=non_overlapping_accuracy,
+        evidence_status=evidence_status,
         rank_ic=_mean_cross_sectional_rank_ic(adequate),
         signal_bucket_returns=_signal_bucket_returns(adequate),
         evaluation_start=evaluated["asof_date"].min(),
@@ -234,6 +264,43 @@ def _adequate_cross_sections(evaluated):
     return groups
 
 
+def _classification_metrics(evaluated):
+    actual = evaluated["actual_direction"].astype(str)
+    predicted = evaluated["predicted_direction"].astype(str)
+    recalls = []
+    f1_values = []
+    for label in SIGNAL_BUCKETS:
+        actual_label = actual == label
+        predicted_label = predicted == label
+        true_positive = int((actual_label & predicted_label).sum())
+        false_positive = int((~actual_label & predicted_label).sum())
+        false_negative = int((actual_label & ~predicted_label).sum())
+        if actual_label.any():
+            recalls.append(true_positive / int(actual_label.sum()))
+        denominator = 2 * true_positive + false_positive + false_negative
+        if actual_label.any() or predicted_label.any():
+            f1_values.append(
+                0.0 if denominator == 0 else 2 * true_positive / denominator
+            )
+    return float(np.mean(recalls)), float(np.mean(f1_values))
+
+
+def _non_overlapping_rows(evaluated, horizon):
+    session_ordinals = {
+        date: position
+        for position, date in enumerate(sorted(evaluated["asof_date"].unique()))
+    }
+    selected = []
+    for _, group in evaluated.groupby("ticker", sort=False):
+        last_ordinal = None
+        for index, row in group.sort_values("asof_date").iterrows():
+            ordinal = session_ordinals[row["asof_date"]]
+            if last_ordinal is None or ordinal - last_ordinal >= horizon:
+                selected.append(index)
+                last_ordinal = ordinal
+    return evaluated.loc[selected]
+
+
 def _mean_cross_sectional_rank_ic(groups):
     correlations = []
     for group in groups:
@@ -290,6 +357,7 @@ def _unavailable_evaluation(
         model_key=model_key,
         model_version=model_version,
         unavailable_reason=reason,
+        evidence_status="insufficient",
     )
 
 
