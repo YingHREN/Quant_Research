@@ -93,6 +93,13 @@ def local_tickers():
     return ts
 
 
+def update_tickers(existing):
+    """Include model reference series even before they exist in the database."""
+    from web.market_groups import REFERENCE_TICKERS
+
+    return sorted(set(existing).union(REFERENCE_TICKERS))
+
+
 def update():
     """增量: 对库中每只票, 联网抓最新缺失的K线追加(只补增量, 不重拉全history)。
     受限流影响时用重试; 撞墙就停(已抓的保留)。"""
@@ -100,7 +107,7 @@ def update():
     from data.fetch import fetch
     import time
     con = sqlite3.connect(DB)
-    tickers = local_tickers()
+    tickers = update_tickers(local_tickers())
     updated = 0
     for t in tickers:
         cur_max = con.execute("SELECT MAX(date) FROM prices WHERE ticker=?", (t,)).fetchone()[0]
