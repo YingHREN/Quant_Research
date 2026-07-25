@@ -5,6 +5,7 @@ from web.market_groups import (
     REFERENCE_TICKERS,
     market_group,
     market_group_for_ticker,
+    modeled_market_groups,
 )
 
 
@@ -49,3 +50,9 @@ class MarketGroupTest(unittest.TestCase):
         self.assertEqual(technology.benchmark_tickers, ("XLK",))
         self.assertEqual(technology.constituent_tickers, ())
         self.assertEqual(technology.related_tickers, ())
+
+    def test_modeled_groups_require_explicit_constituents(self):
+        self.assertEqual(
+            tuple(group.key for group in modeled_market_groups()),
+            ("semiconductor",),
+        )

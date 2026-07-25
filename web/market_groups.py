@@ -110,3 +110,12 @@ def market_group_for_ticker(ticker: str) -> MarketGroup | None:
         ):
             return group
     return None
+
+
+def modeled_market_groups() -> tuple[MarketGroup, ...]:
+    """Return groups with explicit stock membership for model context."""
+    return tuple(
+        group
+        for group in MARKET_GROUPS.values()
+        if group.constituent_tickers or group.related_tickers
+    )

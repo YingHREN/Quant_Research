@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 import math
 from numbers import Integral, Real
 
+import pandas as pd
+
+from research.market_context import build_group_score_frame
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
+from web.market_groups import modeled_market_groups
 
 
 DECISION_RISK_STATES = frozenset(
@@ -18,6 +23,12 @@ DECISION_ACTIONS = frozenset(
 )
 PERSISTENT_RISK_STATES = frozenset(
     ("new", "persistent", "fading", "inactive", "unavailable")
+)
+RISK_CONTEXT_COLUMNS = (
+    "persistent_risk_raw_score",
+    "persistent_risk_score",
+    "persistent_risk_state",
+    "persistent_risk_age_sessions",
 )
 
 
@@ -102,6 +113,63 @@ class ForecastDecision:
             "persistent_risk_age_sessions": self.persistent_risk_age_sessions,
             "immediate_risk_score": json_safe(self.immediate_risk_score),
         }
+
+
+def build_forecast_risk_context(
+    histories: Mapping[str, pd.DataFrame],
+) -> pd.DataFrame:
+    """Return causal remembered-risk rows for explicitly modeled tickers."""
+    if not isinstance(histories, Mapping):
+        raise TypeError("histories must be a mapping")
+    frames = []
+    seen_tickers = set()
+    for group in modeled_market_groups():
+        mapped = tuple(
+            dict.fromkeys(
+                (*group.constituent_tickers, *group.related_tickers)
+            )
+        )
+        duplicates = seen_tickers.intersection(mapped)
+        if duplicates:
+            raise ValueError(
+                "duplicate modeled ticker membership: "
+                + ", ".join(sorted(duplicates))
+            )
+        seen_tickers.update(mapped)
+        scores = build_group_score_frame(histories, group)
+        if scores.empty:
+            continue
+        present = scores.index.get_level_values("ticker").isin(mapped)
+        selected = scores.loc[
+            present,
+            [
+                "downside_risk_score",
+                "downside_risk_state_score",
+                "downside_risk_state",
+                "downside_risk_memory_age_sessions",
+            ],
+        ].rename(
+            columns={
+                "downside_risk_score": "persistent_risk_raw_score",
+                "downside_risk_state_score": "persistent_risk_score",
+                "downside_risk_state": "persistent_risk_state",
+                "downside_risk_memory_age_sessions": (
+                    "persistent_risk_age_sessions"
+                ),
+            }
+        )
+        if not selected.empty:
+            frames.append(selected)
+    if not frames:
+        index = pd.MultiIndex.from_arrays(
+            [pd.Index([], dtype=object), pd.DatetimeIndex([])],
+            names=("ticker", "observation_date"),
+        )
+        return pd.DataFrame(columns=RISK_CONTEXT_COLUMNS, index=index)
+    result = pd.concat(frames).sort_index()
+    if result.index.has_duplicates:
+        raise ValueError("duplicate forecast risk context keys")
+    return result.loc[:, RISK_CONTEXT_COLUMNS]
 
 
 def _required_string(value, name):
