@@ -47,11 +47,11 @@ market-context, and data-source work discussed for the local dashboard.
 
 ## P1 — Separate forecast and risk semantics
 
-- [ ] Display the raw Ridge return forecast independently from short-term
+- [x] Display the raw Ridge return forecast independently from short-term
   bearish-turn risk.
-- [ ] Do not silently replace a positive predicted return with a negative
+- [x] Do not silently replace a positive predicted return with a negative
   direction label.
-- [ ] Add a combined state such as “medium-term positive, short-term high
+- [x] Add a combined state such as “medium-term positive, short-term high
   risk” without claiming a probability.
 - [ ] Label every signal as intraday, close-confirmed, or next-session
   executable.

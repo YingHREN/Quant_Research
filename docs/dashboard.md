@@ -333,6 +333,35 @@ persisted calibration history, so a predicted return and direction can be
 available while probability remains absent. Never derive a probability by
 rescaling the raw return.
 
+### Unified risk decision
+
+The Ridge return and `raw_direction` remain immutable model outputs. Every
+available forecast also carries a nested, versioned `decision` record. The
+decision layer combines the same-date eight-condition bearish overlay with
+the point-in-time 5–10-session remembered downside-risk state:
+
+```text
+immediate >= 70                         -> override to down
+persistent >= 30 and immediate >= 40  -> override to down
+persistent >= 30                       -> downgrade raw up to neutral
+persistent >= 20                       -> watch; retain raw direction
+otherwise                              -> retain raw direction
+```
+
+The displayed `direction` is the final decision, while `raw_direction` and
+`predicted_return` continue to show exactly what Ridge produced. The decision
+also reports its action, stable reason codes, policy identity, raw and
+remembered risk scores, memory state, and memory age. Scores are rule scores,
+not calibrated probabilities. Tickers without an explicit market-group
+mapping report persistent risk as unavailable; the service does not infer or
+fabricate a sector.
+
+`ForecastService` builds the risk context once per database revision and
+looks up only the exact `(ticker, observation_date)` row. Appending future
+history cannot change an earlier decision. The browser presents the raw model
+and policy conclusion separately so a positive Ridge return that is
+downgraded or vetoed remains visible and auditable.
+
 ### Add a forecast provider
 
 A provider exposes non-empty `model_key` and `model_version` strings and a
