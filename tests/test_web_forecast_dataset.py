@@ -460,6 +460,7 @@ class ForecastContractTest(unittest.TestCase):
                 "bearish_turn_score": 0.0,
                 "direction_adjustment_reason": None,
                 "bearish_turn_conditions": [],
+                "decision": None,
                 "unavailable_reason": "insufficient_history",
             },
         )

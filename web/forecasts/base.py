@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from enum import Enum
 import math
@@ -61,6 +61,7 @@ class ForecastResult:
     bearish_turn_score: float = 0.0
     direction_adjustment_reason: str | None = None
     bearish_turn_conditions: tuple[str, ...] = field(default_factory=tuple)
+    decision: object | None = None
 
     def __post_init__(self):
         ticker = _required_string(self.ticker, "ticker")
@@ -99,6 +100,18 @@ class ForecastResult:
         conditions = tuple(self.bearish_turn_conditions)
         if any(not isinstance(value, str) or not value for value in conditions):
             raise ValueError("bearish_turn_conditions must contain non-empty strings")
+        decision = self.decision
+        if decision is not None:
+            from web.forecasts.decision import ForecastDecision
+
+            if not isinstance(decision, ForecastDecision):
+                raise TypeError("decision must be a ForecastDecision or None")
+            if self.direction == "unavailable":
+                raise ValueError("unavailable forecasts cannot contain a decision")
+            if decision.final_direction != self.direction:
+                raise ValueError(
+                    "decision final_direction must match forecast direction"
+                )
         if asof_date is None:
             raise ValueError("forecasts require asof_date")
         if int(self.training_sample_count) > 0 and training_cutoff is None:
@@ -155,6 +168,25 @@ class ForecastResult:
         object.__setattr__(self, "bearish_turn_score", bearish_turn_score)
         object.__setattr__(self, "direction_adjustment_reason", adjustment_reason)
         object.__setattr__(self, "bearish_turn_conditions", conditions)
+        object.__setattr__(self, "decision", decision)
+
+    def with_decision(self, decision):
+        """Return a decision-adjusted copy without changing raw model output."""
+        from web.forecasts.decision import ForecastDecision
+
+        if not isinstance(decision, ForecastDecision):
+            raise TypeError("decision must be a ForecastDecision")
+        if self.direction == "unavailable":
+            raise ValueError("unavailable forecasts cannot contain a decision")
+        changed = decision.final_direction != self.raw_direction
+        return replace(
+            self,
+            direction=decision.final_direction,
+            direction_adjustment_reason=(
+                "bearish_turn_risk" if changed else None
+            ),
+            decision=decision,
+        )
 
     def to_dict(self):
         """Return a fresh JSON-safe representation of this result."""
@@ -175,6 +207,9 @@ class ForecastResult:
             "bearish_turn_score": json_safe(self.bearish_turn_score),
             "direction_adjustment_reason": self.direction_adjustment_reason,
             "bearish_turn_conditions": list(self.bearish_turn_conditions),
+            "decision": (
+                None if self.decision is None else self.decision.to_dict()
+            ),
             "unavailable_reason": (
                 None
                 if self.unavailable_reason is None
