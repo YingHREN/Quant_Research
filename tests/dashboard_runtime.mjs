@@ -163,6 +163,7 @@ function createChart(element, options) {
 }
 globalThis.LightweightCharts = {
   CandlestickSeries: "candles", HistogramSeries: "histogram", LineSeries: "line",
+  BaselineSeries: "baseline",
   CrosshairMode: { Normal: 0 }, LineStyle: { Dashed: 2 },
   createChart,
   createSeriesMarkers(_series, markers) {

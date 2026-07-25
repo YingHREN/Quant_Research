@@ -34,6 +34,7 @@ const COLORS = Object.freeze({
   strictPivot: "#ff9f43",
   platformPivot: "#f472b6",
   trendline: "#ff8ccf",
+  nearResistance: "#ff9f43",
   reversal: "#f7d154",
   forecast: "#7dd3fc",
   volumeMa20: "#5cc8ff",
@@ -341,6 +342,24 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     priceLineVisible: false,
     lastValueVisible: true,
   });
+  const nearResistanceSeries = priceChart.addSeries(LightweightCharts.BaselineSeries, {
+    title: t("chart.series.nearResistance", {}, locale),
+    baseValue: { type: "price", price: 0 },
+    baseLineColor: COLORS.nearResistance,
+    baseLineWidth: 1,
+    baseLineStyle: LightweightCharts.LineStyle.Dashed,
+    topLineColor: COLORS.nearResistance,
+    topLineWidth: 1,
+    topFillColor1: "rgba(255, 159, 67, 0.20)",
+    topFillColor2: "rgba(255, 159, 67, 0.08)",
+    bottomLineColor: COLORS.nearResistance,
+    bottomFillColor1: "rgba(255, 159, 67, 0.08)",
+    bottomFillColor2: "rgba(255, 159, 67, 0.04)",
+    crosshairMarkerVisible: false,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    autoscaleInfoProvider: () => null,
+  });
   const forecastProjectionSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.forecastProjection", {}, locale),
     visible: false,
@@ -625,12 +644,14 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     if (lockedTime !== null) {
       lockedTime = null;
       setPanLocked(false);
+      renderNearResistanceZone();
       paintDetail(row || rows.at(-1) || null, false);
       return;
     }
     if (!row) return;
     lockedTime = timeKey(row.time);
     setPanLocked(true);
+    renderNearResistanceZone();
     paintDetail(row, true);
   }
 
@@ -746,6 +767,25 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     refreshMarkers();
   }
 
+  function renderNearResistanceZone() {
+    const selectedRow = lockedTime === null
+      ? rows.at(-1)
+      : rowByTime.get(lockedTime);
+    const lower = selectedRow?.near_resistance_lower;
+    const upper = selectedRow?.near_resistance_upper;
+    if (!finite(lower) || !finite(upper) || upper < lower) {
+      nearResistanceSeries.setData([]);
+      return;
+    }
+    nearResistanceSeries.applyOptions({
+      baseValue: { type: "price", price: lower },
+    });
+    nearResistanceSeries.setData(rows.map((row) => ({
+      time: row.time,
+      value: upper,
+    })));
+  }
+
   function setChartData(payload) {
     if (destroyed) return;
     updatingChartData = true;
@@ -783,6 +823,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       sma50Series.setData(seriesPoints(rows, "sma50"));
       sma200Series.setData(seriesPoints(rows, "sma200"));
       trendlineSeries.setData(whitespaceSeriesPoints(rows, "descending_trendline"));
+      renderNearResistanceZone();
       volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
       volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
@@ -836,6 +877,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     volumeMa20Series.applyOptions?.({ title: t("chart.series.volumeMa20", {}, locale) });
     volumeRatioSeries.applyOptions?.({ title: t("chart.series.volumeRatio", {}, locale) });
     trendlineSeries.applyOptions?.({ title: t("chart.series.descendingResistance", {}, locale) });
+    nearResistanceSeries.applyOptions?.({ title: t("chart.series.nearResistance", {}, locale) });
     forecastProjectionSeries.applyOptions?.({ title: t("chart.series.forecastProjection", {}, locale) });
     renderDecorations(lastPayload);
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);

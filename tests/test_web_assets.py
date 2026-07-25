@@ -942,6 +942,7 @@ class WebAssetTest(unittest.TestCase):
             "LightweightCharts.CandlestickSeries",
             "LightweightCharts.HistogramSeries",
             "LightweightCharts.LineSeries",
+            "LightweightCharts.BaselineSeries",
             'title: "EMA20"',
             'title: "SMA50"',
             'title: "SMA200"',
@@ -981,6 +982,7 @@ class WebAssetTest(unittest.TestCase):
             "chart.pivot.tightPlatform",
             "chart.series.volumeMa20",
             "chart.series.volumeRatio",
+            "chart.series.nearResistance",
         ):
             self.assertIn(title_key, source)
         for field in (
@@ -1005,6 +1007,109 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-range="1y"', html)
         self.assertIn('data-range="2y"', html)
         self.assertIn('data-range="all"', html)
+
+    def test_near_resistance_zone_is_stable_on_hover_and_switches_only_on_lock(self):
+        chart_uri = (STATIC / "js/charts.js").as_uri()
+        script = rf"""
+            import assert from 'node:assert/strict';
+            const created = [];
+            function node() {{
+              return {{textContent: '', children: [], dataset: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this[name] = String(value); }}}};
+            }}
+            globalThis.document = {{createElement: () => node()}};
+            function chart(element, options) {{
+              const scale = {{
+                range: {{from: 0, to: 10}},
+                subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}},
+                setVisibleLogicalRange(next) {{ this.range = next; }},
+                fitContent() {{}},
+              }};
+              const value = {{
+                element, options, series: [], crosshairHandler: null, clickHandler: null,
+                timeScale: () => scale,
+                priceScale: () => ({{applyOptions() {{}}}}),
+                addSeries(type, options) {{
+                  const series = {{type, options: {{...options}}, data: [],
+                    setData(data) {{ this.data = structuredClone(data); }},
+                    applyOptions(next) {{ Object.assign(this.options, next); }},
+                    createPriceLine() {{ return {{}}; }}, removePriceLine() {{}}}};
+                  this.series.push(series);
+                  return series;
+                }},
+                subscribeCrosshairMove(handler) {{ this.crosshairHandler = handler; }},
+                unsubscribeCrosshairMove() {{}},
+                subscribeClick(handler) {{ this.clickHandler = handler; }},
+                unsubscribeClick() {{}},
+                setCrosshairPosition() {{}}, clearCrosshairPosition() {{}},
+                applyOptions(next) {{ Object.assign(this.options, next); }},
+                remove() {{}},
+              }};
+              created.push(value);
+              return value;
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram',
+              LineSeries: 'line', BaselineSeries: 'baseline',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Dashed: 2, Solid: 0}},
+              createChart: chart,
+              createSeriesMarkers() {{ return {{setMarkers() {{}}}}; }},
+            }};
+            const {{createLinkedCharts}} = await import({json.dumps(chart_uri)});
+            const controller = createLinkedCharts(
+              {{clientWidth: 800, clientHeight: 400, dataset: {{}}}},
+              {{clientWidth: 800, clientHeight: 180, dataset: {{}}}},
+              node(), {{locale: 'en'}},
+            );
+            const rows = [
+              {{time: '2026-07-17', open: 100, high: 103, low: 99, close: 102, volume: 1000,
+                near_resistance_lower: 110, near_resistance_upper: 120,
+                near_resistance_mid: 115}},
+              {{time: '2026-07-18', open: 102, high: 104, low: 101, close: 103, volume: 1100,
+                near_resistance_lower: 200, near_resistance_upper: 210,
+                near_resistance_mid: 205}},
+            ];
+            controller.setChartData({{chart: rows}});
+            const zone = created[0].series.find((series) => series.type === 'baseline');
+            assert.ok(zone);
+            assert.equal(zone.options.title, 'Near resistance zone');
+            assert.equal(zone.options.autoscaleInfoProvider(), null);
+            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 200}});
+            assert.deepEqual(zone.data, [
+              {{time: '2026-07-17', value: 210}},
+              {{time: '2026-07-18', value: 210}},
+            ]);
+            const initialData = structuredClone(zone.data);
+            const initialBaseValue = structuredClone(zone.options.baseValue);
+            const initialRange = structuredClone(created[0].timeScale().range);
+            created[0].crosshairHandler({{time: '2026-07-17'}});
+            assert.deepEqual(zone.data, initialData);
+            assert.deepEqual(zone.options.baseValue, initialBaseValue);
+            assert.deepEqual(created[0].timeScale().range, initialRange);
+
+            created[0].clickHandler({{time: '2026-07-17'}});
+            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 110}});
+            assert.deepEqual(zone.data, [
+              {{time: '2026-07-17', value: 120}},
+              {{time: '2026-07-18', value: 120}},
+            ]);
+            created[0].crosshairHandler({{time: '2026-07-18'}});
+            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 110}});
+
+            created[0].clickHandler({{time: '2026-07-18'}});
+            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 200}});
+            assert.deepEqual(created[0].timeScale().range, initialRange);
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_chart_dates_are_deterministic(self):
         module_uri = (STATIC / "js/charts.js").as_uri()
@@ -1815,6 +1920,7 @@ class WebAssetTest(unittest.TestCase):
               const value = {{name, series, priceLines, timeScale: () => scale,
                 addSeries(type, options) {{
                   const item = {{type, options, data: [], setData(data) {{ this.data = data; }},
+                    applyOptions(next) {{ Object.assign(this.options, next); }},
                     createPriceLine(line) {{ priceLines.push(line); return line; }}, removePriceLine() {{}}}};
                   series.push(item); return item;
                 }}, subscribeCrosshairMove() {{}}, unsubscribeCrosshairMove() {{}},
@@ -1824,6 +1930,7 @@ class WebAssetTest(unittest.TestCase):
             }}
             globalThis.LightweightCharts = {{
               CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              BaselineSeries: 'baseline',
               CrosshairMode: {{Normal: 0}}, LineStyle: {{Solid: 0, Dashed: 2}},
               createChart(element) {{ return chart(element.name); }},
               createSeriesMarkers(_series, markers) {{
