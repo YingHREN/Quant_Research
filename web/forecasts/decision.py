@@ -115,6 +115,122 @@ class ForecastDecision:
         }
 
 
+class ForecastDecisionPolicy:
+    """Versioned asymmetric policy combining persistent and immediate risk."""
+
+    policy_key = "forecast_decision_policy"
+
+    def __init__(
+        self,
+        *,
+        watch_threshold=20.0,
+        high_threshold=30.0,
+        immediate_confirm_threshold=70.0,
+        joint_immediate_threshold=40.0,
+        policy_version="v1",
+    ):
+        self.watch_threshold = _required_score(
+            watch_threshold,
+            "watch_threshold",
+        )
+        self.high_threshold = _required_score(
+            high_threshold,
+            "high_threshold",
+        )
+        self.immediate_confirm_threshold = _required_score(
+            immediate_confirm_threshold,
+            "immediate_confirm_threshold",
+        )
+        self.joint_immediate_threshold = _required_score(
+            joint_immediate_threshold,
+            "joint_immediate_threshold",
+        )
+        if self.watch_threshold > self.high_threshold:
+            raise ValueError("watch_threshold must not exceed high_threshold")
+        if self.joint_immediate_threshold > self.immediate_confirm_threshold:
+            raise ValueError(
+                "joint_immediate_threshold must not exceed "
+                "immediate_confirm_threshold"
+            )
+        self.policy_version = _required_string(
+            policy_version,
+            "policy_version",
+        )
+
+    def decide(self, forecast, context_row):
+        """Return a forecast with one auditable final decision attached."""
+        from web.forecasts.base import ForecastResult
+
+        if not isinstance(forecast, ForecastResult):
+            raise TypeError("forecast must be a ForecastResult")
+        if forecast.direction == "unavailable":
+            return forecast
+
+        persistent = _risk_context(context_row)
+        immediate = float(forecast.bearish_turn_score)
+        reasons = []
+        final_direction = forecast.raw_direction
+        risk_state = "unavailable" if persistent is None else "low"
+
+        immediate_confirmed = immediate >= self.immediate_confirm_threshold
+        confluence = (
+            persistent is not None
+            and persistent["score"] >= self.high_threshold
+            and immediate >= self.joint_immediate_threshold
+        )
+        if immediate_confirmed:
+            risk_state = "confirmed"
+            reasons.append("immediate_bearish_confirmation")
+            final_direction = "down"
+        elif confluence:
+            risk_state = "confirmed"
+            reasons.extend(
+                (
+                    "persistent_bearish_risk",
+                    "persistent_immediate_confluence",
+                )
+            )
+            final_direction = "down"
+        elif persistent is not None and persistent["score"] >= self.high_threshold:
+            risk_state = "high"
+            reasons.append("persistent_bearish_risk")
+            if forecast.raw_direction == "up":
+                final_direction = "neutral"
+        elif persistent is not None and persistent["score"] >= self.watch_threshold:
+            risk_state = "watch"
+            reasons.append("persistent_bearish_risk")
+
+        if final_direction == forecast.raw_direction:
+            action = "retain"
+        elif final_direction == "neutral":
+            action = "downgrade_to_neutral"
+        else:
+            action = "override_to_down"
+
+        decision = ForecastDecision(
+            final_direction=final_direction,
+            risk_state=risk_state,
+            action=action,
+            reasons=tuple(reasons),
+            policy_key=self.policy_key,
+            policy_version=self.policy_version,
+            persistent_risk_score=(
+                None if persistent is None else persistent["score"]
+            ),
+            persistent_risk_raw_score=(
+                None if persistent is None else persistent["raw_score"]
+            ),
+            persistent_risk_state=(
+                "unavailable" if persistent is None else persistent["state"]
+            ),
+            persistent_risk_age_sessions=(
+                None if persistent is None else persistent["age"]
+            ),
+            immediate_risk_score=immediate,
+        )
+        return forecast.with_decision(decision)
+
+
 def build_forecast_risk_context(
     histories: Mapping[str, pd.DataFrame],
 ) -> pd.DataFrame:
@@ -172,6 +288,42 @@ def build_forecast_risk_context(
     return result.loc[:, RISK_CONTEXT_COLUMNS]
 
 
+def _risk_context(row):
+    if row is None:
+        return None
+    try:
+        score = _optional_score(
+            row.get("persistent_risk_score"),
+            "persistent_risk_score",
+        )
+        raw_score = _optional_score(
+            row.get("persistent_risk_raw_score"),
+            "persistent_risk_raw_score",
+        )
+        state = row.get("persistent_risk_state")
+        age = row.get("persistent_risk_age_sessions")
+    except AttributeError as exc:
+        raise TypeError("context_row must be a mapping or None") from exc
+    if score is None or raw_score is None:
+        return None
+    if state not in PERSISTENT_RISK_STATES - {"unavailable"}:
+        raise ValueError("invalid persistent_risk_state")
+    if age is not None:
+        if isinstance(age, bool) or not isinstance(age, Real):
+            raise TypeError("persistent_risk_age_sessions must be numeric")
+        if not math.isfinite(float(age)) or float(age) < 0.0:
+            raise ValueError(
+                "persistent_risk_age_sessions must not be negative"
+            )
+        age = int(age)
+    return {
+        "score": score,
+        "raw_score": raw_score,
+        "state": state,
+        "age": age,
+    }
+
+
 def _required_string(value, name):
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string")
@@ -189,4 +341,11 @@ def _optional_score(value, name):
     result = float(value)
     if not math.isfinite(result) or not 0.0 <= result <= 100.0:
         raise ValueError(f"{name} must be between 0 and 100")
+    return result
+
+
+def _required_score(value, name):
+    result = _optional_score(value, name)
+    if result is None:
+        raise ValueError(f"{name} is required")
     return result

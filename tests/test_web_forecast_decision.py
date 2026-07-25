@@ -8,6 +8,7 @@ from pandas.testing import assert_frame_equal
 from web.forecasts.base import ForecastResult
 from web.forecasts.decision import (
     ForecastDecision,
+    ForecastDecisionPolicy,
     build_forecast_risk_context,
 )
 from web.market_groups import market_group, modeled_market_groups
@@ -199,6 +200,96 @@ class ForecastRiskContextTest(unittest.TestCase):
         groups = modeled_market_groups()
 
         self.assertEqual(tuple(group.key for group in groups), ("semiconductor",))
+
+
+class ForecastDecisionPolicyTest(unittest.TestCase):
+    def setUp(self):
+        self.policy = ForecastDecisionPolicy()
+
+    @staticmethod
+    def context(score, raw=None, state="new", age=0):
+        return {
+            "persistent_risk_score": score,
+            "persistent_risk_raw_score": score if raw is None else raw,
+            "persistent_risk_state": state,
+            "persistent_risk_age_sessions": age,
+        }
+
+    def test_unavailable_context_retains_raw_forecast(self):
+        result = self.policy.decide(available_forecast(), None)
+
+        self.assertEqual(result.direction, "up")
+        self.assertEqual(result.decision.risk_state, "unavailable")
+        self.assertEqual(result.decision.action, "retain")
+        self.assertEqual(result.predicted_return, 0.08)
+
+    def test_watch_context_retains_direction(self):
+        result = self.policy.decide(
+            available_forecast(),
+            self.context(25.0, raw=10.0, state="fading", age=2),
+        )
+
+        self.assertEqual(result.direction, "up")
+        self.assertEqual(result.decision.risk_state, "watch")
+        self.assertEqual(result.decision.action, "retain")
+        self.assertEqual(result.decision.persistent_risk_score, 25.0)
+
+    def test_high_persistent_risk_downgrades_bullish_to_neutral(self):
+        result = self.policy.decide(
+            available_forecast(bearish_turn_score=20.0),
+            self.context(34.0, raw=15.0, state="fading", age=1),
+        )
+
+        self.assertEqual(result.raw_direction, "up")
+        self.assertEqual(result.direction, "neutral")
+        self.assertEqual(result.decision.risk_state, "high")
+        self.assertEqual(result.decision.action, "downgrade_to_neutral")
+        self.assertEqual(result.predicted_return, 0.08)
+
+    def test_persistent_and_immediate_confluence_overrides_to_down(self):
+        result = self.policy.decide(
+            available_forecast(bearish_turn_score=57.0),
+            self.context(34.0, raw=34.0, state="new", age=0),
+        )
+
+        self.assertEqual(result.direction, "down")
+        self.assertEqual(result.decision.risk_state, "confirmed")
+        self.assertEqual(result.decision.action, "override_to_down")
+        self.assertIn(
+            "persistent_immediate_confluence",
+            result.decision.reasons,
+        )
+
+    def test_existing_immediate_override_is_normalized(self):
+        forecast = available_forecast(
+            direction="down",
+            raw_direction="up",
+            bearish_turn_score=100.0,
+            direction_adjustment_reason="bearish_turn_risk",
+            bearish_turn_conditions=("distribution_volume",),
+        )
+
+        result = self.policy.decide(forecast, self.context(46.5))
+
+        self.assertEqual(result.direction, "down")
+        self.assertEqual(result.raw_direction, "up")
+        self.assertEqual(result.decision.risk_state, "confirmed")
+        self.assertIn(
+            "immediate_bearish_confirmation",
+            result.decision.reasons,
+        )
+
+    def test_raw_down_is_never_upgraded(self):
+        forecast = available_forecast(
+            direction="down",
+            raw_direction="down",
+            predicted_return=-0.08,
+        )
+
+        result = self.policy.decide(forecast, self.context(5.0, state="inactive"))
+
+        self.assertEqual(result.direction, "down")
+        self.assertEqual(result.decision.action, "retain")
 
 
 if __name__ == "__main__":
