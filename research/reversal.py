@@ -60,6 +60,9 @@ def _empty_row() -> dict[str, object]:
         "trendline_high_2_date": None,
         "latest_confirmed_high_date": None,
         "latest_confirmed_high_confirmed_date": None,
+        "latest_confirmed_low_date": None,
+        "latest_confirmed_low_price": None,
+        "latest_confirmed_low_confirmed_date": None,
         "higher_low_confirmed": False,
         "higher_low_previous_date": None,
         "higher_low_previous_price": None,
@@ -163,6 +166,13 @@ def build_reversal_rows(history: pd.DataFrame) -> list[dict[str, object]]:
             row["latest_confirmed_high_date"] = _iso(latest_high.date)
             row["latest_confirmed_high_confirmed_date"] = _iso(
                 latest_high.confirmed_date
+            )
+        if confirmed_lows:
+            latest_low = confirmed_lows[-1]
+            row["latest_confirmed_low_date"] = _iso(latest_low.date)
+            row["latest_confirmed_low_price"] = float(latest_low.price)
+            row["latest_confirmed_low_confirmed_date"] = _iso(
+                latest_low.confirmed_date
             )
         active_trendline: float | None = None
         active_trendline_pair: tuple[int, int] | None = None

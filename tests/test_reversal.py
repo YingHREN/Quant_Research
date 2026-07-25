@@ -48,6 +48,27 @@ class ReversalFeatureTest(unittest.TestCase):
             frame.index[6].date().isoformat(),
         )
 
+    def test_swing_low_is_available_from_confirmation_and_persists(self):
+        frame = history([110, 105, 100, 107, 108])
+
+        rows = build_reversal_rows(frame)
+
+        self.assertIsNone(rows[2]["latest_confirmed_low_date"])
+        self.assertEqual(
+            rows[3]["latest_confirmed_low_date"],
+            frame.index[2].date().isoformat(),
+        )
+        self.assertEqual(rows[3]["latest_confirmed_low_price"], 100.0)
+        self.assertEqual(
+            rows[3]["latest_confirmed_low_confirmed_date"],
+            frame.index[3].date().isoformat(),
+        )
+        self.assertEqual(
+            rows[4]["latest_confirmed_low_date"],
+            frame.index[2].date().isoformat(),
+        )
+        self.assertEqual(rows[4]["latest_confirmed_low_price"], 100.0)
+
     def test_descending_trendline_breakout_uses_two_confirmed_highs(self):
         frame = history(
             [100, 106, 110, 106, 102, 105, 108, 104, 100, 101, 102, 106]
