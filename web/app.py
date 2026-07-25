@@ -28,6 +28,7 @@ from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
+from web.forecasts.model_outputs import build_model_outputs
 from research.market_context import build_group_score_frame
 from research.risk_memory import (
     RISK_MEMORY_HALF_LIFE_SESSIONS,
@@ -298,12 +299,14 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         _attach_forecast_target_dates(
             forecast_payload, snapshot.histories[normalized_ticker].index
         )
+        structures = _structure_payload(factor_payload, chart)
+        _attach_model_outputs(forecast_payload, chart, structures)
         payload = {
             "ticker": normalized_ticker,
             "observation_date": observation_date,
             "summary": _stock_summary(chart, selected_summary),
             "chart": chart,
-            "structures": _structure_payload(factor_payload, chart),
+            "structures": structures,
             "factors": factor_payload,
             "scenarios": scenario_provider.build(history, observation_timestamp),
             "warnings": warnings,
@@ -361,6 +364,21 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         _attach_forecast_target_dates(
             payload, snapshot.histories[normalized_ticker].index
         )
+        history = snapshot.histories[normalized_ticker]
+        benchmark = snapshot.histories.get("SPY")
+        context = AnalysisContext(
+            ticker=normalized_ticker,
+            observation_date=timestamp,
+            history=history,
+            benchmark_history=benchmark,
+        )
+        chart = build_chart_rows(context)
+        _attach_market_bearish_risk(
+            chart,
+            normalized_ticker,
+            snapshot.histories,
+        )
+        _attach_model_outputs(payload, chart)
         return _json_response(payload)
 
     @flask_app.post("/api/update")
@@ -439,6 +457,36 @@ def _attach_forecast_target_dates(payload, known_sessions):
                 continue
             forecast["projection_dates"] = projection_dates
             forecast["target_date"] = projection_dates[-1] if projection_dates else raw_date
+
+
+def _attach_model_outputs(payload, chart, structures=None):
+    by_date = payload.get("forecasts", {}).get("by_date", {})
+    evaluations = payload.get("forecast_evaluation", {})
+    rows = {
+        row.get("time"): row
+        for row in chart
+        if isinstance(row, dict) and isinstance(row.get("time"), str)
+    }
+    latest_date = chart[-1].get("time") if chart else None
+    for raw_date, horizons in by_date.items():
+        if not isinstance(horizons, dict):
+            continue
+        row = dict(rows.get(raw_date, {}))
+        if structures and raw_date == latest_date:
+            strict = structures.get("strict_vcp")
+            platform = structures.get("tight_platform")
+            if isinstance(strict, dict):
+                row["strict_vcp"] = strict.get("reject_reason") is None
+            if isinstance(platform, dict):
+                row["tight_platform"] = bool(platform.get("is_platform"))
+        for raw_horizon, forecast in horizons.items():
+            if not isinstance(forecast, dict):
+                continue
+            forecast["model_outputs"] = build_model_outputs(
+                forecast,
+                row,
+                evaluations.get(str(raw_horizon), {}),
+            )
 
 
 def _summary_dict(summary):

@@ -12,7 +12,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from web.app import _attach_forecast_target_dates, create_app
+from web.app import _attach_forecast_target_dates, _attach_model_outputs, create_app
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
 from web.forecasts.dataset import build_feature_frame
@@ -789,6 +789,53 @@ class WebApiTest(unittest.TestCase):
             ["2026-07-06", "2026-07-07", "2026-07-08", "2026-07-09", "2026-07-10"],
         )
         self.assertEqual(forecast["target_date"], "2026-07-10")
+
+    def test_model_outputs_attach_same_date_chart_evidence(self):
+        payload = {
+            "forecasts": {
+                "by_date": {
+                    "2026-07-01": {
+                        "5": {
+                            "model_key": "ridge_direction_v1",
+                            "model_version": "v4",
+                            "horizon_sessions": 5,
+                            "predicted_return": 0.03,
+                            "raw_direction": "up",
+                            "direction": "up",
+                            "training_sample_count": 100,
+                            "training_cutoff": "2026-06-30",
+                            "confidence_status": "uncalibrated",
+                            "confidence_reason": "insufficient_calibration_samples",
+                            "bearish_turn_score": 0,
+                            "bearish_turn_conditions": [],
+                            "decision": None,
+                        }
+                    }
+                }
+            },
+            "forecast_evaluation": {"5": {"evidence_status": "unproven"}},
+        }
+        chart = [
+            {
+                "time": "2026-07-01",
+                "reversal_signal_count": 2,
+                "reversal_candidate": True,
+                "prior_high_breakout": True,
+                "trendline_breakout": True,
+                "higher_low_confirmed": False,
+                "early_reversal_score": 0,
+                "early_reversal_watch": False,
+                "early_reversal_conditions": [],
+            }
+        ]
+
+        _attach_model_outputs(payload, chart)
+
+        outputs = payload["forecasts"]["by_date"]["2026-07-01"]["5"][
+            "model_outputs"
+        ]
+        self.assertEqual(outputs["primary"][0]["evidence_status"], "unproven")
+        self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
 
     def test_historical_forecast_endpoint_rejects_non_session_date(self):
         response = self.client.get("/api/stocks/AAA/forecasts/2026-07-19")
