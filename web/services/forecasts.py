@@ -17,6 +17,10 @@ from web.forecasts.base import (
     UnavailableReason,
 )
 from web.forecasts.dataset import attach_forward_targets, build_feature_frame
+from web.forecasts.decision import (
+    ForecastDecisionPolicy,
+    build_forecast_risk_context,
+)
 from web.forecasts.ridge import MODEL_KEY, MODEL_VERSION, RidgeForecastProvider
 
 
@@ -51,6 +55,7 @@ class ForecastService:
         *,
         provider_factory=None,
         evaluator=None,
+        decision_policy=None,
         max_cache_size=DEFAULT_CACHE_SIZE,
         max_forecast_dates=DEFAULT_MAX_FORECAST_DATES,
     ):
@@ -67,6 +72,13 @@ class ForecastService:
             raise TypeError("provider_factory must be callable")
         if evaluator is not None and not callable(evaluator):
             raise TypeError("evaluator must be callable or None")
+        policy = (
+            ForecastDecisionPolicy()
+            if decision_policy is None
+            else decision_policy
+        )
+        if not callable(getattr(policy, "decide", None)):
+            raise TypeError("decision_policy must expose decide()")
         if max_forecast_dates is not None:
             if isinstance(max_forecast_dates, bool) or not isinstance(
                 max_forecast_dates, int
@@ -78,6 +90,7 @@ class ForecastService:
         self.model_version = _required_identity(factory, "model_version")
         self._provider_factory = factory
         self._evaluator = evaluator
+        self._decision_policy = policy
         self._max_cache_size = max_cache_size
         self._max_forecast_dates = max_forecast_dates
         self._cache = OrderedDict()
@@ -86,6 +99,7 @@ class ForecastService:
         self._artifact_frame = None
         self._artifact_provider = None
         self._artifact_evaluations = None
+        self._artifact_risk_context = None
         self._artifact_coverage = None
         self._artifact_fingerprints = None
         self._lock = threading.RLock()
@@ -118,7 +132,7 @@ class ForecastService:
                 raise ForecastRevisionChanged(
                     "forecast revision changed after the market-data snapshot"
                 )
-            _frame, provider, evaluations = self._revision_artifacts(
+            _frame, provider, evaluations, risk_context = self._revision_artifacts(
                 histories,
                 coverage,
                 fingerprints,
@@ -135,7 +149,13 @@ class ForecastService:
                 self._cache.move_to_end(key)
                 return deepcopy(cached)
 
-            bundle = self._compute(ticker, dates, provider, evaluations)
+            bundle = self._compute(
+                ticker,
+                dates,
+                provider,
+                evaluations,
+                risk_context,
+            )
             self._cache[key] = deepcopy(bundle)
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_cache_size:
@@ -151,10 +171,11 @@ class ForecastService:
             self._artifact_frame = None
             self._artifact_provider = None
             self._artifact_evaluations = None
+            self._artifact_risk_context = None
             self._artifact_coverage = None
             self._artifact_fingerprints = None
 
-    def _compute(self, ticker, dates, provider, evaluations):
+    def _compute(self, ticker, dates, provider, evaluations, risk_context):
         forecast_dates = (
             dates
             if self._max_forecast_dates is None
@@ -162,6 +183,17 @@ class ForecastService:
         )
         bounded = len(forecast_dates) < len(dates)
         results = provider.forecast_series(ticker, forecast_dates, SUPPORTED_HORIZONS)
+        results = [
+            self._decision_policy.decide(
+                result,
+                _point_in_time_risk_row(
+                    risk_context,
+                    ticker,
+                    result.asof_date,
+                ),
+            )
+            for result in results
+        ]
         by_date, reasons = _sparse_results(
             results,
             ticker=ticker,
@@ -211,11 +243,13 @@ class ForecastService:
                 self._artifact_frame,
                 self._artifact_provider,
                 self._artifact_evaluations,
+                self._artifact_risk_context,
             )
         if richer_snapshot or corrected_snapshot:
             self._cache.clear()
         frame = attach_forward_targets(build_feature_frame(histories))
         provider = self._provider_factory(frame)
+        risk_context = build_forecast_risk_context(histories)
         _validate_provider_identity(provider, self.model_key, self.model_version)
         if self._evaluator is None:
             evaluations = _unavailable_evaluations(
@@ -232,9 +266,23 @@ class ForecastService:
         self._artifact_frame = frame
         self._artifact_provider = provider
         self._artifact_evaluations = evaluations
+        self._artifact_risk_context = risk_context
         self._artifact_coverage = coverage
         self._artifact_fingerprints = fingerprints
-        return frame, provider, evaluations
+        return frame, provider, evaluations, risk_context
+
+
+def _point_in_time_risk_row(risk_context, ticker, asof_date):
+    if risk_context is None or risk_context.empty:
+        return None
+    key = (ticker, pd.Timestamp(asof_date).normalize())
+    try:
+        row = risk_context.loc[key]
+    except KeyError:
+        return None
+    if isinstance(row, pd.DataFrame):
+        raise ValueError("risk context contains duplicate ticker-date rows")
+    return row
 
 
 def unavailable_forecast_bundle(

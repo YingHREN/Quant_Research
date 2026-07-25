@@ -221,6 +221,20 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
         self.assertEqual(result.direction, "up")
         self.assertEqual(result.decision.risk_state, "unavailable")
         self.assertEqual(result.decision.action, "retain")
+
+    def test_nan_context_is_unavailable_instead_of_raising(self):
+        result = self.policy.decide(
+            available_forecast(),
+            {
+                "persistent_risk_score": np.nan,
+                "persistent_risk_raw_score": np.nan,
+                "persistent_risk_state": np.nan,
+                "persistent_risk_age_sessions": np.nan,
+            },
+        )
+
+        self.assertEqual(result.direction, "up")
+        self.assertEqual(result.decision.risk_state, "unavailable")
         self.assertEqual(result.predicted_return, 0.08)
 
     def test_watch_context_retains_direction(self):

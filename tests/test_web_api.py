@@ -1342,6 +1342,7 @@ class ForecastServiceTest(unittest.TestCase):
                 "direction_adjustment_reason",
                 "bearish_turn_conditions",
                 "unavailable_reason",
+                "decision",
             },
         )
         self.assertEqual(set(payload["forecast_evaluation"]), {"5", "20", "60"})
@@ -1466,6 +1467,68 @@ class ForecastServiceTest(unittest.TestCase):
 
         self.assertEqual(builder.call_count, 2)
         self.assertEqual(len(factory.providers), 2)
+
+    def test_applies_point_in_time_risk_context_to_every_available_forecast(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(
+            provider_factory=factory,
+            evaluator=fake_forecast_evaluation,
+            max_forecast_dates=None,
+        )
+        risk_index = pd.MultiIndex.from_product(
+            [["AAA"], pd.to_datetime(self.chart_dates)],
+            names=["ticker", "observation_date"],
+        )
+        risk_context = pd.DataFrame(
+            {
+                "persistent_risk_raw_score": [34.0, 34.0],
+                "persistent_risk_score": [34.0, 34.0],
+                "persistent_risk_state": ["new", "persistent"],
+                "persistent_risk_age_sessions": [0, 1],
+            },
+            index=risk_index,
+        )
+
+        with mock.patch(
+            "web.services.forecasts.build_forecast_risk_context",
+            return_value=risk_context,
+        ) as builder:
+            payload = service.build("AAA", self.chart_dates, self.histories)
+
+        builder.assert_called_once_with(self.histories)
+        rows = payload["forecasts"]["by_date"][self.chart_dates[0]]
+        self.assertEqual(rows["5"]["raw_direction"], "up")
+        self.assertEqual(rows["5"]["direction"], "neutral")
+        self.assertEqual(
+            rows["5"]["decision"],
+            {
+                "final_direction": "neutral",
+                "risk_state": "high",
+                "action": "downgrade_to_neutral",
+                "reasons": ["persistent_bearish_risk"],
+                "policy_key": "forecast_decision_policy",
+                "policy_version": "v1",
+                "persistent_risk_score": 34.0,
+                "persistent_risk_raw_score": 34.0,
+                "persistent_risk_state": "new",
+                "persistent_risk_age_sessions": 0,
+                "immediate_risk_score": 0.0,
+            },
+        )
+
+    def test_missing_risk_context_is_explicit_and_retains_raw_direction(self):
+        service = ForecastService(
+            provider_factory=FakeForecastFactory(),
+            evaluator=fake_forecast_evaluation,
+            max_forecast_dates=None,
+        )
+
+        payload = service.build("AAA", self.chart_dates, self.histories)
+
+        row = payload["forecasts"]["by_date"][self.chart_dates[0]]["5"]
+        self.assertEqual(row["direction"], "up")
+        self.assertEqual(row["decision"]["risk_state"], "unavailable")
+        self.assertEqual(row["decision"]["action"], "retain")
 
     def test_revision_artifacts_rebuild_when_a_later_snapshot_is_more_complete(self):
         factory = FakeForecastFactory()

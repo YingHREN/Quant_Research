@@ -292,16 +292,23 @@ def _risk_context(row):
     if row is None:
         return None
     try:
+        score_value = row.get("persistent_risk_score")
+        raw_score_value = row.get("persistent_risk_raw_score")
+        state = row.get("persistent_risk_state")
+        age = row.get("persistent_risk_age_sessions")
+        if any(
+            pd.isna(value)
+            for value in (score_value, raw_score_value, state, age)
+        ):
+            return None
         score = _optional_score(
-            row.get("persistent_risk_score"),
+            score_value,
             "persistent_risk_score",
         )
         raw_score = _optional_score(
-            row.get("persistent_risk_raw_score"),
+            raw_score_value,
             "persistent_risk_raw_score",
         )
-        state = row.get("persistent_risk_state")
-        age = row.get("persistent_risk_age_sessions")
     except AttributeError as exc:
         raise TypeError("context_row must be a mapping or None") from exc
     if score is None or raw_score is None:
