@@ -538,7 +538,7 @@ Expected: all tests pass.
 
 Run the repository's documented local server command and verify `/api/stocks/NBIS` returns `model_outputs` for available forecast dates.
 
-- [ ] **Step 3: Perform browser QA**
+- [x] **Step 3: Perform browser QA**
 
 Check NBIS and MU on:
 
@@ -549,11 +549,11 @@ Check NBIS and MU on:
 
 Verify bilingual model cards, raw/final direction separation, rule disclaimers, fixed loading height, click lock, scroll stability, unlock behavior, and unchanged chart range.
 
-- [ ] **Step 4: Update TODO and plan checkboxes honestly**
+- [x] **Step 4: Update TODO and plan checkboxes honestly**
 
 Mark only implemented and verified `FCAST-001`/`UI-002` items complete. Leave baseline proof and model promotion unchecked unless the new walk-forward evidence actually passes the specified gate.
 
-- [ ] **Step 5: Run diff and repository checks**
+- [x] **Step 5: Run diff and repository checks**
 
 Run:
 
@@ -564,7 +564,7 @@ git status --short
 
 Expected: no whitespace errors; user-owned WAL/SHM and research files remain untracked and untouched.
 
-- [ ] **Step 6: Commit documentation state**
+- [x] **Step 6: Commit documentation state**
 
 ```bash
 git add docs/modeling-todo.md \
