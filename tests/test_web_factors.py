@@ -117,6 +117,41 @@ class FactorRegistryTest(unittest.TestCase):
             4,
         )
 
+    def test_neutral_numeric_factor_never_evaluates_peers(self):
+        calls = []
+
+        class NeutralCountingFactor(ConstantFactor):
+            key = "neutral_counting"
+            direction = "neutral"
+
+            def compute(self, factor_context):
+                calls.append((self.key, factor_context.ticker))
+                return factor_context.metadata["value"]
+
+        class DirectionalCountingFactor(ConstantFactor):
+            key = "directional_counting"
+
+            def compute(self, factor_context):
+                calls.append((self.key, factor_context.ticker))
+                return factor_context.metadata["value"]
+
+        registry = FactorRegistry(
+            [NeutralCountingFactor(), DirectionalCountingFactor()]
+        )
+        registry.evaluate_selected_with_peers(
+            context("AAA", 1),
+            [context("BBB", 2), context("CCC", 3)],
+        )
+
+        self.assertEqual(
+            [ticker for key, ticker in calls if key == "neutral_counting"],
+            ["AAA"],
+        )
+        self.assertEqual(
+            [ticker for key, ticker in calls if key == "directional_counting"],
+            ["AAA", "BBB", "CCC"],
+        )
+
     def test_result_json_shape_is_safe_and_stable(self):
         result = self.registry.evaluate_one(ConstantFactor(), context(value=2.5))
 

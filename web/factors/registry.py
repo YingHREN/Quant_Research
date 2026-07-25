@@ -126,6 +126,7 @@ class FactorRegistry:
                 selected_result.missing
                 or not _is_finite_number(selected_result.raw_value)
                 or not getattr(factor, "percentile_eligible", True)
+                or factor.direction not in {"higher", "lower"}
             ):
                 continue
             values = [float(selected_result.raw_value)]
