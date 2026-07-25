@@ -30,6 +30,24 @@ def rising(periods=260, slope=0.2, end="2026-07-23"):
 
 
 class MarketContextTest(unittest.TestCase):
+    def test_constituent_classification_is_group_specific(self):
+        histories = {
+            ticker: rising()
+            for ticker in ("QQQ", "SPY", "IGV", "XSW", "ADBE")
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("software"),
+            5,
+        )
+
+        self.assertEqual(
+            result["constituents"][0]["classification"],
+            "software_constituent",
+        )
+
     def test_one_semiconductor_proxy_degrades_coverage_without_fabrication(self):
         histories = {
             "QQQ": rising(),

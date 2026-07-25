@@ -976,9 +976,9 @@ def _constituent_payloads(prepared, group, sector, asof):
             {
                 "ticker": ticker,
                 "classification": (
-                    "constituent"
+                    f"{group.key}_constituent"
                     if ticker in group.constituent_tickers
-                    else "related"
+                    else f"{group.key}_related"
                 ),
                 "observation_date": _iso(observation_date),
                 "relative_strength_20": relative_strength,
