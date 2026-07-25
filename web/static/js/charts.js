@@ -8,6 +8,7 @@ import {
   indexForecasts,
   renderForecastDetail,
 } from "./forecasts.js";
+import { renderModelOutputs } from "./model_outputs.js";
 import { factorValuesByDate, trendEvidence } from "./trend_evidence.js";
 
 const RANGE_BARS = Object.freeze({
@@ -507,6 +508,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         dateCoverage: selectedForecastIndex.dateCoverage,
         date,
         trendEvidence: evidence,
+        requestState: date === null ? null : forecastRequestStates.get(date) || null,
+      });
+      renderModelOutputs(options.modelOutputEl, {
+        forecast,
+        date,
+        locale,
         requestState: date === null ? null : forecastRequestStates.get(date) || null,
       });
       if (forecastRequestTimer !== null) {

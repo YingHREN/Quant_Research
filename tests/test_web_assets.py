@@ -29,6 +29,20 @@ class WebAssetTest(unittest.TestCase):
         )
         return json.loads(result.stdout)
 
+    def run_model_outputs_runtime(self):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/model_outputs_runtime.mjs"),
+                (STATIC / "js/model_outputs.js").as_uri(),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
@@ -40,6 +54,17 @@ class WebAssetTest(unittest.TestCase):
             "Not validated for prediction",
         ):
             self.assertIn(marker, html)
+
+    def test_page_has_stable_model_output_region(self):
+        html = HTML.read_text()
+        self.assertIn('id="model-output-panel"', html)
+        self.assertIn('id="model-output-content"', html)
+
+    def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
+        actual = self.run_model_outputs_runtime()
+        self.assertEqual(actual["cardCount"], 5)
+        self.assertIn("规则分数，不是概率", actual["zh"])
+        self.assertIn("Rule score, not a probability", actual["en"])
 
     def test_page_has_no_buy_signal_or_probability_copy(self):
         text = HTML.read_text()
@@ -351,6 +376,9 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("Close vs EMA20", actual["tableEn"])
         self.assertIn("开盘价", actual["chartZh"])
         self.assertIn("Open", actual["chartEn"])
+        self.assertIn("最终方向 下跌", actual["modelZh"])
+        self.assertIn("Final direction Down", actual["modelEn"])
+        self.assertIn("2026-07-22", actual["lockedModelZh"])
 
     def test_actual_dashboard_locale_switch_preserves_safe_error_states(self):
         universe = self.run_dashboard_runtime("universe-error")

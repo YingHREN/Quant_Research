@@ -386,6 +386,7 @@ function captureElements() {
     priceChart: byId("price-chart"),
     volumeChart: byId("volume-chart"),
     crosshairDetail: byId("crosshair-detail"),
+    modelOutputContent: byId("model-output-content"),
     factorOverview: byId("factor-overview"),
     factorTableBody: byId("factor-table-body"),
     structureContent: byId("structure-content"),
@@ -409,6 +410,7 @@ export async function initializeDashboard() {
     elements.crosshairDetail,
     {
       locale: getLocale(),
+      modelOutputEl: elements.modelOutputContent,
       onForecastDate: async (date) => {
         const requestGeneration = stockRequestSequence;
         const ticker = store.getState().selectedTicker;

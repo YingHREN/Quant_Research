@@ -141,6 +141,20 @@
         <div id="crosshair-detail" class="detail-strip" role="status" aria-live="polite" data-i18n="chart.selectHint">
           Select a ticker to inspect OHLCV and indicator values.
         </div>
+        <section id="model-output-panel" class="model-output-panel" aria-labelledby="model-output-title">
+          <div class="model-output-heading">
+            <div>
+              <p class="eyebrow" data-i18n="modelOutput.eyebrow">Point-in-time decision evidence</p>
+              <h3 id="model-output-title" data-i18n="modelOutput.title">Model outputs</h3>
+            </div>
+            <p class="safety-copy" data-i18n="modelOutput.disclaimer">
+              Statistical forecasts, rule scores, and final policy decisions are different evidence types.
+            </p>
+          </div>
+          <div id="model-output-content" class="model-output-shell" data-state="idle" aria-live="polite">
+            <div class="model-output-state" data-i18n="modelOutput.empty">Select a date to inspect model outputs.</div>
+          </div>
+        </section>
       </section>
 
       <div class="analysis-grid">

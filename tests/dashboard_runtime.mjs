@@ -87,7 +87,8 @@ const ids = [
   "universe-list", "universe-count", "universe-status", "universe-search", "sort-key",
   "sort-direction", "market-date", "market-coverage", "selected-ticker", "selected-close",
   "selected-change", "observation-date", "security-state", "research-status", "data-warnings",
-  "price-chart", "volume-chart", "crosshair-detail", "factor-overview", "factor-table-body",
+  "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
+  "factor-overview", "factor-table-body",
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
 ];
 const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
@@ -151,7 +152,8 @@ function createChart(element, options) {
       chart.series.push(series);
       return series;
     },
-    subscribeCrosshairMove() {}, unsubscribeCrosshairMove() {},
+    subscribeCrosshairMove(handler) { this.crosshairHandler = handler; },
+    unsubscribeCrosshairMove() {},
     subscribeClick(handler) { this.clickHandler = handler; }, unsubscribeClick() {},
     setCrosshairPosition() {}, clearCrosshairPosition() {}, applyOptions(next) {
       this.options = { ...this.options, ...next };
@@ -195,6 +197,61 @@ const stock = {
   ticker: "AAA", observation_date: "2026-07-22",
   summary: { close: 101, daily_return: 0.01, daily_return_unit: "fraction", stale: false, inactive: false },
   warnings: [], chart: [row],
+  forecasts: {
+    model: { key: "ridge_direction_v1", version: "v3" },
+    date_coverage: { computed_dates: [row.time] },
+    by_date: {
+      [row.time]: {
+        "20": {
+          asof_date: row.time,
+          target_date: "2026-08-19",
+          horizon_sessions: 20,
+          direction: "down",
+          raw_direction: "up",
+          predicted_return: -0.02,
+          model_outputs: {
+            primary: [{
+              key: "ridge_direction_v1", version: "v3",
+              kind: "statistical_forecast", lifecycle: "production",
+              status: "available", timing: "next_session_open",
+              name_key: "model.ridge.name",
+              explanation_key: "model.ridge.explanation",
+              limitation_key: "model.ridge.limitation",
+              predicted_return: 0.04, direction: "up",
+            }],
+            downside: [{
+              key: "bearish_turn_immediate_v1", version: "v1",
+              kind: "rule_score", lifecycle: "production",
+              status: "active", timing: "close_confirmed",
+              name_key: "model.immediateRisk.name",
+              explanation_key: "model.immediateRisk.explanation",
+              limitation_key: "model.immediateRisk.limitation",
+              score: 80, threshold: 70, conditions: ["distribution_volume"],
+            }],
+            bullish_structure: [{
+              key: "bullish_structure_reversal_v1", version: "v1",
+              kind: "rule_score", lifecycle: "production",
+              status: "inactive", timing: "close_confirmed",
+              name_key: "model.structuralReversal.name",
+              explanation_key: "model.structuralReversal.explanation",
+              limitation_key: "model.structuralReversal.limitation",
+              score: 1, maximum_score: 3,
+            }],
+            decision: {
+              key: "forecast_decision_policy", version: "v2",
+              kind: "decision_policy", lifecycle: "production",
+              status: "available", timing: "next_session_open",
+              name_key: "model.decisionPolicy.name",
+              explanation_key: "model.decisionPolicy.explanation",
+              limitation_key: "model.decisionPolicy.limitation",
+              final_direction: "down", action: "override_to_down",
+              reasons: ["immediate_bearish_confirmation"],
+            },
+          },
+        },
+      },
+    },
+  },
   structures: {
     strict_vcp: {
       reject_reason: "历史不足", rejection_reason_code: "insufficient_history",
@@ -282,6 +339,10 @@ if (mode === "success") {
   const scenarioZh = textTree(elements.get("scenario-meta"));
   const structureZh = textTree(elements.get("structure-content"));
   const chartZh = textTree(elements.get("crosshair-detail"));
+  const modelZh = textTree(elements.get("model-output-content"));
+  const seriesDataBeforeLocale = priceChart.series.map((series) => JSON.stringify(series.data));
+  priceChart.crosshairHandler({ time: null });
+  const lockedModelZh = textTree(elements.get("model-output-content"));
   const priceLinesZh = priceChart.priceLines.map((line) => line.title);
   const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersZh = markerControllers[0].markers.map((marker) => marker.text);
@@ -301,6 +362,8 @@ if (mode === "success") {
   const scenarioEn = textTree(elements.get("scenario-meta"));
   const structureEn = textTree(elements.get("structure-content"));
   const chartEn = textTree(elements.get("crosshair-detail"));
+  const modelEn = textTree(elements.get("model-output-content"));
+  const seriesDataAfterLocale = priceChart.series.map((series) => JSON.stringify(series.data));
   const priceLinesEn = priceChart.priceLines.map((line) => line.title);
   const volumeTitlesEn = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersEn = markerControllers[0].markers.map((marker) => marker.text);
@@ -326,8 +389,13 @@ if (mode === "success") {
   assert.match(chartZh, /开盘价/);
   assert.match(chartZh, /向上交叉/);
   assert.match(chartZh, /已锁定/);
+  assert.match(modelZh, /Ridge 收益率预测/);
+  assert.match(modelZh, /最终方向 下跌/);
+  assert.match(modelZh, /规则分数，不是概率/);
+  assert.match(lockedModelZh, /2026-07-22/);
+  assert.deepEqual(seriesDataAfterLocale, seriesDataBeforeLocale);
   assert.deepEqual(priceLinesZh, ["向上突破准备形态（严格 VCP）枢轴点"]);
-  assert.deepEqual(markersZh, ["向上突破准备形态（严格 VCP）"]);
+  assert.deepEqual(markersZh, ["向上突破准备形态（严格 VCP）", "预测起点 · 下跌"]);
   assert.ok(volumeTitlesZh.includes("成交量 MA20"));
   assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
   assert.deepEqual(datesZh, [["07-17", "2026-07-17"], ["07-17", "2026-07-17"]]);
@@ -348,19 +416,23 @@ if (mode === "success") {
   assert.match(chartEn, /Open/);
   assert.match(chartEn, /Crossed above/);
   assert.match(chartEn, /Locked/);
+  assert.match(modelEn, /Ridge return forecast/);
+  assert.match(modelEn, /Final direction Down/);
+  assert.match(modelEn, /Rule score, not a probability/);
   assert.deepEqual(
     priceLinesEn,
     ["Bullish breakout setup (Strict VCP) pivot"],
   );
   assert.deepEqual(
     markersEn,
-    ["Bullish breakout setup (Strict VCP)"],
+    ["Bullish breakout setup (Strict VCP)", "Forecast start · Down"],
   );
   assert.ok(volumeTitlesEn.includes("Volume MA20"));
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
   assert.deepEqual(datesEn, datesZh);
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
-    popoverZh, factorEn, tableEn, scenarioEn, structureEn, chartEn, popoverEn }));
+    modelZh, lockedModelZh, popoverZh, factorEn, tableEn, scenarioEn, structureEn,
+    chartEn, modelEn, popoverEn }));
 } else if (mode === "universe-error") {
   const zh = {
     universe: elements.get("universe-status").textContent,
