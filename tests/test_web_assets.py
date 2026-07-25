@@ -1881,7 +1881,12 @@ class WebAssetTest(unittest.TestCase):
               latest_confirmed_high_confirmed_date: '2026-07-18',
               higher_low_previous_date: '2026-06-10', higher_low_previous_price: 90,
               higher_low_latest_date: '2026-07-10', higher_low_latest_price: 94,
-              higher_low_confirmation_date: '2026-07-14'}};
+              higher_low_confirmation_date: '2026-07-14',
+              near_resistance_lower: 226.74, near_resistance_upper: 230.30,
+              near_resistance_mid: 228.52, near_resistance_distance_pct: 2.61,
+              near_resistance_score: 68,
+              near_resistance_sources: ['sma50', 'recent_high_10'],
+              far_resistance: 276.17}};
             controller.setChartData({{chart: [row], structures: {{key_levels: {{
               strict_vcp_pivot: 103, tight_platform_pivot: 104,
             }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
@@ -2010,6 +2015,21 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["Latest high confirmed"], "2026-07-18")
         self.assertEqual(details["Higher-low confirmation"], "2026-07-14")
         self.assertEqual(details["Higher-low pivots"], "2026-06-10 90 → 2026-07-10 94")
+        self.assertEqual(details["Near resistance zone"], "226.74–230.3")
+        self.assertEqual(details["Resistance center"], "228.52")
+        self.assertEqual(details["Distance to resistance"], "+2.61%")
+        self.assertEqual(
+            details["Resistance sources"],
+            "SMA50, recent 10-session high",
+        )
+        self.assertEqual(details["Resistance strength"], "68/100 · Medium")
+        self.assertEqual(details["Far structural resistance"], "276.17")
+        self.assertEqual(zh_details["近端压力区"], "226.74–230.3")
+        self.assertEqual(zh_details["压力区中心"], "228.52")
+        self.assertEqual(zh_details["距近端压力"], "+2.61%")
+        self.assertEqual(zh_details["压力来源"], "SMA50、近10日高点")
+        self.assertEqual(zh_details["压力强度"], "68/100 · 中等")
+        self.assertEqual(zh_details["远端结构压力"], "276.17")
 
     def test_dashboard_css_reserves_chart_axis_gutter(self):
         chart_source = (STATIC / "js/charts.js").read_text()

@@ -91,6 +91,26 @@ function pointDeltaText(value) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)} pp`;
 }
 
+function resistanceZoneText(row) {
+  if (!finite(row?.near_resistance_lower) || !finite(row?.near_resistance_upper)) return "—";
+  return `${numberText(row.near_resistance_lower)}–${numberText(row.near_resistance_upper)}`;
+}
+
+function resistanceSourcesText(sources, locale) {
+  if (!Array.isArray(sources) || !sources.length) return "—";
+  return sources.map((source) => {
+    const key = `chart.resistance.source.${source}`;
+    const localized = t(key, {}, locale);
+    return localized === key ? source : localized;
+  }).join(locale === "zh-CN" ? "、" : ", ");
+}
+
+function resistanceStrengthText(score, locale) {
+  if (!finite(score)) return "—";
+  const level = score >= 70 ? "strong" : score >= 40 ? "medium" : "weak";
+  return `${numberText(score, 0)}/100 · ${t(`chart.resistance.strength.${level}`, {}, locale)}`;
+}
+
 function crossText(value, locale) {
   return value === "above"
     ? t("chart.cross.above", {}, locale)
@@ -170,6 +190,12 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.ema20Cross", {}, locale), value: crossText(row.ema20_cross, locale) },
     { label: t("chart.field.sma50Cross", {}, locale), value: crossText(row.sma50_cross, locale) },
     { label: t("chart.field.priorHighResistance", {}, locale), value: numberText(row.prior_high_resistance) },
+    { label: t("chart.field.nearResistanceZone", {}, locale), value: resistanceZoneText(row) },
+    { label: t("chart.field.nearResistanceMid", {}, locale), value: numberText(row.near_resistance_mid) },
+    { label: t("chart.field.nearResistanceDistance", {}, locale), value: percentText(row.near_resistance_distance_pct) },
+    { label: t("chart.field.nearResistanceSources", {}, locale), value: resistanceSourcesText(row.near_resistance_sources, locale) },
+    { label: t("chart.field.nearResistanceStrength", {}, locale), value: resistanceStrengthText(row.near_resistance_score, locale) },
+    { label: t("chart.field.farResistance", {}, locale), value: numberText(row.far_resistance) },
     { label: t("chart.field.priorHighBreakout", {}, locale), value: booleanText(row.prior_high_breakout, locale) },
     { label: t("chart.field.descendingTrendline", {}, locale), value: numberText(row.descending_trendline) },
     { label: t("chart.field.trendlineBreakout", {}, locale), value: booleanText(row.trendline_breakout, locale) },
