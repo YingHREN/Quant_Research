@@ -199,7 +199,10 @@ class ForecastRiskContextTest(unittest.TestCase):
     def test_modeled_groups_exclude_proxy_only_sectors(self):
         groups = modeled_market_groups()
 
-        self.assertEqual(tuple(group.key for group in groups), ("semiconductor",))
+        self.assertEqual(
+            tuple(group.key for group in groups),
+            ("semiconductor", "software"),
+        )
 
 
 class ForecastDecisionPolicyTest(unittest.TestCase):

@@ -150,8 +150,17 @@ function renderSectorHeatmap(rows = [], selectedGroup = {}) {
       ? selectedGroup.downside_risk
       : { score: null },
   };
+  const software = {
+    key: "software",
+    label_key: "market.group.software",
+    relative_return: null,
+    downside_risk: selectedGroup.key === "software"
+      ? selectedGroup.downside_risk
+      : { score: null },
+  };
   grid.append(
     sectorButton(semiconductor),
+    sectorButton(software),
     ...rows.map(sectorButton),
   );
   root.replaceChildren(grid);

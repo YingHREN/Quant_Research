@@ -12,7 +12,7 @@ from factors.compute import _ema, _sma, _zigzag_pivots
 from research.market_context import build_atomic_model_rows
 from research.reversal import build_reversal_rows
 from web.forecasts.base import SUPPORTED_HORIZONS
-from web.market_groups import market_group
+from web.market_groups import modeled_market_groups
 
 
 MARKET_ATOMIC_FEATURE_COLUMNS = (
@@ -112,15 +112,44 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     result = pd.concat(ticker_frames, axis=0).sort_index()
     if result.index.has_duplicates:
         raise ValueError("duplicate (ticker, observation_date) keys are not allowed")
-    market_rows = build_atomic_model_rows(
-        validated,
-        market_group("semiconductor"),
-    )
+    market_rows = _multi_group_atomic_rows(validated, result.index)
     for column in MARKET_ATOMIC_FEATURE_COLUMNS:
         result[column] = market_rows[column].reindex(result.index)
     result = result.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
     result = result.where(np.isfinite(result), np.nan)
     return result
+
+
+def _multi_group_atomic_rows(validated, index):
+    combined = None
+    assigned = set()
+    for group in modeled_market_groups():
+        members = tuple(
+            dict.fromkeys(
+                (*group.constituent_tickers, *group.related_tickers)
+            )
+        )
+        duplicates = assigned.intersection(members)
+        if duplicates:
+            raise ValueError(
+                "ticker belongs to multiple modeled groups: "
+                + ", ".join(sorted(duplicates))
+            )
+        assigned.update(members)
+        rows = build_atomic_model_rows(validated, group)
+        if combined is None:
+            combined = rows.reindex(index)
+            continue
+        selected = rows.index.get_level_values("ticker").isin(members)
+        selected_rows = rows.loc[selected]
+        combined.update(selected_rows)
+    if combined is None:
+        return pd.DataFrame(
+            np.nan,
+            index=index,
+            columns=MARKET_ATOMIC_FEATURE_COLUMNS,
+        )
+    return combined
 
 
 def attach_forward_targets(

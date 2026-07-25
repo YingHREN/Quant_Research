@@ -22,6 +22,8 @@ REFERENCE_TICKERS = (
     "XLU",
     "SOXX",
     "SMH",
+    "IGV",
+    "XSW",
 )
 
 SECTOR_ETFS = MappingProxyType(
@@ -70,6 +72,25 @@ _SEMICONDUCTORS = (
     "ENTG",
 )
 _AI_INFRASTRUCTURE = ("NBIS", "ANET", "DELL", "HPE", "SMCI")
+_SOFTWARE = (
+    "ADBE",
+    "CRM",
+    "NOW",
+    "ORCL",
+    "MSFT",
+    "INTU",
+    "PANW",
+    "CRWD",
+    "PLTR",
+    "SNOW",
+    "DDOG",
+    "MDB",
+    "TEAM",
+    "ZS",
+    "OKTA",
+    "HUBS",
+    "WDAY",
+)
 
 _PROXY_GROUPS = {
     key: MarketGroup(
@@ -89,6 +110,12 @@ MARKET_GROUPS = MappingProxyType(
             benchmark_tickers=("SOXX", "SMH"),
             constituent_tickers=_SEMICONDUCTORS,
             related_tickers=_AI_INFRASTRUCTURE,
+        ),
+        "software": MarketGroup(
+            key="software",
+            label_key="market.group.software",
+            benchmark_tickers=("IGV", "XSW"),
+            constituent_tickers=_SOFTWARE,
         ),
     }
 )

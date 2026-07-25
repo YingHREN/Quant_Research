@@ -75,6 +75,7 @@ class MarketAssetTest(unittest.TestCase):
             "market.evidence.failed_breakout",
             "market.evidence.help.failed_breakout",
             "market.group.semiconductor",
+            "market.group.software",
             "market.sector.technology",
             "market.sector.utilities",
         )

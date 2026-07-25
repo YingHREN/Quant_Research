@@ -51,6 +51,9 @@ def market_feature_histories(end="2026-07-23"):
         ("SOXX", 0.20),
         ("SMH", 0.22),
         ("AMD", 0.25),
+        ("IGV", 0.13),
+        ("XSW", 0.14),
+        ("ADBE", 0.08),
         ("OTHER", 0.10),
     ):
         close = 100.0 + np.arange(len(dates)) * slope
@@ -167,6 +170,16 @@ class ForecastDatasetTest(unittest.TestCase):
         self.assertNotIn("market_posture_score", FEATURE_COLUMNS)
         self.assertNotIn("reversal_opportunity_score", FEATURE_COLUMNS)
         self.assertNotIn("downside_risk_score", FEATURE_COLUMNS)
+
+    def test_sector_atomic_features_follow_each_tickers_explicit_group(self):
+        histories = market_feature_histories()
+        frame = build_feature_frame(histories)
+        adbe = frame.loc[("ADBE", frame.loc["ADBE"].index[-1])]
+        other = frame.loc[("OTHER", frame.loc["OTHER"].index[-1])]
+
+        self.assertTrue(np.isfinite(adbe["sector_trend_state"]))
+        self.assertTrue(np.isfinite(adbe["sector_relative_strength_20"]))
+        self.assertTrue(np.isnan(other["sector_trend_state"]))
         self.assertTrue(
             np.isnan(
                 frame.loc[

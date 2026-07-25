@@ -13,6 +13,7 @@ class MarketGroupTest(unittest.TestCase):
     def test_ticker_group_lookup_is_explicit_and_optional(self):
         self.assertEqual(market_group_for_ticker("mu").key, "semiconductor")
         self.assertEqual(market_group_for_ticker("NBIS").key, "semiconductor")
+        self.assertEqual(market_group_for_ticker("ADBE").key, "software")
         self.assertIsNone(market_group_for_ticker("AAPL"))
 
     def test_reference_universe_is_stable_and_complete(self):
@@ -34,6 +35,8 @@ class MarketGroupTest(unittest.TestCase):
                 "XLU",
                 "SOXX",
                 "SMH",
+                "IGV",
+                "XSW",
             ),
         )
 
@@ -51,8 +54,15 @@ class MarketGroupTest(unittest.TestCase):
         self.assertEqual(technology.constituent_tickers, ())
         self.assertEqual(technology.related_tickers, ())
 
+    def test_software_group_has_explicit_benchmarks_and_constituents(self):
+        group = market_group("software")
+
+        self.assertEqual(group.benchmark_tickers, ("IGV", "XSW"))
+        self.assertIn("ADBE", group.constituent_tickers)
+        self.assertIn("CRM", group.constituent_tickers)
+
     def test_modeled_groups_require_explicit_constituents(self):
         self.assertEqual(
             tuple(group.key for group in modeled_market_groups()),
-            ("semiconductor",),
+            ("semiconductor", "software"),
         )
