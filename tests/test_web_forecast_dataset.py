@@ -225,13 +225,15 @@ class ForecastDatasetTest(unittest.TestCase):
         frame = attach_forward_targets(build_feature_frame(histories), horizons=(5,))
 
         aaa = frame.xs("AAA", level="ticker")
-        self.assertAlmostEqual(aaa["target_return_5"].iloc[7], 112.0 / 107.0 - 1)
+        self.assertAlmostEqual(aaa["target_return_5"].iloc[7], 112.0 / 107.5 - 1)
+        self.assertEqual(aaa["label_entry_date_5"].iloc[7], aaa.index[8])
         self.assertEqual(aaa["label_end_date_5"].iloc[7], aaa.index[12])
+        self.assertTrue(aaa["label_entry_date_5"].iloc[-1:].isna().all())
         self.assertTrue(aaa["target_return_5"].iloc[-5:].isna().all())
         self.assertTrue(aaa["label_end_date_5"].iloc[-5:].isna().all())
 
         bbb = frame.xs("BBB", level="ticker")
-        self.assertAlmostEqual(bbb["target_return_5"].iloc[7], 212.0 / 207.0 - 1)
+        self.assertAlmostEqual(bbb["target_return_5"].iloc[7], 212.0 / 207.5 - 1)
 
     def test_training_label_must_end_strictly_before_forecast_date(self):
         frame = attach_forward_targets(
@@ -283,7 +285,11 @@ class ForecastDatasetTest(unittest.TestCase):
             with self.subTest(horizon=horizon):
                 self.assertAlmostEqual(
                     frame[f"target_return_{horizon}"].iloc[3],
-                    (103.0 + horizon) / 103.0 - 1.0,
+                    (103.0 + horizon) / 103.5 - 1.0,
+                )
+                self.assertEqual(
+                    frame[f"label_entry_date_{horizon}"].iloc[3],
+                    frame.index[4],
                 )
                 self.assertEqual(
                     frame[f"label_end_date_{horizon}"].iloc[3],
@@ -343,6 +349,11 @@ class ForecastDatasetTest(unittest.TestCase):
         self.assertTrue(attached.empty)
         for horizon in (5, 20, 60):
             self.assertIn(f"target_return_{horizon}", attached)
+            self.assertTrue(
+                pd.api.types.is_datetime64_any_dtype(
+                    attached[f"label_entry_date_{horizon}"].dtype
+                )
+            )
             self.assertTrue(
                 pd.api.types.is_datetime64_any_dtype(
                     attached[f"label_end_date_{horizon}"].dtype

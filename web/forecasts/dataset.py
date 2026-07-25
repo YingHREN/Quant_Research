@@ -107,7 +107,7 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
         index = pd.MultiIndex.from_arrays(
             [pd.Index([], dtype=object), pd.DatetimeIndex([])], names=INDEX_NAMES
         )
-        return pd.DataFrame(columns=("close", *FEATURE_COLUMNS), index=index)
+        return pd.DataFrame(columns=("open", "close", *FEATURE_COLUMNS), index=index)
 
     result = pd.concat(ticker_frames, axis=0).sort_index()
     if result.index.has_duplicates:
@@ -115,7 +115,7 @@ def build_feature_frame(histories: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     market_rows = _multi_group_atomic_rows(validated, result.index)
     for column in MARKET_ATOMIC_FEATURE_COLUMNS:
         result[column] = market_rows[column].reindex(result.index)
-    result = result.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
+    result = result.loc[:, ("open", "close", *FEATURE_COLUMNS)].astype(float)
     result = result.where(np.isfinite(result), np.nan)
     return result
 
@@ -157,22 +157,30 @@ def attach_forward_targets(
 ) -> pd.DataFrame:
     """Attach session-aligned forward returns and their explicit end dates."""
     _validate_feature_frame(frame)
+    if "open" not in frame:
+        raise ValueError("frame must include open for executable targets")
     checked_horizons = _validated_horizons(horizons)
     result = frame.copy(deep=True)
+    observation_dates = pd.Series(
+        result.index.get_level_values("observation_date"),
+        index=result.index,
+        dtype="datetime64[ns]",
+    )
 
     for horizon in checked_horizons:
         target_name = target_column(horizon)
+        entry_name = entry_date_column(horizon)
         end_name = label_end_column(horizon)
+        entry_open = result["open"].groupby(
+            level="ticker", sort=False
+        ).shift(-1).replace(0.0, np.nan)
         future_close = result["close"].groupby(level="ticker", sort=False).shift(
             -horizon
         )
-        denominator = result["close"].replace(0.0, np.nan)
-        result[target_name] = future_close / denominator - 1.0
-        observation_dates = pd.Series(
-            result.index.get_level_values("observation_date"),
-            index=result.index,
-            dtype="datetime64[ns]",
-        )
+        result[target_name] = future_close / entry_open - 1.0
+        result[entry_name] = observation_dates.groupby(
+            level="ticker", sort=False
+        ).shift(-1)
         result[end_name] = observation_dates.groupby(
             level="ticker", sort=False
         ).shift(-horizon)
@@ -219,6 +227,10 @@ def eligible_training_rows(
 
 def target_column(horizon: int) -> str:
     return f"target_return_{int(horizon)}"
+
+
+def entry_date_column(horizon: int) -> str:
+    return f"label_entry_date_{int(horizon)}"
 
 
 def label_end_column(horizon: int) -> str:
@@ -270,6 +282,7 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
     pivot = close.shift(1).rolling(20).max()
     volume_ratio = volume / volume.rolling(20).mean()
     features = pd.DataFrame(index=history.index)
+    features["open"] = history["Open"]
     features["close"] = close
     features["close_vs_ema20_pct"] = _relative_percent(close, ema20)
     features["close_vs_sma50_pct"] = _relative_percent(close, sma50)
@@ -299,7 +312,7 @@ def _ticker_features(ticker: str, history: pd.DataFrame) -> pd.DataFrame:
         features[key] = reversal[key].astype(float)
     for key in MARKET_ATOMIC_FEATURE_COLUMNS:
         features[key] = np.nan
-    features = features.loc[:, ("close", *FEATURE_COLUMNS)].astype(float)
+    features = features.loc[:, ("open", "close", *FEATURE_COLUMNS)].astype(float)
     features = features.where(np.isfinite(features), np.nan)
     features.index = pd.MultiIndex.from_arrays(
         [[ticker] * len(features), features.index], names=INDEX_NAMES
@@ -505,7 +518,12 @@ def _validated_horizons(horizons: Sequence[int]):
 
 
 def _validate_label_dates(frame: pd.DataFrame, horizon: int):
+    entry_name = entry_date_column(horizon)
     end_name = label_end_column(horizon)
+    if entry_name in frame and not pd.api.types.is_datetime64_any_dtype(
+        frame[entry_name].dtype
+    ):
+        raise ValueError(f"{entry_name} must contain datetime values")
     if not pd.api.types.is_datetime64_any_dtype(frame[end_name].dtype):
         raise ValueError(f"{end_name} must contain datetime values")
 
@@ -514,6 +532,16 @@ def _validate_label_dates(frame: pd.DataFrame, horizon: int):
         observation_dates = pd.Series(
             ordered.index.get_level_values("observation_date"), index=ordered.index
         )
+        if entry_name in ordered:
+            actual_entry = ordered[entry_name]
+            expected_entry = observation_dates.shift(-1)
+            entry_aligned = actual_entry.eq(expected_entry) | (
+                actual_entry.isna() & expected_entry.isna()
+            )
+            if not entry_aligned.all():
+                raise ValueError(
+                    f"{entry_name} must match ticker-local next-session alignment"
+                )
         actual = ordered[end_name]
         comparable = actual.notna()
         if (actual.loc[comparable] <= observation_dates.loc[comparable]).any():
