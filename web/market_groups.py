@@ -99,3 +99,14 @@ def market_group(key: str) -> MarketGroup:
         return MARKET_GROUPS[str(key)]
     except KeyError as exc:
         raise ValueError("unsupported_market_group") from exc
+
+
+def market_group_for_ticker(ticker: str) -> MarketGroup | None:
+    normalized = str(ticker).strip().upper()
+    for group in MARKET_GROUPS.values():
+        if (
+            normalized in group.constituent_tickers
+            or normalized in group.related_tickers
+        ):
+            return group
+    return None

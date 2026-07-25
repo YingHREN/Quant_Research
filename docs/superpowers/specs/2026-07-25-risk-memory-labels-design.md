@@ -41,6 +41,8 @@ The API preserves `downside_risk.score` as the raw score for compatibility and a
 
 Market UI headlines and table cells display `state_score` first. The accompanying text shows the status, current raw score, and memory age. Scores are rule indices, not probabilities.
 
+For semiconductor and AI-infrastructure tickers, the stock chart also carries the historical state on every date. Hover details show the remembered state score, current raw score, memory age, and the 12-rule model source. Tickers without an explicit sector-group mapping remain unavailable rather than being assigned a fabricated sector.
+
 ## Historical and Group Data
 
 `build_group_score_frame` keeps `downside_risk_score` unchanged and adds state columns. This preserves current calibration and saved-model inputs while allowing historical state analysis.
@@ -52,5 +54,6 @@ Selected-group risk aggregates constituent state scores for the displayed state 
 - Unit-test decay, renewal, expiration, missing values, and future-row invariance.
 - Regression-test a MU-like sequence: raw risk `34 → 15 → 5` must remain visibly active on the third session.
 - Verify API fields and group aggregation.
+- Verify MU-like historical state fields are visible in stock-chart hover rows.
 - Verify all Chinese/English labels and explanatory model-source text.
 - Run the complete Python and JavaScript test suites.

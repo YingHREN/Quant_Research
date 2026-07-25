@@ -65,11 +65,12 @@
 
 **Interfaces:**
 - Consumes snapshot risk-memory fields.
-- Produces directional Chinese/English labels and model-source help.
+- Produces directional Chinese/English labels, model-source help, and historical stock-chart hover fields for explicitly mapped semiconductor/AI-infrastructure tickers.
 
 - [ ] Update tests to require all four directional names and risk-state detail.
 - [ ] Run focused web tests and verify old-copy failures.
 - [ ] Update i18n, factor metadata, annotations, and market rendering.
+- [ ] Attach raw/state score, memory age, and model source to each mapped stock chart date; leave unmapped tickers unavailable.
 - [ ] Run focused Python and Node tests and commit.
 
 ### Task 4: End-to-End Verification

@@ -113,6 +113,40 @@ function earlyReversalConditionsText(row, locale) {
   }).join(" · ");
 }
 
+function marketRiskDetailItems(row, locale) {
+  if (
+    !finite(row?.market_bearish_turn_state_score)
+    || !finite(row?.market_bearish_turn_raw_score)
+  ) {
+    return [];
+  }
+  const stateKey = `market.riskState.${row.market_bearish_turn_state}`;
+  const localizedState = t(stateKey, {}, locale);
+  const state = localizedState === stateKey
+    ? row.market_bearish_turn_state
+    : localizedState;
+  return [
+    {
+      label: t("chart.field.bearishTurnRisk", {}, locale),
+      value: t("chart.risk.value", {
+        score: Number(row.market_bearish_turn_state_score).toFixed(1),
+        state,
+      }, locale),
+    },
+    {
+      label: t("chart.field.bearishTurnRawMemory", {}, locale),
+      value: t("chart.risk.rawMemory", {
+        raw: Number(row.market_bearish_turn_raw_score).toFixed(1),
+        age: row.market_bearish_turn_memory_age_sessions ?? "—",
+      }, locale),
+    },
+    {
+      label: t("chart.field.bearishTurnModel", {}, locale),
+      value: t("market.risk.modelSource", {}, locale),
+    },
+  ];
+}
+
 export function detailItems(row, locale = getLocale()) {
   return [
     { label: t("chart.field.open", {}, locale), value: numberText(row.open) },
@@ -144,6 +178,7 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.earlyReversalWatch", {}, locale), value: finite(row.early_reversal_score) ? `${row.early_reversal_score}/100` : "—" },
     { label: t("chart.field.earlyReversalState", {}, locale), value: t(row.early_reversal_watch ? "chart.earlyReversal.watching" : "chart.earlyReversal.inactive", {}, locale) },
     { label: t("chart.field.earlyReversalEvidence", {}, locale), value: earlyReversalConditionsText(row, locale) },
+    ...marketRiskDetailItems(row, locale),
     { label: t("chart.field.trendlinePivots", {}, locale), value: row.trendline_high_1_date && row.trendline_high_2_date ? `${row.trendline_high_1_date} → ${row.trendline_high_2_date}` : "—" },
     { label: t("chart.field.latestHighConfirmed", {}, locale), value: row.latest_confirmed_high_confirmed_date || "—" },
     { label: t("chart.field.higherLowConfirmation", {}, locale), value: row.higher_low_confirmation_date || "—" },

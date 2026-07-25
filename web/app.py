@@ -28,8 +28,17 @@ from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
+from research.market_context import build_group_score_frame
+from research.risk_memory import (
+    RISK_MEMORY_HALF_LIFE_SESSIONS,
+    RISK_MEMORY_WINDOW_SESSIONS,
+)
 from web.market_calendar import session_offset
-from web.market_groups import REFERENCE_TICKERS, market_group
+from web.market_groups import (
+    REFERENCE_TICKERS,
+    market_group,
+    market_group_for_ticker,
+)
 from web.services.analysis import AnalysisContext
 from web.services.forecasts import (
     ForecastRevisionChanged,
@@ -238,6 +247,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
         factor_payload = [result.to_dict() for result in factor_rows]
         chart = build_chart_rows(context)
+        _attach_market_bearish_risk(
+            chart,
+            normalized_ticker,
+            peer_histories,
+        )
 
         if selected_summary is not None and selected_summary.inactive:
             warnings.append("inactive_ticker")
@@ -525,6 +539,75 @@ def _finite_number(value):
         and not isinstance(value, bool)
         and math.isfinite(float(value))
     )
+
+
+def _optional_number(value):
+    return float(value) if _finite_number(value) else None
+
+
+def _attach_market_bearish_risk(chart, ticker, histories):
+    defaults = {
+        "market_bearish_turn_raw_score": None,
+        "market_bearish_turn_state_score": None,
+        "market_bearish_turn_state": "unavailable",
+        "market_bearish_turn_memory_age_sessions": None,
+        "market_bearish_turn_memory_half_life_sessions": (
+            RISK_MEMORY_HALF_LIFE_SESSIONS
+        ),
+        "market_bearish_turn_memory_window_sessions": (
+            RISK_MEMORY_WINDOW_SESSIONS
+        ),
+        "market_bearish_turn_model_key": "bearish_turn_risk_rules_v2",
+    }
+    for row in chart:
+        row.update(defaults)
+
+    group = market_group_for_ticker(ticker)
+    if group is None or not chart:
+        return
+    required_tickers = {
+        ticker,
+        "QQQ",
+        *group.benchmark_tickers,
+    }
+    bounded_histories = {
+        symbol: histories[symbol]
+        for symbol in required_tickers
+        if symbol in histories
+    }
+    scores = build_group_score_frame(bounded_histories, group)
+    if scores.empty or ticker not in scores.index.get_level_values("ticker"):
+        return
+    ticker_scores = scores.xs(ticker, level="ticker")
+    by_date = {
+        iso_date(timestamp): row
+        for timestamp, row in ticker_scores.iterrows()
+    }
+    for chart_row in chart:
+        score_row = by_date.get(chart_row["time"])
+        if score_row is None:
+            continue
+        state = score_row["downside_risk_state"]
+        chart_row.update(
+            {
+                "market_bearish_turn_raw_score": _optional_number(
+                    score_row["downside_risk_score"]
+                ),
+                "market_bearish_turn_state_score": _optional_number(
+                    score_row["downside_risk_state_score"]
+                ),
+                "market_bearish_turn_state": (
+                    str(state) if isinstance(state, str) else "unavailable"
+                ),
+                "market_bearish_turn_memory_age_sessions": (
+                    int(score_row["downside_risk_memory_age_sessions"])
+                    if _finite_number(
+                        score_row["downside_risk_memory_age_sessions"]
+                    )
+                    else None
+                ),
+            }
+        )
 
 
 def _shape_state(strict_vcp, tight_platform, near_pivot):

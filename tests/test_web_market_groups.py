@@ -1,9 +1,19 @@
 import unittest
 
-from web.market_groups import MARKET_GROUPS, REFERENCE_TICKERS, market_group
+from web.market_groups import (
+    MARKET_GROUPS,
+    REFERENCE_TICKERS,
+    market_group,
+    market_group_for_ticker,
+)
 
 
 class MarketGroupTest(unittest.TestCase):
+    def test_ticker_group_lookup_is_explicit_and_optional(self):
+        self.assertEqual(market_group_for_ticker("mu").key, "semiconductor")
+        self.assertEqual(market_group_for_ticker("NBIS").key, "semiconductor")
+        self.assertIsNone(market_group_for_ticker("AAPL"))
+
     def test_reference_universe_is_stable_and_complete(self):
         self.assertEqual(
             REFERENCE_TICKERS,

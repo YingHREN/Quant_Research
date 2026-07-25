@@ -681,6 +681,57 @@ class WebApiTest(unittest.TestCase):
             self.assertIsInstance(row["early_reversal_watch"], bool)
             self.assertIsInstance(row["early_reversal_conditions"], list)
 
+    def test_semiconductor_stock_chart_exposes_historical_risk_memory(self):
+        repository = FakeRepository()
+        repository.histories = {
+            "MU": price_history(end="2026-07-23"),
+            "QQQ": price_history(end="2026-07-23", offset=5),
+            "SOXX": price_history(end="2026-07-23", offset=10),
+            "SMH": price_history(end="2026-07-23", offset=15),
+            "SPY": price_history(end="2026-07-23", offset=20),
+        }
+        app = create_app(
+            test_config(),
+            repository,
+            FakeManager(),
+        )
+
+        response = app.test_client().get("/api/stocks/MU")
+
+        self.assertEqual(response.status_code, 200)
+        latest = response.json["chart"][-1]
+        self.assertEqual(
+            latest["market_bearish_turn_model_key"],
+            "bearish_turn_risk_rules_v2",
+        )
+        self.assertIn(
+            latest["market_bearish_turn_state"],
+            {"new", "persistent", "fading", "inactive"},
+        )
+        self.assertGreaterEqual(
+            latest["market_bearish_turn_state_score"],
+            latest["market_bearish_turn_raw_score"],
+        )
+        self.assertEqual(
+            latest["market_bearish_turn_memory_half_life_sessions"],
+            5,
+        )
+        self.assertEqual(
+            latest["market_bearish_turn_memory_window_sessions"],
+            10,
+        )
+
+    def test_stock_without_group_keeps_market_risk_memory_unavailable(self):
+        response = self.client.get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        latest = response.json["chart"][-1]
+        self.assertIsNone(latest["market_bearish_turn_state_score"])
+        self.assertEqual(
+            latest["market_bearish_turn_state"],
+            "unavailable",
+        )
+
     def test_historical_forecast_endpoint_computes_only_requested_date(self):
         requested = self.repository.histories["AAA"].index[-20].date().isoformat()
 

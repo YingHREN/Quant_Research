@@ -1634,7 +1634,7 @@ class WebAssetTest(unittest.TestCase):
             }});
             const adjustedText = textTree(adjustedDetail);
             assert.match(adjustedText, /方向：下跌/);
-            assert.match(adjustedText, /顶部反转风险 100分/);
+            assert.match(adjustedText, /向下预测覆盖风险（8项） 100分/);
             assert.match(adjustedText, /原模型方向 上涨/);
             assert.ok(adjustedText.includes('原模型预测收益率 +12.69%'));
             assert.match(adjustedText, /放量派发/);
@@ -1847,6 +1847,13 @@ class WebAssetTest(unittest.TestCase):
               trendline_breakout: true, higher_low_confirmed: false,
               reversal_signal_count: 2, reversal_candidate: true,
               early_reversal_score: 100, early_reversal_watch: true,
+              market_bearish_turn_raw_score: 5,
+              market_bearish_turn_state_score: 25.8,
+              market_bearish_turn_state: 'fading',
+              market_bearish_turn_memory_age_sessions: 2,
+              market_bearish_turn_memory_half_life_sessions: 5,
+              market_bearish_turn_memory_window_sessions: 10,
+              market_bearish_turn_model_key: 'bearish_turn_risk_rules_v2',
               early_reversal_conditions: ['prior_session_selloff', 'current_price_acceptance',
                 'descending_trendline_proximity', 'current_volume_support'],
               early_prior_session_selloff: true, early_current_price_acceptance: true,
@@ -1944,6 +1951,18 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["Bullish structural reversal conditions"], "2/3")
         self.assertEqual(details["Early bullish reversal watch"], "100/100")
         self.assertEqual(
+            details["Bearish turn risk"],
+            "25.8/100 · Fading",
+        )
+        self.assertEqual(
+            details["Current raw risk / memory"],
+            "5.0/100 · 2 sessions",
+        )
+        self.assertEqual(
+            details["Bearish-risk model"],
+            "12-rule market/sector/stock scoring model",
+        )
+        self.assertEqual(
             details["Early-watch state"],
             "Observing · awaiting structural confirmation",
         )
@@ -1953,6 +1972,18 @@ class WebAssetTest(unittest.TestCase):
         )
         zh_details = dict(actual["zhDetail"])
         self.assertEqual(zh_details["向上早期反转观察"], "100/100")
+        self.assertEqual(
+            zh_details["向下转折风险"],
+            "25.8/100 · 减弱",
+        )
+        self.assertEqual(
+            zh_details["当日原始风险 / 记忆"],
+            "5.0/100 · 2 个交易日",
+        )
+        self.assertEqual(
+            zh_details["向下风险模型"],
+            "12项市场/板块/个股规则评分模型",
+        )
         self.assertEqual(zh_details["早期观察状态"], "观察中 · 等待结构确认")
         self.assertEqual(
             zh_details["早期观察依据"],
