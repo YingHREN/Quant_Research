@@ -34,7 +34,6 @@ const COLORS = Object.freeze({
   strictPivot: "#ff9f43",
   platformPivot: "#f472b6",
   trendline: "#ff8ccf",
-  nearResistance: "#ff9f43",
   reversal: "#f7d154",
   forecast: "#7dd3fc",
   volumeMa20: "#5cc8ff",
@@ -110,6 +109,32 @@ function resistanceStrengthText(score, locale) {
   if (!finite(score)) return "—";
   const level = score >= 70 ? "strong" : score >= 40 ? "medium" : "weak";
   return `${numberText(score, 0)}/100 · ${t(`chart.resistance.strength.${level}`, {}, locale)}`;
+}
+
+function supportZoneText(row) {
+  if (!finite(row?.near_support_lower) || !finite(row?.near_support_upper)) return "—";
+  return `${numberText(row.near_support_lower)}–${numberText(row.near_support_upper)}`;
+}
+
+function supportSourcesText(sources, locale) {
+  if (!Array.isArray(sources) || !sources.length) return "—";
+  return sources.map((source) => {
+    const key = `chart.support.source.${source}`;
+    const localized = t(key, {}, locale);
+    return localized === key ? source : localized;
+  }).join(locale === "zh-CN" ? "、" : ", ");
+}
+
+function supportStrengthText(score, locale) {
+  if (!finite(score)) return "—";
+  const level = score >= 70 ? "strong" : score >= 40 ? "medium" : "weak";
+  return `${numberText(score, 0)}/100 · ${t(`chart.support.strength.${level}`, {}, locale)}`;
+}
+
+function supportStateText(state, locale) {
+  const key = `chart.support.state.${state || "unavailable"}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? "—" : localized;
 }
 
 function crossText(value, locale) {
@@ -197,6 +222,12 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.nearResistanceSources", {}, locale), value: resistanceSourcesText(row.near_resistance_sources, locale) },
     { label: t("chart.field.nearResistanceStrength", {}, locale), value: resistanceStrengthText(row.near_resistance_score, locale) },
     { label: t("chart.field.farResistance", {}, locale), value: numberText(row.far_resistance) },
+    { label: t("chart.field.nearSupportZone", {}, locale), value: supportZoneText(row) },
+    { label: t("chart.field.nearSupportMid", {}, locale), value: numberText(row.near_support_mid) },
+    { label: t("chart.field.nearSupportDistance", {}, locale), value: percentText(row.near_support_distance_pct) },
+    { label: t("chart.field.nearSupportSources", {}, locale), value: supportSourcesText(row.near_support_sources, locale) },
+    { label: t("chart.field.nearSupportStrength", {}, locale), value: supportStrengthText(row.near_support_score, locale) },
+    { label: t("chart.field.nearSupportState", {}, locale), value: supportStateText(row.near_support_state, locale) },
     { label: t("chart.field.priorHighBreakout", {}, locale), value: booleanText(row.prior_high_breakout, locale) },
     { label: t("chart.field.descendingTrendline", {}, locale), value: numberText(row.descending_trendline) },
     { label: t("chart.field.trendlineBreakout", {}, locale), value: booleanText(row.trendline_breakout, locale) },
@@ -341,24 +372,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     lineStyle: LightweightCharts.LineStyle.Dashed,
     priceLineVisible: false,
     lastValueVisible: true,
-  });
-  const nearResistanceSeries = priceChart.addSeries(LightweightCharts.BaselineSeries, {
-    title: t("chart.series.nearResistance", {}, locale),
-    baseValue: { type: "price", price: 0 },
-    baseLineColor: COLORS.nearResistance,
-    baseLineWidth: 1,
-    baseLineStyle: LightweightCharts.LineStyle.Dashed,
-    topLineColor: COLORS.nearResistance,
-    topLineWidth: 1,
-    topFillColor1: "rgba(255, 159, 67, 0.20)",
-    topFillColor2: "rgba(255, 159, 67, 0.08)",
-    bottomLineColor: COLORS.nearResistance,
-    bottomFillColor1: "rgba(255, 159, 67, 0.08)",
-    bottomFillColor2: "rgba(255, 159, 67, 0.04)",
-    crosshairMarkerVisible: false,
-    priceLineVisible: false,
-    lastValueVisible: true,
-    autoscaleInfoProvider: () => null,
   });
   const forecastProjectionSeries = priceChart.addSeries(LightweightCharts.LineSeries, {
     title: t("chart.series.forecastProjection", {}, locale),
@@ -644,14 +657,12 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     if (lockedTime !== null) {
       lockedTime = null;
       setPanLocked(false);
-      renderNearResistanceZone();
       paintDetail(row || rows.at(-1) || null, false);
       return;
     }
     if (!row) return;
     lockedTime = timeKey(row.time);
     setPanLocked(true);
-    renderNearResistanceZone();
     paintDetail(row, true);
   }
 
@@ -767,25 +778,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     refreshMarkers();
   }
 
-  function renderNearResistanceZone() {
-    const selectedRow = lockedTime === null
-      ? rows.at(-1)
-      : rowByTime.get(lockedTime);
-    const lower = selectedRow?.near_resistance_lower;
-    const upper = selectedRow?.near_resistance_upper;
-    if (!finite(lower) || !finite(upper) || upper < lower) {
-      nearResistanceSeries.setData([]);
-      return;
-    }
-    nearResistanceSeries.applyOptions({
-      baseValue: { type: "price", price: lower },
-    });
-    nearResistanceSeries.setData(rows.map((row) => ({
-      time: row.time,
-      value: upper,
-    })));
-  }
-
   function setChartData(payload) {
     if (destroyed) return;
     updatingChartData = true;
@@ -823,7 +815,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       sma50Series.setData(seriesPoints(rows, "sma50"));
       sma200Series.setData(seriesPoints(rows, "sma200"));
       trendlineSeries.setData(whitespaceSeriesPoints(rows, "descending_trendline"));
-      renderNearResistanceZone();
       volumeMa20Series.setData(seriesPoints(rows, "volume_ma20"));
       volumeRatioSeries.setData(seriesPoints(rows, "volume_ratio"));
 
@@ -877,7 +868,6 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     volumeMa20Series.applyOptions?.({ title: t("chart.series.volumeMa20", {}, locale) });
     volumeRatioSeries.applyOptions?.({ title: t("chart.series.volumeRatio", {}, locale) });
     trendlineSeries.applyOptions?.({ title: t("chart.series.descendingResistance", {}, locale) });
-    nearResistanceSeries.applyOptions?.({ title: t("chart.series.nearResistance", {}, locale) });
     forecastProjectionSeries.applyOptions?.({ title: t("chart.series.forecastProjection", {}, locale) });
     renderDecorations(lastPayload);
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);

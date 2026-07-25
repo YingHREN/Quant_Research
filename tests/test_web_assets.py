@@ -942,7 +942,6 @@ class WebAssetTest(unittest.TestCase):
             "LightweightCharts.CandlestickSeries",
             "LightweightCharts.HistogramSeries",
             "LightweightCharts.LineSeries",
-            "LightweightCharts.BaselineSeries",
             'title: "EMA20"',
             'title: "SMA50"',
             'title: "SMA200"',
@@ -982,9 +981,9 @@ class WebAssetTest(unittest.TestCase):
             "chart.pivot.tightPlatform",
             "chart.series.volumeMa20",
             "chart.series.volumeRatio",
-            "chart.series.nearResistance",
         ):
             self.assertIn(title_key, source)
+        self.assertNotIn("LightweightCharts.BaselineSeries", source)
         for field in (
             "volume_ratio_change",
             "pivot_distance_change_pct",
@@ -1008,7 +1007,7 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-range="2y"', html)
         self.assertIn('data-range="all"', html)
 
-    def test_near_resistance_zone_is_stable_on_hover_and_switches_only_on_lock(self):
+    def test_near_resistance_band_is_not_created(self):
         chart_uri = (STATIC / "js/charts.js").as_uri()
         script = rf"""
             import assert from 'node:assert/strict';
@@ -1073,35 +1072,10 @@ class WebAssetTest(unittest.TestCase):
                 near_resistance_mid: 205}},
             ];
             controller.setChartData({{chart: rows}});
-            const zone = created[0].series.find((series) => series.type === 'baseline');
-            assert.ok(zone);
-            assert.equal(zone.options.title, 'Near resistance zone');
-            assert.equal(zone.options.autoscaleInfoProvider(), null);
-            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 200}});
-            assert.deepEqual(zone.data, [
-              {{time: '2026-07-17', value: 210}},
-              {{time: '2026-07-18', value: 210}},
-            ]);
-            const initialData = structuredClone(zone.data);
-            const initialBaseValue = structuredClone(zone.options.baseValue);
-            const initialRange = structuredClone(created[0].timeScale().range);
-            created[0].crosshairHandler({{time: '2026-07-17'}});
-            assert.deepEqual(zone.data, initialData);
-            assert.deepEqual(zone.options.baseValue, initialBaseValue);
-            assert.deepEqual(created[0].timeScale().range, initialRange);
-
-            created[0].clickHandler({{time: '2026-07-17'}});
-            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 110}});
-            assert.deepEqual(zone.data, [
-              {{time: '2026-07-17', value: 120}},
-              {{time: '2026-07-18', value: 120}},
-            ]);
-            created[0].crosshairHandler({{time: '2026-07-18'}});
-            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 110}});
-
-            created[0].clickHandler({{time: '2026-07-18'}});
-            assert.deepEqual(zone.options.baseValue, {{type: 'price', price: 200}});
-            assert.deepEqual(created[0].timeScale().range, initialRange);
+            assert.equal(
+              created[0].series.filter((series) => series.type === 'baseline').length,
+              0,
+            );
         """
         result = subprocess.run(
             ["node", "--input-type=module", "-e", script],
@@ -1993,7 +1967,15 @@ class WebAssetTest(unittest.TestCase):
               near_resistance_mid: 228.52, near_resistance_distance_pct: 2.61,
               near_resistance_score: 68,
               near_resistance_sources: ['sma50', 'recent_high_10'],
-              far_resistance: 276.17}};
+              far_resistance: 276.17,
+              near_support_lower: 94.5, near_support_upper: 97,
+              near_support_mid: 95.75, near_support_distance_pct: 4.12,
+              near_support_score: 72,
+              near_support_sources: ['ema20', 'confirmed_swing_low'],
+              near_support_state: 'above',
+              latest_confirmed_low_date: '2026-07-10',
+              latest_confirmed_low_price: 94,
+              latest_confirmed_low_confirmed_date: '2026-07-14'}};
             controller.setChartData({{chart: [row], structures: {{key_levels: {{
               strict_vcp_pivot: 103, tight_platform_pivot: 104,
             }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
@@ -2137,6 +2119,21 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(zh_details["压力来源"], "SMA50、近10日高点")
         self.assertEqual(zh_details["压力强度"], "68/100 · 中等")
         self.assertEqual(zh_details["远端结构压力"], "276.17")
+        self.assertEqual(details["Near support zone"], "94.5–97")
+        self.assertEqual(details["Support center"], "95.75")
+        self.assertEqual(details["Distance to support"], "+4.12%")
+        self.assertEqual(
+            details["Support sources"],
+            "EMA20, confirmed swing low",
+        )
+        self.assertEqual(details["Support strength"], "72/100 · Strong")
+        self.assertEqual(details["Support state"], "Above support")
+        self.assertEqual(zh_details["近端支撑区"], "94.5–97")
+        self.assertEqual(zh_details["支撑区中心"], "95.75")
+        self.assertEqual(zh_details["距近端支撑"], "+4.12%")
+        self.assertEqual(zh_details["支撑来源"], "EMA20、已确认摆动低点")
+        self.assertEqual(zh_details["支撑强度"], "72/100 · 较强")
+        self.assertEqual(zh_details["支撑状态"], "位于支撑上方")
 
     def test_dashboard_css_reserves_chart_axis_gutter(self):
         chart_source = (STATIC / "js/charts.js").read_text()
