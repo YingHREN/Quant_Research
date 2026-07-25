@@ -135,6 +135,24 @@ function modelCard(model, locale, { open = false } = {}) {
       number(model.threshold, locale),
     ));
   }
+  if (model.high_level_context_score !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.highLevelContext", {}, locale),
+      number(model.high_level_context_score, locale),
+    ));
+  }
+  if (model.distribution_pressure_score !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.distributionPressure", {}, locale),
+      number(model.distribution_pressure_score, locale),
+    ));
+  }
+  if (model.structure_damage_score !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.structureDamage", {}, locale),
+      number(model.structure_damage_score, locale),
+    ));
+  }
   if (model.horizon_sessions !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.horizon", {}, locale),

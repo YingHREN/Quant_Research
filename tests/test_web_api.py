@@ -1590,6 +1590,15 @@ class ForecastServiceTest(unittest.TestCase):
                 "individual_risk_score": None,
                 "group_risk_score": None,
                 "slow_decline_risk_score": None,
+                "high_level_distribution_score": None,
+                "high_level_distribution_raw_score": None,
+                "high_level_distribution_state": "unavailable",
+                "high_level_distribution_raw_state": "unavailable",
+                "high_level_distribution_age_sessions": None,
+                "high_level_context_score": None,
+                "distribution_pressure_score": None,
+                "structure_damage_score": None,
+                "high_level_distribution_conditions": [],
             },
         )
 

@@ -36,6 +36,20 @@ def forecast_payload():
             "individual_risk_score": 72.0,
             "group_risk_score": 82.0,
             "slow_decline_risk_score": 45.0,
+            "high_level_distribution_score": 72.0,
+            "high_level_distribution_raw_score": 68.0,
+            "high_level_distribution_state": "confirmed",
+            "high_level_distribution_raw_state": "confirmed",
+            "high_level_distribution_age_sessions": 0,
+            "high_level_context_score": 75.0,
+            "distribution_pressure_score": 70.0,
+            "structure_damage_score": 55.0,
+            "high_level_distribution_conditions": [
+                "prior_60_session_advance",
+                "distribution_day",
+                "failed_breakout",
+                "below_ema20",
+            ],
             "immediate_risk_score": 100.0,
         },
     }
@@ -91,6 +105,7 @@ class ModelOutputContractTest(unittest.TestCase):
                 "bearish_turn_risk_rules_v2",
                 "group_regime_risk_v1",
                 "slow_decline_risk_v1",
+                "high_level_distribution_risk_v1",
                 "macro_risk",
                 "intraday_order_flow",
             },
@@ -99,6 +114,17 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(immediate["kind"], "rule_score")
         self.assertEqual(immediate["score"], 100.0)
         self.assertNotIn("probability", immediate)
+        top_risk = next(
+            item
+            for item in outputs["downside"]
+            if item["key"] == "high_level_distribution_risk_v1"
+        )
+        self.assertEqual(top_risk["score"], 72.0)
+        self.assertEqual(top_risk["state"], "confirmed")
+        self.assertEqual(top_risk["high_level_context_score"], 75.0)
+        self.assertEqual(top_risk["distribution_pressure_score"], 70.0)
+        self.assertEqual(top_risk["structure_damage_score"], 55.0)
+        self.assertIn("failed_breakout", top_risk["conditions"])
         structural = outputs["bullish_structure"][0]
         self.assertEqual(structural["key"], "bullish_structure_reversal_v1")
         self.assertEqual(structural["score"], 2)

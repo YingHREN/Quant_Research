@@ -12,6 +12,9 @@ import pandas as pd
 
 from research.market_context import build_group_score_frame
 from research.group_regime import build_group_regime_state
+from research.high_level_distribution import (
+    build_high_level_distribution_state,
+)
 from research.slow_decline import build_slow_decline_state
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
@@ -36,6 +39,15 @@ RISK_CONTEXT_COLUMNS = (
     "individual_risk_score",
     "group_risk_score",
     "slow_decline_risk_score",
+    "high_level_distribution_score",
+    "high_level_distribution_raw_score",
+    "high_level_distribution_state",
+    "high_level_distribution_raw_state",
+    "high_level_distribution_age_sessions",
+    "high_level_context_score",
+    "distribution_pressure_score",
+    "structure_damage_score",
+    "high_level_distribution_conditions",
 )
 PERSISTENT_RISK_SOURCES = frozenset(("individual", "group", "slow_decline"))
 SOURCE_WATCH_THRESHOLDS = {
@@ -69,6 +81,15 @@ class ForecastDecision:
     individual_risk_score: float | None = None
     group_risk_score: float | None = None
     slow_decline_risk_score: float | None = None
+    high_level_distribution_score: float | None = None
+    high_level_distribution_raw_score: float | None = None
+    high_level_distribution_state: str = "unavailable"
+    high_level_distribution_raw_state: str = "unavailable"
+    high_level_distribution_age_sessions: int | None = None
+    high_level_context_score: float | None = None
+    distribution_pressure_score: float | None = None
+    structure_damage_score: float | None = None
+    high_level_distribution_conditions: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.final_direction not in FORECAST_DIRECTIONS - {"unavailable"}:
@@ -124,6 +145,53 @@ class ForecastDecision:
             self.slow_decline_risk_score,
             "slow_decline_risk_score",
         )
+        top_score = _optional_score(
+            self.high_level_distribution_score,
+            "high_level_distribution_score",
+        )
+        top_raw_score = _optional_score(
+            self.high_level_distribution_raw_score,
+            "high_level_distribution_raw_score",
+        )
+        valid_top_states = {
+            "low", "inactive", "watch", "high", "confirmed",
+            "fading", "unavailable",
+        }
+        if self.high_level_distribution_state not in valid_top_states:
+            raise ValueError("invalid high_level_distribution_state")
+        if self.high_level_distribution_raw_state not in valid_top_states:
+            raise ValueError("invalid high_level_distribution_raw_state")
+        top_age = self.high_level_distribution_age_sessions
+        if top_age is not None:
+            if isinstance(top_age, bool) or not isinstance(top_age, Integral):
+                raise TypeError(
+                    "high_level_distribution_age_sessions must be an integer"
+                )
+            if int(top_age) < 0:
+                raise ValueError(
+                    "high_level_distribution_age_sessions must not be negative"
+                )
+            top_age = int(top_age)
+        top_context = _optional_score(
+            self.high_level_context_score,
+            "high_level_context_score",
+        )
+        top_supply = _optional_score(
+            self.distribution_pressure_score,
+            "distribution_pressure_score",
+        )
+        top_structure = _optional_score(
+            self.structure_damage_score,
+            "structure_damage_score",
+        )
+        top_conditions = tuple(self.high_level_distribution_conditions)
+        if any(
+            not isinstance(condition, str) or not condition
+            for condition in top_conditions
+        ):
+            raise ValueError(
+                "high_level_distribution_conditions must contain strings"
+            )
         object.__setattr__(self, "reasons", reasons)
         object.__setattr__(self, "policy_key", policy_key)
         object.__setattr__(self, "policy_version", policy_version)
@@ -142,6 +210,25 @@ class ForecastDecision:
             self,
             "slow_decline_risk_score",
             slow_decline_score,
+        )
+        object.__setattr__(self, "high_level_distribution_score", top_score)
+        object.__setattr__(
+            self,
+            "high_level_distribution_raw_score",
+            top_raw_score,
+        )
+        object.__setattr__(
+            self,
+            "high_level_distribution_age_sessions",
+            top_age,
+        )
+        object.__setattr__(self, "high_level_context_score", top_context)
+        object.__setattr__(self, "distribution_pressure_score", top_supply)
+        object.__setattr__(self, "structure_damage_score", top_structure)
+        object.__setattr__(
+            self,
+            "high_level_distribution_conditions",
+            top_conditions,
         )
 
     def to_dict(self):
@@ -164,6 +251,33 @@ class ForecastDecision:
             "group_risk_score": json_safe(self.group_risk_score),
             "slow_decline_risk_score": json_safe(
                 self.slow_decline_risk_score
+            ),
+            "high_level_distribution_score": json_safe(
+                self.high_level_distribution_score
+            ),
+            "high_level_distribution_raw_score": json_safe(
+                self.high_level_distribution_raw_score
+            ),
+            "high_level_distribution_state": (
+                self.high_level_distribution_state
+            ),
+            "high_level_distribution_raw_state": (
+                self.high_level_distribution_raw_state
+            ),
+            "high_level_distribution_age_sessions": (
+                self.high_level_distribution_age_sessions
+            ),
+            "high_level_context_score": json_safe(
+                self.high_level_context_score
+            ),
+            "distribution_pressure_score": json_safe(
+                self.distribution_pressure_score
+            ),
+            "structure_damage_score": json_safe(
+                self.structure_damage_score
+            ),
+            "high_level_distribution_conditions": list(
+                self.high_level_distribution_conditions
             ),
         }
 
@@ -257,8 +371,22 @@ class ForecastDecisionPolicy:
         final_direction = forecast.raw_direction
         risk_state = "unavailable" if persistent is None else "low"
         persistent_level = self._persistent_level(persistent)
+        top_state = (
+            "unavailable"
+            if persistent is None
+            else persistent["top_state"]
+        )
+        top_raw_state = (
+            "unavailable"
+            if persistent is None
+            else persistent["top_raw_state"]
+        )
 
         immediate_confirmed = immediate >= self.immediate_confirm_threshold
+        top_confirmed = (
+            top_state == "confirmed" and top_raw_state == "confirmed"
+        )
+        top_high = top_state in {"high", "fading", "confirmed"}
         confluence = (
             persistent is not None
             and persistent_level == "high"
@@ -267,6 +395,15 @@ class ForecastDecisionPolicy:
         if immediate_confirmed:
             risk_state = "confirmed"
             reasons.append("immediate_bearish_confirmation")
+            final_direction = "down"
+        elif top_confirmed:
+            risk_state = "confirmed"
+            reasons.extend(
+                (
+                    "high_level_distribution_risk",
+                    "high_level_structure_damage_confirmation",
+                )
+            )
             final_direction = "down"
         elif confluence:
             risk_state = "confirmed"
@@ -280,6 +417,11 @@ class ForecastDecisionPolicy:
         elif persistent_level == "high":
             risk_state = "high"
             reasons.append("persistent_bearish_risk")
+            if forecast.raw_direction == "up":
+                final_direction = "neutral"
+        elif top_high:
+            risk_state = "high"
+            reasons.append("high_level_distribution_risk")
             if forecast.raw_direction == "up":
                 final_direction = "neutral"
         elif persistent_level == "watch":
@@ -332,6 +474,29 @@ class ForecastDecisionPolicy:
                 None
                 if persistent is None
                 else persistent["slow_decline_score"]
+            ),
+            high_level_distribution_score=(
+                None if persistent is None else persistent["top_score"]
+            ),
+            high_level_distribution_raw_score=(
+                None if persistent is None else persistent["top_raw_score"]
+            ),
+            high_level_distribution_state=top_state,
+            high_level_distribution_raw_state=top_raw_state,
+            high_level_distribution_age_sessions=(
+                None if persistent is None else persistent["top_age"]
+            ),
+            high_level_context_score=(
+                None if persistent is None else persistent["top_context"]
+            ),
+            distribution_pressure_score=(
+                None if persistent is None else persistent["top_supply"]
+            ),
+            structure_damage_score=(
+                None if persistent is None else persistent["top_structure"]
+            ),
+            high_level_distribution_conditions=(
+                () if persistent is None else persistent["top_conditions"]
             ),
         )
         return forecast.with_decision(decision)
@@ -438,6 +603,7 @@ def build_forecast_risk_context(
 def _attach_additional_risk_sources(selected, histories, group):
     group_state = build_group_regime_state(histories, group)
     slow_state = build_slow_decline_state(histories, group)
+    top_state = _build_high_level_states(histories, group)
     dates = selected.index.get_level_values("observation_date")
     selected["group_risk_raw_score"] = group_state["raw_score"].reindex(
         dates
@@ -457,6 +623,34 @@ def _attach_additional_risk_sources(selected, histories, group):
     selected["slow_decline_risk_state"] = aligned_slow["state"]
     selected["slow_decline_risk_age"] = aligned_slow[
         "memory_age_sessions"
+    ]
+    aligned_top = top_state.reindex(selected.index)
+    selected["high_level_distribution_score"] = aligned_top[
+        "high_level_distribution_state_score"
+    ]
+    selected["high_level_distribution_raw_score"] = aligned_top[
+        "high_level_distribution_raw_score"
+    ]
+    selected["high_level_distribution_state"] = aligned_top[
+        "high_level_distribution_state"
+    ]
+    selected["high_level_distribution_raw_state"] = aligned_top[
+        "high_level_distribution_raw_state"
+    ]
+    selected["high_level_distribution_age_sessions"] = aligned_top[
+        "high_level_distribution_memory_age_sessions"
+    ]
+    selected["high_level_context_score"] = aligned_top[
+        "high_level_context_score"
+    ]
+    selected["distribution_pressure_score"] = aligned_top[
+        "distribution_pressure_score"
+    ]
+    selected["structure_damage_score"] = aligned_top[
+        "structure_damage_score"
+    ]
+    selected["high_level_distribution_conditions"] = aligned_top[
+        "high_level_distribution_conditions"
     ]
     selected["persistent_risk_raw_score"] = selected[
         [
@@ -512,6 +706,72 @@ def _attach_additional_risk_sources(selected, histories, group):
     return selected
 
 
+def _build_high_level_states(histories, group):
+    benchmark_close = _group_benchmark_close(histories, group)
+    qqq_history = histories.get("QQQ")
+    frames = {}
+    for ticker in dict.fromkeys(
+        (*group.constituent_tickers, *group.related_tickers)
+    ):
+        history = histories.get(ticker)
+        if not isinstance(history, pd.DataFrame) or history.empty:
+            continue
+        state = build_high_level_distribution_state(
+            history,
+            sector_close=benchmark_close,
+            qqq_history=qqq_history,
+        )
+        state = state.copy()
+        state["high_level_distribution_conditions"] = [
+            tuple(
+                dict.fromkeys(
+                    (
+                        *context,
+                        *supply,
+                        *structure,
+                    )
+                )
+            )
+            for context, supply, structure in zip(
+                state["high_level_context_conditions"],
+                state["distribution_pressure_conditions"],
+                state["structure_damage_conditions"],
+            )
+        ]
+        frames[ticker] = state
+    if not frames:
+        index = pd.MultiIndex.from_arrays(
+            [pd.Index([], dtype=object), pd.DatetimeIndex([])],
+            names=("ticker", "observation_date"),
+        )
+        return pd.DataFrame(index=index)
+    return pd.concat(
+        frames,
+        names=("ticker", "observation_date"),
+    ).sort_index()
+
+
+def _group_benchmark_close(histories, group):
+    normalized = []
+    tickers = group.benchmark_tickers or group.fallback_benchmark_tickers
+    for ticker in tickers:
+        history = histories.get(ticker)
+        if (
+            not isinstance(history, pd.DataFrame)
+            or history.empty
+            or "Close" not in history
+        ):
+            continue
+        close = pd.to_numeric(history["Close"], errors="coerce")
+        first = close.dropna()
+        if first.empty or float(first.iloc[0]) == 0.0:
+            continue
+        normalized.append(close / float(first.iloc[0]) * 100.0)
+    if not normalized:
+        return None
+    return pd.concat(normalized, axis=1).mean(axis=1, skipna=True)
+
+
 def _risk_context(row):
     if row is None:
         return None
@@ -532,6 +792,32 @@ def _risk_context(row):
         slow_decline_score = _optional_context_score(
             row.get("slow_decline_risk_score"),
             "slow_decline_risk_score",
+        )
+        top_score = _optional_context_score(
+            row.get("high_level_distribution_score"),
+            "high_level_distribution_score",
+        )
+        top_raw_score = _optional_context_score(
+            row.get("high_level_distribution_raw_score"),
+            "high_level_distribution_raw_score",
+        )
+        top_state = row.get("high_level_distribution_state")
+        top_raw_state = row.get("high_level_distribution_raw_state")
+        top_age = row.get("high_level_distribution_age_sessions")
+        top_context = _optional_context_score(
+            row.get("high_level_context_score"),
+            "high_level_context_score",
+        )
+        top_supply = _optional_context_score(
+            row.get("distribution_pressure_score"),
+            "distribution_pressure_score",
+        )
+        top_structure = _optional_context_score(
+            row.get("structure_damage_score"),
+            "structure_damage_score",
+        )
+        top_conditions = tuple(
+            row.get("high_level_distribution_conditions") or ()
         )
         if any(
             pd.isna(value)
@@ -562,6 +848,29 @@ def _risk_context(row):
         age = int(age)
     if any(source not in PERSISTENT_RISK_SOURCES for source in sources):
         raise ValueError("invalid persistent_risk_sources")
+    valid_top_states = {
+        "low", "inactive", "watch", "high", "confirmed",
+        "fading", "unavailable",
+    }
+    if pd.isna(top_state):
+        top_state = "unavailable"
+    if pd.isna(top_raw_state):
+        top_raw_state = "unavailable"
+    if top_state not in valid_top_states or top_raw_state not in valid_top_states:
+        raise ValueError("invalid high-level distribution state")
+    if top_age is None or pd.isna(top_age):
+        top_age = None
+    else:
+        if (
+            isinstance(top_age, bool)
+            or not isinstance(top_age, Real)
+            or not math.isfinite(float(top_age))
+            or float(top_age) < 0.0
+        ):
+            raise ValueError(
+                "high_level_distribution_age_sessions must be non-negative"
+            )
+        top_age = int(top_age)
     return {
         "score": score,
         "raw_score": raw_score,
@@ -571,6 +880,15 @@ def _risk_context(row):
         "individual_score": individual_score,
         "group_score": group_score,
         "slow_decline_score": slow_decline_score,
+        "top_score": top_score,
+        "top_raw_score": top_raw_score,
+        "top_state": top_state,
+        "top_raw_state": top_raw_state,
+        "top_age": top_age,
+        "top_context": top_context,
+        "top_supply": top_supply,
+        "top_structure": top_structure,
+        "top_conditions": top_conditions,
     }
 
 

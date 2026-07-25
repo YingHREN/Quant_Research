@@ -51,6 +51,15 @@ def high_risk_decision(**changes):
         "individual_risk_score": 34.0,
         "group_risk_score": 41.0,
         "slow_decline_risk_score": 12.0,
+        "high_level_distribution_score": 0.0,
+        "high_level_distribution_raw_score": 0.0,
+        "high_level_distribution_state": "inactive",
+        "high_level_distribution_raw_state": "inactive",
+        "high_level_distribution_age_sessions": 0,
+        "high_level_context_score": 0.0,
+        "distribution_pressure_score": 0.0,
+        "structure_damage_score": 0.0,
+        "high_level_distribution_conditions": (),
     }
     values.update(changes)
     return ForecastDecision(**values)
@@ -101,6 +110,15 @@ class ForecastDecisionContractTest(unittest.TestCase):
                 "individual_risk_score": 34.0,
                 "group_risk_score": 41.0,
                 "slow_decline_risk_score": 12.0,
+                "high_level_distribution_score": 0.0,
+                "high_level_distribution_raw_score": 0.0,
+                "high_level_distribution_state": "inactive",
+                "high_level_distribution_raw_state": "inactive",
+                "high_level_distribution_age_sessions": 0,
+                "high_level_context_score": 0.0,
+                "distribution_pressure_score": 0.0,
+                "structure_damage_score": 0.0,
+                "high_level_distribution_conditions": [],
             },
         )
 
@@ -175,6 +193,15 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "individual_risk_score",
                 "group_risk_score",
                 "slow_decline_risk_score",
+                "high_level_distribution_score",
+                "high_level_distribution_raw_score",
+                "high_level_distribution_state",
+                "high_level_distribution_raw_state",
+                "high_level_distribution_age_sessions",
+                "high_level_context_score",
+                "distribution_pressure_score",
+                "structure_damage_score",
+                "high_level_distribution_conditions",
             ],
         )
         self.assertIn("MU", context.index.get_level_values("ticker"))
@@ -292,6 +319,11 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
         individual=None,
         group=0.0,
         slow_decline=0.0,
+        top_score=0.0,
+        top_raw_score=0.0,
+        top_state="inactive",
+        top_raw_state="inactive",
+        top_age=0,
         sources=None,
     ):
         individual_score = score if individual is None else individual
@@ -306,6 +338,15 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "individual_risk_score": individual_score,
             "group_risk_score": group,
             "slow_decline_risk_score": slow_decline,
+            "high_level_distribution_score": top_score,
+            "high_level_distribution_raw_score": top_raw_score,
+            "high_level_distribution_state": top_state,
+            "high_level_distribution_raw_state": top_raw_state,
+            "high_level_distribution_age_sessions": top_age,
+            "high_level_context_score": 0.0,
+            "distribution_pressure_score": 0.0,
+            "structure_damage_score": 0.0,
+            "high_level_distribution_conditions": (),
         }
 
     def test_unavailable_context_retains_raw_forecast(self):
@@ -371,6 +412,79 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "persistent_immediate_confluence",
             result.decision.reasons,
         )
+
+    def test_high_level_watch_does_not_change_ridge_direction(self):
+        result = self.policy.decide(
+            available_forecast(),
+            self.context(
+                0.0,
+                individual=0.0,
+                top_score=45.0,
+                top_raw_score=45.0,
+                top_state="watch",
+                top_raw_state="watch",
+            ),
+        )
+
+        self.assertEqual(result.direction, "up")
+        self.assertEqual(result.decision.action, "retain")
+
+    def test_high_level_distribution_risk_downgrades_ridge_to_neutral(self):
+        result = self.policy.decide(
+            available_forecast(),
+            self.context(
+                0.0,
+                individual=0.0,
+                top_score=65.0,
+                top_raw_score=65.0,
+                top_state="high",
+                top_raw_state="high",
+            ),
+        )
+
+        self.assertEqual(result.direction, "neutral")
+        self.assertEqual(result.decision.risk_state, "high")
+        self.assertIn(
+            "high_level_distribution_risk",
+            result.decision.reasons,
+        )
+
+    def test_current_confirmed_top_risk_overrides_ridge_to_down(self):
+        result = self.policy.decide(
+            available_forecast(),
+            self.context(
+                0.0,
+                individual=0.0,
+                top_score=72.0,
+                top_raw_score=72.0,
+                top_state="confirmed",
+                top_raw_state="confirmed",
+            ),
+        )
+
+        self.assertEqual(result.direction, "down")
+        self.assertEqual(result.decision.risk_state, "confirmed")
+        self.assertIn(
+            "high_level_structure_damage_confirmation",
+            result.decision.reasons,
+        )
+
+    def test_fading_top_risk_cannot_independently_override_to_down(self):
+        result = self.policy.decide(
+            available_forecast(),
+            self.context(
+                0.0,
+                individual=0.0,
+                top_score=72.0,
+                top_raw_score=0.0,
+                top_state="fading",
+                top_raw_state="inactive",
+                top_age=2,
+            ),
+        )
+
+        self.assertEqual(result.direction, "neutral")
+        self.assertNotEqual(result.direction, "down")
 
     def test_group_and_slow_decline_use_source_specific_thresholds(self):
         group_watch = self.policy.decide(

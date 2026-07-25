@@ -36,6 +36,7 @@ def build_model_outputs(forecast, chart_row, evaluation):
                 decision,
                 "model.slowDecline",
             ),
+            _high_level_distribution_risk(decision),
             _planned("macro_risk", "remembered_state", "model.macroRisk"),
             _planned(
                 "intraday_order_flow",
@@ -146,6 +147,56 @@ def _remembered_risk(key, score, decision, translation_prefix):
         ),
         "memory_age_sessions": (
             decision.get("persistent_risk_age_sessions") if available else None
+        ),
+    }
+
+
+def _high_level_distribution_risk(decision):
+    score = decision.get("high_level_distribution_score")
+    state = decision.get("high_level_distribution_state")
+    available = score is not None and state not in (None, "unavailable")
+    return {
+        **_identity(
+            "high_level_distribution_risk_v1",
+            "v1",
+            "remembered_state",
+            "production",
+            (
+                "active"
+                if available and state in {
+                    "watch", "high", "confirmed", "fading",
+                }
+                else ("inactive" if available else "unavailable")
+            ),
+            "close_confirmed",
+            "model.highLevelDistribution",
+        ),
+        "score": json_safe(score),
+        "state": state if available else "unavailable",
+        "raw_state": (
+            decision.get("high_level_distribution_raw_state")
+            if available
+            else "unavailable"
+        ),
+        "memory_age_sessions": (
+            decision.get("high_level_distribution_age_sessions")
+            if available
+            else None
+        ),
+        "high_level_context_score": json_safe(
+            decision.get("high_level_context_score")
+        ),
+        "distribution_pressure_score": json_safe(
+            decision.get("distribution_pressure_score")
+        ),
+        "structure_damage_score": json_safe(
+            decision.get("structure_damage_score")
+        ),
+        "conditions": list(
+            decision.get("high_level_distribution_conditions") or ()
+        ),
+        "unavailable_reason": (
+            None if available else "insufficient_high_level_context"
         ),
     }
 

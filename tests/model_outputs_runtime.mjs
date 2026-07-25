@@ -94,6 +94,15 @@ const forecast = {
       threshold: 70,
       conditions: ["distribution_day", "break_below_ema20"],
     }, {
+      ...identity("high_level_distribution_risk_v1", "model.highLevelDistribution.name", "remembered_state"),
+      score: 72,
+      state: "confirmed",
+      memory_age_sessions: 0,
+      high_level_context_score: 75,
+      distribution_pressure_score: 70,
+      structure_damage_score: 55,
+      conditions: ["distribution_day", "failed_breakout", "below_ema20"],
+    }, {
       ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
       lifecycle: "planned",
       unavailable_reason: "not_implemented",
@@ -122,7 +131,7 @@ renderModelOutputs(container, {
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
 assert.equal(container.dataset.state, "available");
-assert.equal(cards.length, 5);
+assert.equal(cards.length, 6);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
 assert.match(zh, /最终方向/);
@@ -132,6 +141,11 @@ assert.match(zh, /计划中/);
 assert.match(zh, /90,076/);
 assert.match(zh, /始终上涨基线 \+61/);
 assert.match(zh, /阈值 70/);
+assert.match(zh, /高位派发与顶部向下转折风险/);
+assert.match(zh, /高位背景 75/);
+assert.match(zh, /供应聚集 70/);
+assert.match(zh, /结构破坏 55/);
+assert.match(zh, /疑似派发代理，不代表已确认机构交易/);
 
 renderModelOutputs(container, {
   forecast,
@@ -142,6 +156,8 @@ const en = textTree(container);
 assert.match(en, /Final direction/);
 assert.match(en, /Rule score, not a probability/);
 assert.match(en, /Planned/);
+assert.match(en, /High-level distribution and bearish top-turn risk/);
+assert.match(en, /Suspected distribution proxy, not verified institutional trading/);
 
 const notPrecomputed = structuredClone(forecast);
 Object.assign(notPrecomputed.model_outputs.primary[0], {
