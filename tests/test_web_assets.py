@@ -59,6 +59,15 @@ class WebAssetTest(unittest.TestCase):
         html = HTML.read_text()
         self.assertIn('id="model-output-panel"', html)
         self.assertIn('id="model-output-content"', html)
+        css = (STATIC / "css/dashboard.css").read_text()
+        self.assertRegex(
+            css,
+            r"\.model-output-panel\s*\{[^}]*height:\s*540px;",
+        )
+        self.assertRegex(
+            css,
+            r"\.model-output-shell\s*\{[^}]*overflow-y:\s*auto;",
+        )
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
