@@ -43,6 +43,33 @@ class WebAssetTest(unittest.TestCase):
         )
         return json.loads(result.stdout)
 
+    def run_marker_layers_runtime(self):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/marker_layers_runtime.mjs"),
+                (STATIC / "js/marker_layers.js").as_uri(),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_marker_layer_preferences(self):
+        self.assertTrue(
+            (STATIC / "js/marker_layers.js").exists(),
+            "marker layer preference module must exist",
+        )
+        actual = self.run_marker_layers_runtime()
+        self.assertEqual(
+            actual["core"],
+            ["strict_vcp", "vcp_breakout", "pocket_pivot"],
+        )
+        self.assertEqual(len(actual["all"]), 9)
+        self.assertEqual(actual["persisted"], ["pocket_pivot"])
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
