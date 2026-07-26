@@ -381,7 +381,18 @@ function summaryStrip(outputs, date, locale) {
 }
 
 function registeredGroups(outputs, registry) {
-  const groups = registry?.groups || outputs?.registry?.groups;
+  const externalRegistryMatches = (
+    registry
+    && (
+      !outputs?.registry_ref
+      || outputs.registry_ref === registry.version
+    )
+  );
+  const groups = (
+    externalRegistryMatches
+      ? registry.groups
+      : outputs?.registry?.groups
+  );
   if (!Array.isArray(groups) || !groups.length) return LEGACY_GROUPS;
   const keys = new Set();
   for (const group of groups) {

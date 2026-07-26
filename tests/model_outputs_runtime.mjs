@@ -201,6 +201,7 @@ const forecast = {
 
 const externalRegistry = forecast.model_outputs.registry;
 delete forecast.model_outputs.registry;
+forecast.model_outputs.registry_ref = externalRegistry.version;
 renderModelOutputs(container, {
   forecast,
   date: "2026-07-01",
@@ -298,6 +299,18 @@ const legacyCards = descendants(container)
   .filter((node) => node.dataset.modelCard);
 assert.equal(legacyCards.length, 10);
 assert.match(textTree(container), /最终决策/);
+
+const mismatchedForecast = structuredClone(forecast);
+mismatchedForecast.model_outputs.registry_ref = "model_output_registry_v0";
+renderModelOutputs(container, {
+  forecast: mismatchedForecast,
+  date: "2026-07-23",
+  locale: "zh-CN",
+  registry: externalRegistry,
+});
+const mismatchedCards = descendants(container)
+  .filter((node) => node.dataset.modelCard);
+assert.equal(mismatchedCards.length, 10);
 
 renderModelOutputs(container, {
   forecast: null,
