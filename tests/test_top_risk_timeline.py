@@ -98,6 +98,46 @@ class TopRiskTimelineTest(unittest.TestCase):
         )
         self.assertEqual(result["events"][1]["time"], "2026-06-03")
 
+    def test_risk_downgrades_do_not_repeat_markers_before_clearance(self):
+        frame = self.risk_frame(
+            [
+                "inactive",
+                "watch",
+                "high",
+                "confirmed",
+                "high",
+                "watch",
+                "fading",
+                "inactive",
+                "watch",
+            ],
+            raw_states=[
+                "inactive",
+                "watch",
+                "high",
+                "confirmed",
+                "high",
+                "watch",
+                "inactive",
+                "inactive",
+                "watch",
+            ],
+            scores=[0.0, 45.0, 65.0, 85.0, 68.0, 47.0, 35.0, 0.0, 44.0],
+        )
+
+        result = build_top_risk_timeline(frame, "NBIS", self.dates(frame))
+
+        self.assertEqual(
+            [event["type"] for event in result["events"]],
+            [
+                "top_risk_watch",
+                "top_risk_high",
+                "top_risk_confirmed",
+                "top_risk_recovery",
+                "top_risk_watch",
+            ],
+        )
+
     def test_appending_future_rows_does_not_change_existing_events(self):
         frame = self.risk_frame(
             ["inactive", "watch", "watch", "high", "confirmed", "fading"],

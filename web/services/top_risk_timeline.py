@@ -26,11 +26,15 @@ _AVAILABLE_STATES = {
     "confirmed",
     "fading",
 }
-_ACTIVE_STATES = {"watch", "high", "confirmed", "fading"}
 _EVENT_BY_STATE = {
     "watch": "top_risk_watch",
     "high": "top_risk_high",
     "confirmed": "top_risk_confirmed",
+}
+_STATE_SEVERITY = {
+    "watch": 1,
+    "high": 2,
+    "confirmed": 3,
 }
 
 
@@ -94,16 +98,24 @@ def _chart_dates(values):
 
 def _transition_events(rows):
     events = []
-    prior_state = None
-    prior_recovery = False
+    risk_active = False
+    episode_peak = 0
     for timestamp, row in rows.iterrows():
         state = row["_state"]
         recovery = _boolean(row["top_risk_recovery"])
         event_type = None
-        if recovery and not prior_recovery and prior_state in _ACTIVE_STATES:
+        cleared = risk_active and (
+            recovery or state in {"inactive", "low"}
+        )
+        severity = _STATE_SEVERITY.get(state, 0)
+        if cleared:
             event_type = "top_risk_recovery"
-        elif state in _EVENT_BY_STATE and state != prior_state:
+            risk_active = False
+            episode_peak = 0
+        elif severity > episode_peak:
             event_type = _EVENT_BY_STATE[state]
+            risk_active = True
+            episode_peak = severity
         if event_type is not None:
             events.append(
                 {
@@ -115,8 +127,6 @@ def _transition_events(rows):
                     "state": state,
                 }
             )
-        prior_state = state
-        prior_recovery = recovery
     return events
 
 
