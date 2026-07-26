@@ -86,6 +86,8 @@
       <p id="universe-status" class="inline-status" role="status" aria-live="polite" data-i18n="universe.loading">
         Loading local universe…
       </p>
+      <button id="universe-retry" class="quiet-button" type="button" hidden
+              data-i18n="recovery.universe">Reload stock pool</button>
       <nav aria-label="Stock pool" data-i18n-aria-label="universe.navAria">
         <ul id="universe-list" class="universe-list"></ul>
       </nav>
@@ -113,6 +115,8 @@
         <p id="research-status" class="inline-status span-full" role="status" aria-live="polite" data-i18n="security.choose">
           Choose a ticker from the stock pool.
         </p>
+        <button id="stock-retry" class="quiet-button span-full" type="button" hidden
+                data-i18n="recovery.stock">Retry current stock</button>
         <ul id="data-warnings" class="warning-list span-full" aria-label="Data quality warnings"
             data-i18n-aria-label="security.warningAria"></ul>
       </section>

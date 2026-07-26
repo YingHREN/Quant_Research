@@ -147,6 +147,13 @@ class WebAssetTest(unittest.TestCase):
         html = HTML.read_text()
         self.assertIn('id="top-risk-state"', html)
 
+    def test_page_has_manual_recovery_controls(self):
+        html = HTML.read_text()
+        self.assertIn('id="universe-retry"', html)
+        self.assertIn('id="stock-retry"', html)
+        self.assertIn('data-i18n="recovery.universe"', html)
+        self.assertIn('data-i18n="recovery.stock"', html)
+
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
         self.assertEqual(actual["stored"], ["top_risk"])
@@ -489,6 +496,16 @@ class WebAssetTest(unittest.TestCase):
     def test_current_script_survives_template_without_optional_top_risk_badge(self):
         actual = self.run_dashboard_runtime("missing-top-risk-element")
         self.assertEqual(actual, {"count": "1/1", "ticker": "AAA"})
+
+    def test_manual_recovery_restores_universe_and_selected_stock(self):
+        universe = self.run_dashboard_runtime("universe-error-then-retry")
+        self.assertEqual(universe["attempts"], 4)
+        self.assertEqual(universe["count"], "1/1")
+        self.assertTrue(universe["retryHidden"])
+        stock = self.run_dashboard_runtime("stock-error-then-retry")
+        self.assertEqual(stock["attempts"], 4)
+        self.assertEqual(stock["count"], "1/1")
+        self.assertTrue(stock["retryHidden"])
 
     def test_actual_dashboard_locale_switch_preserves_safe_error_states(self):
         universe = self.run_dashboard_runtime("universe-error")

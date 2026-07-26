@@ -48,6 +48,20 @@ function setText(element, value) {
   element.textContent = value == null || value === "" ? "—" : String(value);
 }
 
+function setRecoveryControl(
+  element,
+  { visible = false, loading = false, labelKey = "recovery.stock" } = {},
+) {
+  if (!element) return;
+  element.hidden = !visible;
+  element.disabled = loading;
+  element.dataset.loading = String(loading);
+  setText(
+    element,
+    t(loading ? "recovery.loading" : labelKey, {}, store.getState().locale),
+  );
+}
+
 function formatNumber(value) {
   return Number.isFinite(value)
     ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)
@@ -228,25 +242,44 @@ function clearResearchPanels() {
 async function selectTicker(ticker) {
   if (!ticker) return;
   const requestSequence = ++stockRequestSequence;
+  const previousState = store.getState();
+  const preserveExistingDetails = (
+    previousState.selectedTicker === ticker
+    && previousState.stockPayload
+  );
   researchError = null;
-  store.setState({ selectedTicker: ticker, stockPayload: null });
+  store.setState({
+    selectedTicker: ticker,
+    stockPayload: preserveExistingDetails ? previousState.stockPayload : null,
+  });
   persistSelectedTicker(ticker);
   paintUniverse();
+  setRecoveryControl(elements.stockRetry, {
+    visible: false,
+    loading: true,
+    labelKey: "recovery.stock",
+  });
   setText(elements.selectedTicker, ticker);
   const locale = store.getState().locale;
   setText(elements.securityState, t("security.state.loading", {}, locale));
-  renderTopRiskBadge(null, elements.topRiskState, locale);
-  clearStockQuote(elements);
   setText(elements.researchStatus, t("security.loading", { ticker }, locale));
   elements.researchStatus.removeAttribute("data-tone");
-  renderWarnings([]);
-  clearResearchPanels();
+  if (!preserveExistingDetails) {
+    renderTopRiskBadge(null, elements.topRiskState, locale);
+    clearStockQuote(elements);
+    renderWarnings([]);
+    clearResearchPanels();
+  }
 
   try {
     const payload = await api.getStock(ticker);
     if (requestSequence !== stockRequestSequence) return;
     store.setState({ stockPayload: payload });
     researchError = null;
+    setRecoveryControl(elements.stockRetry, {
+      visible: false,
+      labelKey: "recovery.stock",
+    });
     renderStockHeader(payload);
     chartController.setChartData(payload);
     renderFactors(payload.factors, factorRenderOptions());
@@ -263,6 +296,10 @@ async function selectTicker(ticker) {
     renderTopRiskBadge(null, elements.topRiskState, store.getState().locale);
     setText(elements.researchStatus, errorText(researchError, store.getState().locale));
     elements.researchStatus.dataset.tone = "error";
+    setRecoveryControl(elements.stockRetry, {
+      visible: true,
+      labelKey: "recovery.stock",
+    });
   }
 }
 
@@ -274,6 +311,11 @@ function coverageText(payload) {
 }
 
 async function loadUniverse() {
+  setRecoveryControl(elements.universeRetry, {
+    visible: false,
+    loading: true,
+    labelKey: "recovery.universe",
+  });
   setText(elements.universeStatus, t("universe.loading", {}, store.getState().locale));
   try {
     const payload = await api.getUniverse();
@@ -285,25 +327,39 @@ async function loadUniverse() {
       readRequestedTicker(),
     );
     store.setState({ universePayload: payload, universe: rows, selectedTicker });
+    setRecoveryControl(elements.universeRetry, {
+      visible: false,
+      labelKey: "recovery.universe",
+    });
     setText(elements.marketDate, payload.asof || t("header.noData", {}, store.getState().locale));
     setText(elements.marketCoverage, coverageText(payload));
     paintUniverse();
     if (selectedTicker) await selectTicker(selectedTicker);
   } catch (error) {
     universeError = errorState(error);
-    store.setState({ universe: [], universePayload: null, selectedTicker: null });
+    const state = store.getState();
+    const hasSuccessfulUniverse = state.universe.length > 0 && state.universePayload;
+    if (!hasSuccessfulUniverse) {
+      store.setState({ universe: [], universePayload: null, selectedTicker: null });
+    }
     paintUniverse();
+    setRecoveryControl(elements.universeRetry, {
+      visible: true,
+      labelKey: "recovery.universe",
+    });
     elements.universeStatus.dataset.tone = "error";
-    setText(
-      elements.securityState,
-      t("security.state.unavailable", {}, store.getState().locale),
-    );
-    renderTopRiskBadge(null, elements.topRiskState, store.getState().locale);
-    setText(
-      elements.researchStatus,
-      t("security.unavailableUntilUniverse", {}, store.getState().locale),
-    );
-    elements.researchStatus.dataset.tone = "error";
+    if (!hasSuccessfulUniverse) {
+      setText(
+        elements.securityState,
+        t("security.state.unavailable", {}, store.getState().locale),
+      );
+      renderTopRiskBadge(null, elements.topRiskState, store.getState().locale);
+      setText(
+        elements.researchStatus,
+        t("security.unavailableUntilUniverse", {}, store.getState().locale),
+      );
+      elements.researchStatus.dataset.tone = "error";
+    }
   }
 }
 
@@ -341,6 +397,13 @@ async function refreshUniverseAfterUpdate(updateSnapshot = {}) {
 }
 
 function bindControls() {
+  elements.universeRetry.addEventListener("click", () => {
+    void loadUniverse();
+  });
+  elements.stockRetry.addEventListener("click", () => {
+    const ticker = store.getState().selectedTicker;
+    if (ticker) void selectTicker(ticker);
+  });
   elements.universeSearch.addEventListener("input", (event) => {
     store.setState({ query: event.currentTarget.value });
     paintUniverse();
@@ -449,6 +512,7 @@ function captureElements() {
     universeList: byId("universe-list"),
     universeCount: byId("universe-count"),
     universeStatus: byId("universe-status"),
+    universeRetry: byId("universe-retry"),
     universeSearch: byId("universe-search"),
     sortKey: byId("sort-key"),
     sortDirection: byId("sort-direction"),
@@ -461,6 +525,7 @@ function captureElements() {
     securityState: byId("security-state"),
     topRiskState: byId("top-risk-state"),
     researchStatus: byId("research-status"),
+    stockRetry: byId("stock-retry"),
     dataWarnings: byId("data-warnings"),
     priceChart: byId("price-chart"),
     volumeChart: byId("volume-chart"),
