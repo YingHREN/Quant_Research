@@ -1084,6 +1084,50 @@ class WebApiTest(unittest.TestCase):
             10,
         )
 
+    def test_semiconductor_stock_chart_exposes_causal_supply_demand_scores(self):
+        repository = FakeRepository()
+        repository.histories = {
+            "MU": price_history(end="2026-07-23"),
+            "QQQ": price_history(end="2026-07-23", offset=5),
+            "SOXX": price_history(end="2026-07-23", offset=10),
+            "SPY": price_history(end="2026-07-23", offset=20),
+        }
+        app = create_app(
+            test_config(),
+            repository,
+            FakeManager(),
+        )
+
+        response = app.test_client().get("/api/stocks/MU")
+
+        self.assertEqual(response.status_code, 200)
+        latest = response.json["chart"][-1]
+        self.assertEqual(
+            latest["supply_pressure_model_key"],
+            "supply_pressure_v1",
+        )
+        self.assertEqual(
+            latest["demand_confirmation_model_key"],
+            "demand_confirmation_v1",
+        )
+        self.assertIsInstance(latest["supply_pressure_score"], (int, float))
+        self.assertIsInstance(
+            latest["demand_confirmation_score"],
+            (int, float),
+        )
+        self.assertGreaterEqual(latest["supply_pressure_coverage"], 0.75)
+        self.assertGreaterEqual(latest["demand_confirmation_coverage"], 0.75)
+        self.assertIn(
+            latest["supply_demand_state"],
+            {
+                "mixed",
+                "low_participation",
+                "healthy_advance",
+                "distribution_risk",
+                "two_way_contest",
+            },
+        )
+
     def test_stock_without_group_keeps_market_risk_memory_unavailable(self):
         response = self.client.get("/api/stocks/AAA")
 
