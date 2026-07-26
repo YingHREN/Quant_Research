@@ -26,6 +26,9 @@ from werkzeug.exceptions import HTTPException
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
+from web.forecasts.feature_provenance import (
+    default_feature_provenance_registry,
+)
 from web.forecasts.model_outputs import (
     build_model_outputs,
     default_model_output_registry,
@@ -416,6 +419,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "warnings": warnings,
             "forecasts": forecast_payload["forecasts"],
             "forecast_evaluation": forecast_payload["forecast_evaluation"],
+            "feature_provenance_registry": forecast_payload.get(
+                "feature_provenance_registry"
+            ),
             "model_output_registry": forecast_payload.get(
                 "model_output_registry"
             ),
@@ -609,6 +615,10 @@ def _attach_forecast_target_dates(payload, known_sessions):
 
 
 def _attach_model_outputs(payload, chart, structures=None):
+    payload.setdefault(
+        "feature_provenance_registry",
+        default_feature_provenance_registry().public_contract(),
+    )
     by_date = payload.get("forecasts", {}).get("by_date", {})
     evaluations = payload.get("forecast_evaluation", {})
     rows = {

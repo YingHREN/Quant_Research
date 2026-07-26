@@ -613,6 +613,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         date,
         locale,
         registry: selectedForecastIndex.modelOutputRegistry,
+        featureRegistry: selectedForecastIndex.featureProvenanceRegistry,
         requestState: date === null ? null : forecastRequestStates.get(date) || null,
       });
       if (forecastRequestTimer !== null) {

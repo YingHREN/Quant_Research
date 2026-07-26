@@ -528,6 +528,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   margin: 0;
 }
 .model-output-summary { padding: 9px; border: 1px solid var(--line); border-radius: 8px; background: #0b141c; }
+.model-output-provenance { margin-top: 8px; border-color: rgba(53, 198, 165, 0.34); }
 .model-output-field { min-width: 0; }
 .model-output-field dt { color: var(--muted); font-size: 0.64rem; text-transform: uppercase; }
 .model-output-field dd { margin: 3px 0 0; overflow-wrap: anywhere; color: var(--text); font-size: 0.75rem; font-variant-numeric: tabular-nums; }

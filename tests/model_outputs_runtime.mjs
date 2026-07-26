@@ -74,6 +74,15 @@ const identity = (key, nameKey, kind, status = "active") => ({
   limitation_key: `${nameKey.replace(/\.name$/, "")}.limitation`,
 });
 const forecast = {
+  feature_provenance: {
+    registry_ref: "feature_provenance_registry_v1",
+    feature_version: "ridge-features-v2",
+    observed_through: "2026-07-01",
+    source_cutoff: "2026-07-01",
+    available_at: "2026-07-01T16:00:00-04:00",
+    data_version: "abcdef0123456789".repeat(4),
+    execution_timing: "next_session_open",
+  },
   model_outputs: {
     registry: {
       version: "model_output_registry_v1",
@@ -207,6 +216,11 @@ renderModelOutputs(container, {
   date: "2026-07-01",
   locale: "zh-CN",
   registry: externalRegistry,
+  featureRegistry: {
+    version: "feature_provenance_registry_v1",
+    feature_version: "ridge-features-v2",
+    features: [],
+  },
 });
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
@@ -243,6 +257,11 @@ assert.match(zh, /当前成交量 1\.25M/);
 assert.match(zh, /更广义需求确认/);
 assert.match(zh, /宏观环境/);
 assert.match(zh, /决策权限/);
+assert.match(zh, /数据时点/);
+assert.match(zh, /2026-07-01T16:00:00-04:00/);
+assert.match(zh, /ridge-features-v2/);
+assert.match(zh, /abcdef012345/);
+assert.match(zh, /收盘确认，下一交易日开盘执行/);
 
 renderModelOutputs(container, {
   forecast,

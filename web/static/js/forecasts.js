@@ -13,6 +13,7 @@ function emptyIndex() {
     model: null,
     dateCoverage: null,
     modelOutputRegistry: null,
+    featureProvenanceRegistry: null,
   });
 }
 
@@ -59,6 +60,9 @@ export function indexForecasts(payload) {
     model: forecasts?.model || null,
     dateCoverage: forecasts?.date_coverage || null,
     modelOutputRegistry: payload?.model_output_registry || null,
+    featureProvenanceRegistry: (
+      payload?.feature_provenance_registry || null
+    ),
   });
   return currentIndex;
 }
