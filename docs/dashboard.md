@@ -94,6 +94,9 @@ The explicit backfill downloads up to four symbols concurrently but validates
 and commits them on one thread. The ordinary dashboard update stays
 single-worker. Unsetting the optional fundamental-data keys prevents this
 price-only operation from spending quota on unrelated financial statements.
+If Tiingo returns HTTP 429, rerun the same command after the limit resets:
+symbols with a successful ingestion for the same provider and requested start
+are skipped, so the command resumes from the pending suffix.
 
 The current Tiingo bars use split-and-dividend-adjusted OHLCV
 (`split_dividend_adjusted`). This is appropriate for return and technical

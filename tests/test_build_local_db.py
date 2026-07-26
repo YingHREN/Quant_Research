@@ -103,6 +103,42 @@ class BuildLocalDatabaseTest(unittest.TestCase):
             2,
         )
 
+    def test_backfill_resume_skips_successful_same_window_ingestions(self):
+        connection = sqlite3.connect(":memory:")
+        history = pd.DataFrame(
+            {
+                "Open": [10.0],
+                "High": [11.0],
+                "Low": [9.0],
+                "Close": [10.5],
+                "Volume": [100.0],
+            },
+            index=pd.DatetimeIndex(["2026-01-02"], name="Date"),
+        )
+        calls = []
+
+        def fake_fetch(ticker, *, period, use_cache):
+            calls.append(ticker)
+            return StockData(ticker, history, ok=True)
+
+        arguments = {
+            "years": 10,
+            "workers": 1,
+            "tickers": ("AAA",),
+            "connection": connection,
+            "fetcher": fake_fetch,
+            "asof": date(2026, 1, 3),
+        }
+        with mock.patch("build_local_db.time.sleep"):
+            first = backfill(**arguments)
+            resumed = backfill(**arguments)
+
+        self.assertEqual(first.succeeded, 1)
+        self.assertEqual(first.skipped, 0)
+        self.assertEqual(resumed.succeeded, 0)
+        self.assertEqual(resumed.skipped, 1)
+        self.assertEqual(calls, ["AAA"])
+
 
 if __name__ == "__main__":
     unittest.main()

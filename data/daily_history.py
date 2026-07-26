@@ -338,3 +338,22 @@ def coverage_report(connection: sqlite3.Connection) -> list[PriceCoverage]:
         """
     ).fetchall()
     return [_coverage_row(row) for row in rows]
+
+
+def completed_ingestions(
+    connection: sqlite3.Connection,
+    *,
+    provider: str,
+    requested_start: date,
+) -> set[str]:
+    """Return symbols already committed for one resumable provider window."""
+    _ensure_schema(connection)
+    rows = connection.execute(
+        """
+        SELECT DISTINCT ticker
+        FROM price_ingestions
+        WHERE provider=? AND requested_start=?
+        """,
+        (provider, requested_start.isoformat()),
+    ).fetchall()
+    return {str(row[0]) for row in rows}

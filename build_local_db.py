@@ -24,7 +24,12 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
-from data.daily_history import coverage_report, history_start, persist_history
+from data.daily_history import (
+    completed_ingestions,
+    coverage_report,
+    history_start,
+    persist_history,
+)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(BASE, "data", "cache")
@@ -110,6 +115,7 @@ def update_tickers(existing):
 @dataclass(frozen=True)
 class BackfillSummary:
     requested: int
+    skipped: int
     succeeded: int
     failed: int
     warnings: int
@@ -141,6 +147,13 @@ def backfill(
     symbols = update_tickers(local_tickers()) if tickers is None else sorted(set(tickers))
     observation_day = asof or date.today()
     requested_start = history_start(observation_day, years)
+    completed = completed_ingestions(
+        con,
+        provider=PROVIDER,
+        requested_start=requested_start,
+    )
+    pending_symbols = [ticker for ticker in symbols if ticker not in completed]
+    skipped = len(symbols) - len(pending_symbols)
     succeeded = failed = warnings = below_floor = 0
     rate_limited = False
     period = f"{years}y"
@@ -152,14 +165,14 @@ def backfill(
             return ticker, error
 
     if workers == 1:
-        fetched = map(fetch_one, symbols)
+        fetched = map(fetch_one, pending_symbols)
         executor = None
     else:
         executor = ThreadPoolExecutor(
             max_workers=workers,
             thread_name_prefix="daily-history-fetch",
         )
-        fetched = executor.map(fetch_one, symbols)
+        fetched = executor.map(fetch_one, pending_symbols)
     try:
         for ticker, outcome in fetched:
             if isinstance(outcome, BaseException):
@@ -212,6 +225,7 @@ def backfill(
         con.close()
     summary = BackfillSummary(
         requested=len(symbols),
+        skipped=skipped,
         succeeded=succeeded,
         failed=failed,
         warnings=warnings,
@@ -219,7 +233,8 @@ def backfill(
         rate_limited=rate_limited,
     )
     print(
-        f"{years}年窗口：请求{summary.requested}只，成功{summary.succeeded}只，"
+        f"{years}年窗口：请求{summary.requested}只，跳过已完成{summary.skipped}只，"
+        f"本次成功{summary.succeeded}只，"
         f"失败{summary.failed}只，质量警告{summary.warnings}只，"
         f"不足8年{summary.below_eight_year_floor}只"
     )
