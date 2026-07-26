@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Optional
 
 import pandas as pd
+
+from data.daily_history import history_start
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -47,8 +51,19 @@ class StockData:
     error: str = ""
 
 
-def _cache_path(ticker: str) -> str:
-    return os.path.join(CACHE_DIR, f"{ticker.upper()}_{PROVIDER}_{date.today().isoformat()}.pkl")
+def _cache_path(ticker: str, period: Optional[str] = None) -> str:
+    window = f"_{period}" if period else ""
+    return os.path.join(
+        CACHE_DIR,
+        f"{ticker.upper()}_{PROVIDER}{window}_{date.today().isoformat()}.pkl",
+    )
+
+
+def _period_years(period: str) -> int:
+    match = re.fullmatch(r"([1-9][0-9]*)y", str(period))
+    if match is None:
+        raise ValueError("daily history period must be a positive number of years")
+    return int(match.group(1))
 
 
 # ---------- Alpha Vantage ----------
@@ -223,7 +238,7 @@ def _fetch_alphavantage(ticker: str) -> StockData:
 
 def _tiingo_history(ticker: str, years: int = 2) -> pd.DataFrame:
     """Tiingo EOD 日线，用复权价(adj*)供技术分析。免费档给多年历史。"""
-    start = (date.today().replace(year=date.today().year - years)).isoformat()
+    start = history_start(date.today(), years).isoformat()
     url = (f"{TIINGO_BASE}/{ticker}/prices"
            f"?startDate={start}&format=json&token={TIINGO_KEY}")
     req = urllib.request.Request(url, headers={"Content-Type": "application/json",
@@ -257,12 +272,12 @@ def _tiingo_history(ticker: str, years: int = 2) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("Date").sort_index()
 
 
-def _fetch_tiingo(ticker: str) -> StockData:
+def _fetch_tiingo(ticker: str, period: str) -> StockData:
     if not TIINGO_KEY:
         return StockData(ticker, pd.DataFrame(), ok=False,
                          error="缺少 TIINGO_API_KEY 环境变量")
     try:
-        hist = _tiingo_history(ticker)
+        hist = _tiingo_history(ticker, years=_period_years(period))
         if hist.empty or len(hist) < 60:
             return StockData(ticker, pd.DataFrame(), ok=False,
                              error=f"历史数据不足({len(hist)}<60)")
@@ -328,7 +343,7 @@ def _fetch_yfinance(ticker: str, period: str) -> StockData:
 
 def fetch(ticker: str, period: str = "1y", use_cache: bool = True) -> StockData:
     ticker = ticker.upper().strip()
-    cp = _cache_path(ticker)
+    cp = _cache_path(ticker, period)
     if use_cache and os.path.exists(cp):
         try:
             return pd.read_pickle(cp)
@@ -338,7 +353,7 @@ def fetch(ticker: str, period: str = "1y", use_cache: bool = True) -> StockData:
     if PROVIDER == "yfinance":
         sd = _fetch_yfinance(ticker, period)
     elif PROVIDER == "tiingo":
-        sd = _fetch_tiingo(ticker)
+        sd = _fetch_tiingo(ticker, period)
     else:
         sd = _fetch_alphavantage(ticker)
 

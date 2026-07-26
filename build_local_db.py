@@ -16,8 +16,14 @@ import glob
 import os
 import sqlite3
 import sys
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
+from typing import Iterable, Optional
 
 import pandas as pd
+
+from data.daily_history import coverage_report, history_start, persist_history
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(BASE, "data", "cache")
@@ -100,40 +106,140 @@ def update_tickers(existing):
     return sorted(set(existing).union(REFERENCE_TICKERS))
 
 
-def update():
-    """增量: 对库中每只票, 联网抓最新缺失的K线追加(只补增量, 不重拉全history)。
-    受限流影响时用重试; 撞墙就停(已抓的保留)。"""
+@dataclass(frozen=True)
+class BackfillSummary:
+    requested: int
+    succeeded: int
+    failed: int
+    warnings: int
+    below_eight_year_floor: int
+    rate_limited: bool
+
+
+def backfill(
+    years: int = 10,
+    tickers: Optional[Iterable[str]] = None,
+    *,
+    connection=None,
+    fetcher=None,
+    asof: Optional[date] = None,
+):
+    """Fetch and non-destructively persist an explicit adjusted-history window."""
     sys.path.insert(0, BASE)
-    from data.fetch import fetch
-    import time
-    con = sqlite3.connect(DB)
-    tickers = update_tickers(local_tickers())
-    updated = 0
-    for t in tickers:
-        cur_max = con.execute("SELECT MAX(date) FROM prices WHERE ticker=?", (t,)).fetchone()[0]
-        sd = fetch(t)
+    if not isinstance(years, int) or years <= 0:
+        raise ValueError("years must be a positive integer")
+    if fetcher is None:
+        from data.fetch import fetch as fetcher
+    from data.fetch import PROVIDER
+
+    owns_connection = connection is None
+    con = connection if connection is not None else sqlite3.connect(DB)
+    symbols = update_tickers(local_tickers()) if tickers is None else sorted(set(tickers))
+    observation_day = asof or date.today()
+    requested_start = history_start(observation_day, years)
+    succeeded = failed = warnings = below_floor = 0
+    rate_limited = False
+    for ticker in symbols:
+        sd = fetcher(ticker, period=f"{years}y", use_cache=False)
         if not sd.ok:
             if "429" in (sd.error or ""):
-                print(f"  {t}: 429限流, 停止增量(已更新{updated}只)", file=sys.stderr); break
+                print(
+                    f"  {ticker}: 429限流，停止回填（已完成{succeeded}只）",
+                    file=sys.stderr,
+                )
+                rate_limited = True
+                break
+            failed += 1
+            print(f"  {ticker}: {sd.error or '供应商返回失败'}", file=sys.stderr)
             continue
-        h = sd.history
-        new = h[h.index > pd.Timestamp(cur_max)] if cur_max else h
-        if len(new):
-            rows = [(t, str(idx.date()), float(r["Open"]), float(r["High"]),
-                     float(r["Low"]), float(r["Close"]), float(r["Volume"]))
-                    for idx, r in new.iterrows()]
-            con.executemany("INSERT OR REPLACE INTO prices VALUES (?,?,?,?,?,?,?)", rows)
-            con.commit(); updated += 1
+        try:
+            coverage = persist_history(
+                con,
+                ticker,
+                sd.history,
+                provider=PROVIDER,
+                adjustment="split_dividend_adjusted",
+                requested_start=requested_start,
+                fetched_at=datetime.now(timezone.utc),
+            )
+        except Exception as error:
+            failed += 1
+            print(f"  {ticker}: 数据校验失败: {error}", file=sys.stderr)
+            continue
+        succeeded += 1
+        warnings += coverage.quality_status == "warning"
+        below_floor += not coverage.meets_eight_year_floor
         time.sleep(0.3)
+    if owns_connection:
+        con.close()
+    summary = BackfillSummary(
+        requested=len(symbols),
+        succeeded=succeeded,
+        failed=failed,
+        warnings=warnings,
+        below_eight_year_floor=below_floor,
+        rate_limited=rate_limited,
+    )
+    print(
+        f"{years}年窗口：请求{summary.requested}只，成功{summary.succeeded}只，"
+        f"失败{summary.failed}只，质量警告{summary.warnings}只，"
+        f"不足8年{summary.below_eight_year_floor}只"
+    )
+    return summary
+
+
+def update():
+    """Fetch a one-year overlap and upsert corrections without truncating history."""
+    return backfill(years=1)
+
+
+def print_coverage():
+    con = sqlite3.connect(DB)
+    rows = coverage_report(con)
+    price_stats = con.execute(
+        "SELECT COUNT(*), COUNT(DISTINCT ticker), MIN(date), MAX(date) FROM prices"
+    ).fetchone()
     con.close()
-    print(f"增量更新 {updated} 只")
+    meets = sum(row.meets_eight_year_floor for row in rows)
+    warnings = sum(row.quality_status == "warning" for row in rows)
+    print(
+        f"价格库：{price_stats[0]}行，{price_stats[1]}只，"
+        f"{price_stats[2]} ~ {price_stats[3]}"
+    )
+    print(
+        f"已审计：{len(rows)}只，达到8年{meets}只，不足8年{len(rows) - meets}只，"
+        f"质量警告{warnings}只"
+    )
+    for row in rows:
+        if not row.meets_eight_year_floor or row.quality_status != "ok":
+            print(
+                f"  {row.ticker}: {row.first_date} ~ {row.last_date}, "
+                f"{row.coverage_years:.2f}年, {row.quality_status}, "
+                f"异常跳变{row.suspicious_returns}, 长缺口{row.long_gaps}"
+            )
+    return rows
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--update", action="store_true", help="增量联网更新(否则从缓存重建)")
+    ap.add_argument(
+        "--backfill-years",
+        type=int,
+        help="联网回填指定年数的复权日线；DATA-001 默认使用10",
+    )
+    ap.add_argument("--coverage", action="store_true", help="打印长期数据覆盖和质量审计")
     args = ap.parse_args()
-    if args.update:
+    selected = sum(
+        (bool(args.update), args.backfill_years is not None, bool(args.coverage))
+    )
+    if selected > 1:
+        ap.error("--update、--backfill-years 和 --coverage 只能选择一个")
+    if args.coverage:
+        print_coverage()
+    elif args.backfill_years is not None:
+        backfill(args.backfill_years)
+    elif args.update:
         update()
     else:
         n, rows = build()

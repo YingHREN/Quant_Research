@@ -65,6 +65,40 @@ update`; already completed tickers are not repeated.
 Back up the database before an update if you need a restorable snapshot. Do not
 close the process while a ticker transaction is being committed.
 
+### Ten-year daily-history foundation
+
+The normal dashboard update intentionally requests only a one-year overlap so
+provider corrections can replace recent rows without downloading the full
+research history every day. It never deletes older rows that are absent from a
+response.
+
+Use the explicit DATA-001 backfill to request ten years for every locally known
+symbol plus the fixed market and sector references:
+
+```bash
+source env.sh
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
+  ./venv/bin/python build_local_db.py --backfill-years 10
+
+./venv/bin/python build_local_db.py --coverage
+```
+
+Long and short provider requests use different cache keys, so a cached
+one-year response cannot satisfy a ten-year request. Each successful write adds
+an append-only `price_ingestions` record and refreshes `price_coverage` with
+the provider, request start, UTC fetch time, source start/cutoff, source row
+count, deterministic response revision, persisted coverage, and basic quality
+counts. Existing `prices` readers remain unchanged.
+
+The current Tiingo bars use split-and-dividend-adjusted OHLCV
+(`split_dividend_adjusted`). This is appropriate for return and technical
+factor calculations, but it is not a complete point-in-time corporate-action
+store. Raw prices, split/dividend events, symbol changes, delistings,
+historical membership, exchange-calendar gap reconciliation, and
+feature-specific `available_at` timestamps remain separate DATA-001 work.
+Likewise, an ingestion timestamp records when this local copy was fetched; it
+must not be interpreted as the original publication timestamp of older bars.
+
 ## Market and sector command center
 
 Open `http://127.0.0.1:5000/market`, or use the `市场与板块` / `Market &
