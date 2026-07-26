@@ -11,6 +11,7 @@ from research.evaluate_toprisk_comparison import (
     build_comparison_frame,
     evaluate_signals,
 )
+from web.forecasts.dataset import build_feature_frame
 from web.services.market_data import MarketDataRepository
 
 
@@ -120,7 +121,11 @@ def main(argv=None):
     arguments = _parser().parse_args(argv)
     try:
         histories = _load_histories(arguments.database)
-        frame = build_comparison_frame(histories)
+        feature_frame = build_feature_frame(histories)
+        frame = build_comparison_frame(
+            histories,
+            feature_frame=feature_frame,
+        )
         rows = evaluate_signals(
             frame,
             horizons=(5, 10, 20),

@@ -79,6 +79,12 @@ class ModelOutputRegistry:
     def registrations(self):
         return self._registrations
 
+    def register(self, registration):
+        """Return a new registry containing one additional model output."""
+        if not isinstance(registration, ModelOutputRegistration):
+            raise TypeError("registration must be a ModelOutputRegistration")
+        return type(self)((*self._registrations, registration))
+
     def build(self, context):
         if not isinstance(context, ModelOutputContext):
             raise TypeError("context must be a ModelOutputContext")

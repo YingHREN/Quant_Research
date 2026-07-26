@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from web.forecasts.decision import build_forecast_risk_context
+from web.forecasts.ridge import bearish_turn_assessment
 from web.market_groups import market_group_for_ticker
 
 
@@ -22,7 +23,12 @@ SIGNAL_KEYS = (
 EVALUATION_GROUPS = ("all", "semiconductor", "software", "other")
 
 
-def build_comparison_frame(histories, forecasts=None, context=None):
+def build_comparison_frame(
+    histories,
+    forecasts=None,
+    context=None,
+    feature_frame=None,
+):
     """Attach versioned signal definitions to a causal risk context."""
     if not isinstance(histories, dict):
         histories = dict(histories)
@@ -70,6 +76,13 @@ def build_comparison_frame(histories, forecasts=None, context=None):
         if score is not None:
             present = score.notna()
             immediate.loc[present] = score.loc[present] >= 70.0
+    if feature_frame is not None:
+        rebuilt_immediate = _immediate_signal_from_features(
+            feature_frame,
+            frame.index,
+        )
+        missing = immediate.isna() & rebuilt_immediate.notna()
+        immediate.loc[missing] = rebuilt_immediate.loc[missing]
 
     memory = _threshold_signal(frame.get("individual_risk_score"), 30.0)
     raw_top = _state_signal(
@@ -96,6 +109,42 @@ def build_comparison_frame(histories, forecasts=None, context=None):
     for key, values in signals.items():
         frame[f"signal_{key}"] = values
     return frame.sort_index()
+
+
+def _immediate_signal_from_features(features, index):
+    if not isinstance(features, pd.DataFrame):
+        raise TypeError("feature_frame must be a DataFrame or None")
+    result = pd.Series(pd.NA, index=index, dtype="boolean")
+    if features.empty:
+        return result
+    if not isinstance(features.index, pd.MultiIndex):
+        raise ValueError("feature_frame requires a MultiIndex")
+    if features.index.has_duplicates:
+        raise ValueError("feature_frame contains duplicate point-in-time keys")
+    aligned = features.reindex(index)
+    evidence_columns = (
+        "pressure_distribution_day",
+        "close_vs_ema20_pct",
+        "volume_ratio",
+        "volume_change",
+        "pressure_close_location",
+        "pressure_signed_volume_proxy",
+        "stock_sector_relative_strength_20",
+        "pressure_failed_breakout",
+        "pivot_distance_pct",
+    )
+    available_columns = [
+        column for column in evidence_columns if column in aligned
+    ]
+    if not available_columns:
+        return result
+    present = aligned.loc[:, available_columns].notna().any(axis=1)
+    scores = aligned.loc[present].apply(
+        lambda row: bearish_turn_assessment(row)[0],
+        axis=1,
+    )
+    result.loc[present] = scores >= 70.0
+    return result
 
 
 def evaluate_signals(

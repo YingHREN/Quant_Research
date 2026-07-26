@@ -166,6 +166,34 @@ class TopRiskComparisonTest(unittest.TestCase):
             second.loc[first.index, [f"signal_{key}" for key in SIGNAL_KEYS]],
         )
 
+    def test_immediate_signal_can_be_rebuilt_from_point_in_time_features(self):
+        history = _history([100, 99, 98])
+        context = _context(["AAA"], history.index)
+        features = pd.DataFrame(
+            {
+                "pressure_distribution_day": [1.0, 0.0, np.nan],
+                "close_vs_ema20_pct": [-1.0, 1.0, np.nan],
+                "volume_ratio": [1.6, 1.0, np.nan],
+                "volume_change": [0.6, 0.0, np.nan],
+                "pressure_close_location": [-0.8, 0.0, np.nan],
+                "pressure_signed_volume_proxy": [-1.2, 0.0, np.nan],
+                "stock_sector_relative_strength_20": [-0.06, 0.0, np.nan],
+                "pressure_failed_breakout": [1.0, 0.0, np.nan],
+                "pivot_distance_pct": [-12.0, 0.0, np.nan],
+            },
+            index=context.index,
+        )
+
+        frame = build_comparison_frame(
+            {"AAA": history},
+            context=context,
+            feature_frame=features,
+        )
+
+        self.assertTrue(frame.iloc[0]["signal_immediate_8"])
+        self.assertFalse(frame.iloc[1]["signal_immediate_8"])
+        self.assertTrue(pd.isna(frame.iloc[2]["signal_immediate_8"]))
+
 
 if __name__ == "__main__":
     unittest.main()

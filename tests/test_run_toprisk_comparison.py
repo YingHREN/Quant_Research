@@ -43,6 +43,10 @@ class RunTopRiskComparisonTest(unittest.TestCase):
                 return_value={"AAA": pd.DataFrame()},
             ), mock.patch.object(
                 run_toprisk_comparison,
+                "build_feature_frame",
+                return_value=pd.DataFrame(),
+            ), mock.patch.object(
+                run_toprisk_comparison,
                 "build_comparison_frame",
                 return_value=frame,
             ), mock.patch.object(

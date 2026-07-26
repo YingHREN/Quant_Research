@@ -192,6 +192,25 @@ class ModelOutputContractTest(unittest.TestCase):
                 "invalid", "decision", 1, lambda _context: {}
             )
 
+    def test_register_returns_an_extended_registry_without_mutating_original(self):
+        original = ModelOutputRegistry()
+        extended = original.register(
+            ModelOutputRegistration(
+                "macro", "downside", 1, lambda _context: {
+                    "key": "macro",
+                    "status": "unavailable",
+                }
+            )
+        )
+
+        self.assertEqual(original.registrations, ())
+        self.assertEqual(
+            [registration.key for registration in extended.registrations],
+            ["macro"],
+        )
+        with self.assertRaises(ValueError):
+            extended.register(extended.registrations[0])
+
     def test_groups_models_by_semantics_without_rule_probabilities(self):
         forecast = forecast_payload()
         row = chart_row()
