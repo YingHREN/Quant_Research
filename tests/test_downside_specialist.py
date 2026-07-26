@@ -3,7 +3,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.downside_specialist import attach_next_open_mae_targets
+from research.downside_specialist import (
+    PRESSURE_REGIMES,
+    attach_next_open_mae_targets,
+    walk_forward_downside_predictions,
+)
 
 
 def feature_frame(dates):
@@ -31,6 +35,41 @@ def history(dates, *, opens=None, lows=None, closes=None):
         },
         index=dates,
     )
+
+
+def specialist_frame(periods=100):
+    dates = pd.bdate_range("2025-01-02", periods=periods)
+    rows = []
+    index = []
+    for ticker, phase in (("AAA", 0), ("BBB", 1), ("CCC", 2)):
+        for position, date in enumerate(dates):
+            feature = np.sin((position + phase) / 4.0)
+            regime = (
+                "uptrend"
+                if position % 5 == 0
+                else (
+                    "acute_selloff"
+                    if position % 7 == 0
+                    else "under_pressure"
+                )
+            )
+            rows.append(
+                {
+                    "feature": feature,
+                    "regime": regime,
+                    "downside_event_5": float(feature < 0.0),
+                    "executable_mae_5": -0.06 if feature < 0.0 else -0.01,
+                    "downside_label_end_date_5": date + pd.offsets.BDay(5),
+                }
+            )
+            index.append((ticker, date))
+    return pd.DataFrame(
+        rows,
+        index=pd.MultiIndex.from_tuples(
+            index,
+            names=("ticker", "observation_date"),
+        ),
+    ).sort_index()
 
 
 class DownsideSpecialistTest(unittest.TestCase):
@@ -96,6 +135,60 @@ class DownsideSpecialistTest(unittest.TestCase):
 
         self.assertEqual(first["downside_event_5"], 1.0)
         self.assertEqual(first["downside_event_20"], 0.0)
+
+    def test_walk_forward_specialist_only_predicts_pressure_regimes(self):
+        predictions = walk_forward_downside_predictions(
+            specialist_frame(),
+            horizon=5,
+            feature_columns=("feature",),
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        self.assertFalse(predictions.empty)
+        self.assertTrue(
+            set(predictions["regime"]).issubset(PRESSURE_REGIMES)
+        )
+        self.assertTrue(
+            predictions["predicted_score"].between(0.0, 1.0).all()
+        )
+        self.assertEqual(
+            set(predictions["predicted_event"].unique()),
+            {False, True},
+        )
+
+    def test_walk_forward_training_labels_end_before_each_test_fold(self):
+        predictions = walk_forward_downside_predictions(
+            specialist_frame(),
+            horizon=5,
+            feature_columns=("feature",),
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        for _fold, selected in predictions.groupby("fold"):
+            self.assertLess(
+                pd.Timestamp(selected["training_label_end_max"].iloc[0]),
+                pd.Timestamp(selected["observation_date"].min()),
+            )
+            self.assertEqual(
+                selected["training_label_end_max"].nunique(),
+                1,
+            )
+
+    def test_walk_forward_rejects_uptrend_only_training_data(self):
+        frame = specialist_frame()
+        frame.loc[:, "regime"] = "uptrend"
+
+        predictions = walk_forward_downside_predictions(
+            frame,
+            horizon=5,
+            feature_columns=("feature",),
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        self.assertTrue(predictions.empty)
 
 
 if __name__ == "__main__":

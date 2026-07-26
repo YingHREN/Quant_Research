@@ -6,10 +6,16 @@ from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+
+from research.market_direction_model import _training_only_design
 
 
 DOWNSIDE_THRESHOLDS = {5: -0.05, 20: -0.10}
 INDEX_NAMES = ("ticker", "observation_date")
+PRESSURE_REGIMES = frozenset(
+    ("under_pressure", "correction", "acute_selloff")
+)
 
 
 def attach_next_open_mae_targets(
@@ -85,6 +91,129 @@ def attach_next_open_mae_targets(
                 label_end.where(complete).reindex(group_dates).to_numpy()
             )
     return result
+
+
+def walk_forward_downside_predictions(
+    frame: pd.DataFrame,
+    *,
+    horizon: int,
+    feature_columns: Sequence[str],
+    n_folds: int = 5,
+    minimum_samples: int = 1_000,
+) -> pd.DataFrame:
+    """Fit a pressure-only binary Logistic on purged expanding folds."""
+    _validate_frame(frame)
+    checked_horizon = _validate_horizons((horizon,))[0]
+    columns = tuple(str(column) for column in feature_columns)
+    if not columns or any(not column for column in columns):
+        raise ValueError("feature_columns must not be empty")
+    required = (
+        *columns,
+        "regime",
+        f"executable_mae_{checked_horizon}",
+        f"downside_event_{checked_horizon}",
+        f"downside_label_end_date_{checked_horizon}",
+    )
+    missing = [column for column in required if column not in frame]
+    if missing:
+        raise ValueError(f"frame is missing specialist columns: {missing}")
+    if int(n_folds) < 2:
+        raise ValueError("n_folds must be at least 2")
+    if int(minimum_samples) <= 0:
+        raise ValueError("minimum_samples must be positive")
+
+    target_name = f"downside_event_{checked_horizon}"
+    end_name = f"downside_label_end_date_{checked_horizon}"
+    observation_dates = pd.Series(
+        frame.index.get_level_values("observation_date"),
+        index=frame.index,
+    )
+    unique_dates = np.asarray(sorted(observation_dates.unique()))
+    edges = np.linspace(0, len(unique_dates), int(n_folds) + 1, dtype=int)
+    output = []
+    for fold in range(1, int(n_folds)):
+        test_dates = unique_dates[edges[fold] : edges[fold + 1]]
+        if len(test_dates) == 0:
+            continue
+        test_start = pd.Timestamp(test_dates[0])
+        pressure = frame["regime"].astype(str).isin(PRESSURE_REGIMES)
+        train_mask = (
+            pressure
+            & frame[target_name].notna()
+            & frame[end_name].notna()
+            & (frame[end_name] < test_start)
+        )
+        test_mask = (
+            pressure
+            & frame[target_name].notna()
+            & frame[end_name].notna()
+            & observation_dates.isin(test_dates)
+        )
+        train = frame.loc[train_mask]
+        test = frame.loc[test_mask]
+        if len(train) < int(minimum_samples) or test.empty:
+            continue
+        target = train[target_name].astype(int).to_numpy()
+        if set(np.unique(target)) != {0, 1}:
+            continue
+        x_train, x_test = _training_only_design(train, test, columns)
+        model = LogisticRegression(
+            class_weight="balanced",
+            max_iter=1_000,
+            random_state=0,
+            solver="liblinear",
+        )
+        model.fit(x_train, target)
+        positive_index = int(np.flatnonzero(model.classes_ == 1)[0])
+        score = model.predict_proba(x_test)[:, positive_index]
+        output.append(
+            pd.DataFrame(
+                {
+                    "ticker": test.index.get_level_values("ticker"),
+                    "observation_date": test.index.get_level_values(
+                        "observation_date"
+                    ),
+                    "horizon": checked_horizon,
+                    "fold": fold,
+                    "regime": test["regime"].astype(str).to_numpy(),
+                    "specification": "pressure_downside_logistic_v1",
+                    "actual_event": test[target_name].astype(bool).to_numpy(),
+                    "actual_mae": test[
+                        f"executable_mae_{checked_horizon}"
+                    ].to_numpy(dtype=float),
+                    "predicted_event": score >= 0.5,
+                    "predicted_score": score,
+                    "training_samples": len(train),
+                    "training_event_rate": float(np.mean(target)),
+                    "training_label_end_max": pd.Timestamp(
+                        train[end_name].max()
+                    ),
+                }
+            )
+        )
+    if not output:
+        return _empty_prediction_frame()
+    return pd.concat(output, ignore_index=True, sort=False)
+
+
+def _empty_prediction_frame():
+    return pd.DataFrame(
+        columns=(
+            "ticker",
+            "observation_date",
+            "horizon",
+            "fold",
+            "regime",
+            "specification",
+            "actual_event",
+            "actual_mae",
+            "predicted_event",
+            "predicted_score",
+            "training_samples",
+            "training_event_rate",
+            "training_label_end_max",
+        )
+    )
 
 
 def _validate_frame(frame):
