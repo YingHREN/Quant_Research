@@ -90,6 +90,7 @@ const ids = [
   "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
   "factor-overview", "factor-table-body",
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
+  "marker-layer-count",
 ];
 const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
 elements.get("price-chart").clientHeight = 400;
@@ -105,7 +106,24 @@ enButton.dataset.i18n = "locale.en";
 const rangeButton = new Element("button");
 rangeButton.dataset.range = "1y";
 rangeButton.dataset.i18n = "chart.range.1y";
-const staticNodes = [zhButton, enButton, rangeButton];
+const markerLayerKeys = [
+  "strict_vcp", "vcp_breakout", "pocket_pivot", "tight_platform",
+  "structure_reversal", "early_reversal", "prior_high_breakout",
+  "trendline_breakout", "higher_low",
+];
+const markerLayerControls = markerLayerKeys.map((key) => {
+  const control = new Element("input");
+  control.dataset.markerLayer = key;
+  control.checked = ["strict_vcp", "vcp_breakout", "pocket_pivot"].includes(key);
+  return control;
+});
+const markerPresetControls = ["core", "all", "none"].map((preset) => {
+  const control = new Element("button");
+  control.dataset.markerPreset = preset;
+  control.dataset.i18n = `chart.layers.preset.${preset}`;
+  return control;
+});
+const staticNodes = [zhButton, enButton, rangeButton, ...markerPresetControls];
 
 const documentListeners = new Map();
 globalThis.document = {
@@ -118,6 +136,8 @@ globalThis.document = {
     if (selector === "[data-locale]") return [zhButton, enButton];
     if (selector === "[data-range]") return [rangeButton];
     if (selector === "[data-filter]") return [];
+    if (selector === "[data-marker-layer]") return markerLayerControls;
+    if (selector === "[data-marker-preset]") return markerPresetControls;
     if (selector === "[data-i18n]") return staticNodes;
     if (selector === "[data-i18n-placeholder]" || selector === "[data-i18n-aria-label]") return [];
     return [];
@@ -125,7 +145,11 @@ globalThis.document = {
   addEventListener(name, handler) { documentListeners.set(name, handler); },
 };
 globalThis.window = { addEventListener() {}, removeEventListener() {} };
-globalThis.localStorage = { getItem() { return null; }, setItem() {} };
+const storageValues = new Map();
+globalThis.localStorage = {
+  getItem(key) { return storageValues.get(key) ?? null; },
+  setItem(key, value) { storageValues.set(key, value); },
+};
 
 const charts = [];
 const markerControllers = [];
@@ -475,4 +499,30 @@ if (mode === "success") {
   }
   assert.equal(elements.get("research-status").dataset.tone, "error");
   console.log(JSON.stringify({ zh, en }));
+} else if (mode === "marker-layers") {
+  const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
+  const noneButton = markerPresetControls.find(
+    (control) => control.dataset.markerPreset === "none",
+  );
+  noneButton.dispatch("click");
+  assert.deepEqual(markerTexts(), ["预测起点 · 下跌"]);
+  const pocketControl = markerLayerControls.find(
+    (control) => control.dataset.markerLayer === "pocket_pivot",
+  );
+  pocketControl.checked = true;
+  pocketControl.dispatch("change");
+  assert.deepEqual(
+    JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
+    ["pocket_pivot"],
+  );
+  enButton.dispatch("click");
+  assert.deepEqual(
+    JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
+    ["pocket_pivot"],
+  );
+  assert.equal(elements.get("marker-layer-count").textContent, "1/9 model layers shown");
+  console.log(JSON.stringify({
+    stored: JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
+    markerCount: elements.get("marker-layer-count").textContent,
+  }));
 }

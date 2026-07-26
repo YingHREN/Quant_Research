@@ -185,7 +185,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   margin-top: 12px;
 }
 
-.quiet-button, .range-controls button, .forecast-controls button {
+.quiet-button, .range-controls button, .forecast-controls button, .marker-layer-actions button {
   background: transparent;
   color: var(--text);
 }
@@ -248,6 +248,53 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .forecast-controls span { margin-right: 3px; color: var(--muted); font-size: 0.7rem; font-weight: 700; }
 .forecast-controls button { min-height: 32px; padding: 0 9px; font-size: 0.7rem; }
 .forecast-controls button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.marker-layer-filter {
+  width: min(680px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(9, 16, 22, 0.48);
+  text-align: left;
+}
+.marker-layer-filter summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 10px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+.marker-layer-filter summary::marker { color: var(--accent); }
+#marker-layer-count { color: var(--muted); font-weight: 600; }
+.marker-layer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 10px 0;
+  border-top: 1px solid var(--line);
+}
+.marker-layer-actions button { min-height: 30px; padding: 0 9px; font-size: 0.68rem; }
+.marker-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  padding: 10px;
+}
+.marker-layer-grid label {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+.marker-layer-grid input {
+  width: auto;
+  min-height: auto;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
 .forecast-static-disclaimer { margin-bottom: -4px; text-align: right; }
 .chart-placeholder, .volume-placeholder, .scenario-placeholder {
   width: 100%;
@@ -495,6 +542,9 @@ footer a:hover { color: var(--text); }
   .chart-toolbar { justify-items: stretch; }
   .range-controls, .forecast-controls { justify-content: flex-start; }
   .forecast-controls button { min-height: 40px; }
+  .marker-layer-filter { width: 100%; }
+  .marker-layer-actions button { min-height: 40px; }
+  .marker-layer-grid { grid-template-columns: minmax(0, 1fr); }
   .forecast-static-disclaimer { text-align: left; }
   .crosshair-values { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
   .forecast-values, .forecast-evidence { grid-template-columns: minmax(0, 1fr); }

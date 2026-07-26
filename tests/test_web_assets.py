@@ -43,6 +43,33 @@ class WebAssetTest(unittest.TestCase):
         )
         return json.loads(result.stdout)
 
+    def run_marker_layers_runtime(self):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/marker_layers_runtime.mjs"),
+                (STATIC / "js/marker_layers.js").as_uri(),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_marker_layer_preferences(self):
+        self.assertTrue(
+            (STATIC / "js/marker_layers.js").exists(),
+            "marker layer preference module must exist",
+        )
+        actual = self.run_marker_layers_runtime()
+        self.assertEqual(
+            actual["core"],
+            ["strict_vcp", "vcp_breakout", "pocket_pivot"],
+        )
+        self.assertEqual(len(actual["all"]), 9)
+        self.assertEqual(actual["persisted"], ["pocket_pivot"])
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
@@ -68,6 +95,30 @@ class WebAssetTest(unittest.TestCase):
             css,
             r"\.model-output-shell\s*\{[^}]*overflow-y:\s*auto;",
         )
+
+    def test_page_has_chart_marker_layer_controls(self):
+        html = HTML.read_text()
+        self.assertIn('id="marker-layer-filter"', html)
+        self.assertIn('id="marker-layer-count"', html)
+        for key in (
+            "strict_vcp",
+            "vcp_breakout",
+            "pocket_pivot",
+            "tight_platform",
+            "structure_reversal",
+            "early_reversal",
+            "prior_high_breakout",
+            "trendline_breakout",
+            "higher_low",
+        ):
+            self.assertIn(f'data-marker-layer="{key}"', html)
+        for preset in ("core", "all", "none"):
+            self.assertIn(f'data-marker-preset="{preset}"', html)
+
+    def test_dashboard_persists_chart_marker_layers(self):
+        actual = self.run_dashboard_runtime("marker-layers")
+        self.assertEqual(actual["stored"], ["pocket_pivot"])
+        self.assertEqual(actual["markerCount"], "1/9 model layers shown")
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
@@ -2145,17 +2196,17 @@ class WebAssetTest(unittest.TestCase):
         )
         self.assertEqual(len(actual["priceLines"]), 2)
         self.assertEqual(actual["requestedForecastDates"], ["2026-07-23"])
-        self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
-        self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
-        self.assertIn(
+        self.assertNotIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
+        self.assertNotIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
+        self.assertNotIn(
             "Bullish structural reversal candidate 2/3",
             [marker["text"] for marker in actual["markers"]],
         )
-        self.assertIn(
+        self.assertNotIn(
             "Early bullish reversal watch · 100",
             [marker["text"] for marker in actual["markers"]],
         )
-        self.assertIn(
+        self.assertNotIn(
             "向上早期反转观察 · 100",
             [marker["text"] for marker in actual["zhMarkers"]],
         )
@@ -2181,6 +2232,7 @@ class WebAssetTest(unittest.TestCase):
                 ],
             ],
         )
+
         projection = next(line for line in actual["priceLineSeries"] if line[0] == "Model forecast")
         self.assertEqual(actual["forecastOptions"]["lineWidth"], 3)
         self.assertEqual(actual["forecastOptions"]["lineStyle"], 0)
@@ -2283,6 +2335,107 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(zh_details["支撑来源"], "EMA20、已确认摆动低点")
         self.assertEqual(zh_details["支撑强度"], "72/100 · 较强")
         self.assertEqual(zh_details["支撑状态"], "位于支撑上方")
+
+    def test_chart_marker_layers_can_be_filtered_without_reloading(self):
+        module_uri = (STATIC / "js/charts.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            function node() {{
+              return {{textContent: '', className: '', children: [], dataset: {{}},
+                attributes: {{}},
+                append(...items) {{ this.children.push(...items); }},
+                replaceChildren(...items) {{ this.children = [...items]; this.textContent = ''; }},
+                setAttribute(name, value) {{ this.attributes[name] = String(value); }}}};
+            }}
+            globalThis.document = {{createElement: () => node()}};
+            const markerControllers = [];
+            const visibleRanges = [];
+            function chart() {{
+              const scale = {{
+                subscribeVisibleLogicalRangeChange() {{}},
+                unsubscribeVisibleLogicalRangeChange() {{}},
+                setVisibleLogicalRange(range) {{ visibleRanges.push(range); }},
+                fitContent() {{}},
+              }};
+              return {{
+                timeScale: () => scale,
+                addSeries(type, options) {{
+                  return {{
+                    type, options, data: [],
+                    setData(data) {{ this.data = data; }},
+                    applyOptions(next) {{ Object.assign(this.options, next); }},
+                    createPriceLine() {{ return {{}}; }},
+                    removePriceLine() {{}},
+                  }};
+                }},
+                subscribeCrosshairMove() {{}},
+                unsubscribeCrosshairMove() {{}},
+                subscribeClick() {{}},
+                unsubscribeClick() {{}},
+                setCrosshairPosition() {{}},
+                clearCrosshairPosition() {{}},
+                applyOptions() {{}},
+                remove() {{}},
+              }};
+            }}
+            globalThis.LightweightCharts = {{
+              CandlestickSeries: 'candles', HistogramSeries: 'histogram', LineSeries: 'line',
+              BaselineSeries: 'baseline',
+              CrosshairMode: {{Normal: 0}}, LineStyle: {{Solid: 0, Dashed: 2}},
+              createChart: () => chart(),
+              createSeriesMarkers(_series, markers) {{
+                const controller = {{
+                  markers,
+                  setMarkers(next) {{ this.markers = next; }},
+                }};
+                markerControllers.push(controller);
+                return controller;
+              }},
+            }};
+            const {{createLinkedCharts}} = await import({json.dumps(module_uri)});
+            const controller = createLinkedCharts(
+              {{clientWidth: 800, clientHeight: 400, dataset: {{}}}},
+              {{clientWidth: 800, clientHeight: 180, dataset: {{}}}},
+              node(),
+              {{locale: 'zh-CN'}},
+            );
+            const row = {{
+              time: '2026-06-09', open: 100, high: 103, low: 99, close: 102, volume: 1200,
+              prior_high_breakout: true, trendline_breakout: true,
+              higher_low_confirmed: true, early_reversal_watch: true,
+              early_reversal_score: 75, reversal_candidate: true, reversal_signal_count: 2,
+            }};
+            controller.setChartData({{
+              chart: [row],
+              structures: {{annotations: [
+                {{time: row.time, type: 'strict_vcp_start'}},
+                {{time: row.time, type: 'vcp_breakout_confirmed'}},
+                {{time: row.time, type: 'pocket_pivot'}},
+                {{time: row.time, type: 'tight_platform'}},
+              ]}},
+            }});
+            const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
+            assert.deepEqual(markerTexts(), [
+              '发现严格 VCP 准备形态',
+              'VCP 向上突破已确认',
+              'Pocket Pivot 需求确认',
+            ]);
+            const rangeCallCount = visibleRanges.length;
+            assert.deepEqual(
+              controller.setMarkerLayers(['pocket_pivot', 'higher_low']),
+              ['pocket_pivot', 'higher_low'],
+            );
+            assert.deepEqual(markerTexts(), ['Pocket Pivot 需求确认', '更高低点']);
+            assert.equal(visibleRanges.length, rangeCallCount);
+            controller.destroy();
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_dashboard_css_reserves_chart_axis_gutter(self):
         chart_source = (STATIC / "js/charts.js").read_text()

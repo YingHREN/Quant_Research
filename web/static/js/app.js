@@ -9,6 +9,13 @@ import {
   t,
   translateError,
 } from "./i18n.js";
+import {
+  MARKER_LAYER_DEFINITIONS,
+  MARKER_LAYER_PRESETS,
+  normalizeMarkerLayers,
+  persistMarkerLayers,
+  readMarkerLayers,
+} from "./marker_layers.js";
 import { renderScenarios } from "./scenarios.js";
 import {
   chooseInitialTicker,
@@ -31,6 +38,7 @@ let updateController = null;
 let unsubscribeLocale = null;
 let universeError = null;
 let researchError = null;
+let selectedMarkerLayers = readMarkerLayers();
 
 function byId(id) {
   return document.getElementById(id);
@@ -77,6 +85,34 @@ function currentRows() {
     state.sortKey,
     state.sortDirection,
   );
+}
+
+function checkedMarkerLayers() {
+  return elements.markerLayerControls
+    .filter((control) => control.checked)
+    .map((control) => control.dataset.markerLayer);
+}
+
+function syncMarkerLayerControls(layers, locale = store.getState().locale) {
+  selectedMarkerLayers = normalizeMarkerLayers(layers);
+  const selected = new Set(selectedMarkerLayers);
+  elements.markerLayerControls.forEach((control) => {
+    control.checked = selected.has(control.dataset.markerLayer);
+  });
+  setText(
+    elements.markerLayerCount,
+    t(
+      "chart.layers.summary",
+      { selected: selectedMarkerLayers.length, total: MARKER_LAYER_DEFINITIONS.length },
+      locale,
+    ),
+  );
+}
+
+function applyMarkerLayers(layers) {
+  selectedMarkerLayers = chartController.setMarkerLayers(layers);
+  persistMarkerLayers(selectedMarkerLayers);
+  syncMarkerLayerControls(selectedMarkerLayers);
 }
 
 function paintUniverse() {
@@ -320,6 +356,14 @@ function bindControls() {
       });
     });
   });
+  elements.markerLayerControls.forEach((control) => {
+    control.addEventListener("change", () => applyMarkerLayers(checkedMarkerLayers()));
+  });
+  elements.markerPresetControls.forEach((control) => {
+    control.addEventListener("click", () => {
+      applyMarkerLayers(MARKER_LAYER_PRESETS[control.dataset.markerPreset]);
+    });
+  });
   elements.localeControls.forEach((control) => {
     control.addEventListener("click", () => setLocale(control.dataset.locale));
   });
@@ -340,6 +384,7 @@ function applyLocale(locale) {
   );
   paintUniverse();
   chartController?.setLocale(locale);
+  syncMarkerLayerControls(selectedMarkerLayers, locale);
   if (state.universePayload) {
     setText(elements.marketDate, state.universePayload.asof || t("header.noData", {}, locale));
     setText(elements.marketCoverage, coverageText(state.universePayload));
@@ -394,8 +439,11 @@ function captureElements() {
     scenarioMeta: byId("scenario-meta"),
     updateData: byId("update-data"),
     updateStatus: byId("update-status"),
+    markerLayerCount: byId("marker-layer-count"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
     forecastControls: [...document.querySelectorAll("[data-forecast-horizon]")],
+    markerLayerControls: [...document.querySelectorAll("[data-marker-layer]")],
+    markerPresetControls: [...document.querySelectorAll("[data-marker-preset]")],
     localeControls: [...document.querySelectorAll("[data-locale]")],
   });
 }
@@ -410,6 +458,7 @@ export async function initializeDashboard() {
     elements.crosshairDetail,
     {
       locale: getLocale(),
+      markerLayers: selectedMarkerLayers,
       modelOutputEl: elements.modelOutputContent,
       onForecastDate: async (date) => {
         const requestGeneration = stockRequestSequence;
@@ -423,6 +472,7 @@ export async function initializeDashboard() {
       },
     },
   );
+  syncMarkerLayerControls(selectedMarkerLayers);
   updateController = createUpdateController({
     button: elements.updateData,
     status: elements.updateStatus,
