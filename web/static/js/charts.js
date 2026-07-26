@@ -9,6 +9,7 @@ import {
   renderForecastDetail,
 } from "./forecasts.js";
 import { renderModelOutputs } from "./model_outputs.js";
+import { normalizeMarkerLayers } from "./marker_layers.js";
 import { factorValuesByDate, trendEvidence } from "./trend_evidence.js";
 
 const RANGE_BARS = Object.freeze({
@@ -58,6 +59,14 @@ const ENTRY_MARKER_STYLES = Object.freeze({
   tight_platform: Object.freeze({
     position: "belowBar", shape: "arrowUp", color: COLORS.platformPivot,
   }),
+});
+
+const ENTRY_MARKER_LAYERS = Object.freeze({
+  strict_vcp_start: "strict_vcp",
+  strict_vcp: "strict_vcp",
+  vcp_breakout_confirmed: "vcp_breakout",
+  pocket_pivot: "pocket_pivot",
+  tight_platform: "tight_platform",
 });
 
 function finite(value) {
@@ -480,6 +489,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
   let forecastRequestTimer = null;
   let forecastRequestTimerDate = null;
   let forecastHorizon = DEFAULT_FORECAST_HORIZON;
+  let markerLayers = new Set(normalizeMarkerLayers(options.markerLayers));
   let shapeMarkerData = [];
   let forecastMarkerData = null;
   let paintingDetail = false;
@@ -790,6 +800,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       .filter((annotation) => (
         rowByTime.has(timeKey(annotation?.time))
         && ENTRY_MARKER_STYLES[annotation?.type]
+        && markerLayers.has(ENTRY_MARKER_LAYERS[annotation.type])
       ))
       .map((annotation) => {
         const style = ENTRY_MARKER_STYLES[annotation.type];
@@ -805,31 +816,31 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       });
     const reversalMarkers = rows.flatMap((row) => {
       const markers = [];
-      if (row.prior_high_breakout) {
+      if (row.prior_high_breakout && markerLayers.has("prior_high_breakout")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.up, shape: "arrowUp",
           text: t("chart.reversal.priorHighBreakout", {}, locale),
         });
       }
-      if (row.trendline_breakout) {
+      if (row.trendline_breakout && markerLayers.has("trendline_breakout")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.trendline, shape: "arrowUp",
           text: t("chart.reversal.trendlineBreakout", {}, locale),
         });
       }
-      if (row.higher_low_confirmed) {
+      if (row.higher_low_confirmed && markerLayers.has("higher_low")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.sma50, shape: "circle",
           text: t("chart.reversal.higherLow", {}, locale),
         });
       }
-      if (row.early_reversal_watch) {
+      if (row.early_reversal_watch && markerLayers.has("early_reversal")) {
         markers.push({
           time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "arrowUp",
           text: t("chart.earlyReversal.marker", { score: row.early_reversal_score }, locale),
         });
       }
-      if (row.reversal_candidate) {
+      if (row.reversal_candidate && markerLayers.has("structure_reversal")) {
         markers.push({
           time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "circle",
           text: t("chart.reversal.candidate", { count: row.reversal_signal_count }, locale),
@@ -904,6 +915,13 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     paintDetail(displayedRow || rows.at(-1) || null, lockedTime !== null);
   }
 
+  function setMarkerLayers(nextLayers) {
+    if (destroyed) return [...markerLayers];
+    markerLayers = new Set(normalizeMarkerLayers(nextLayers));
+    renderDecorations(lastPayload);
+    return [...markerLayers];
+  }
+
   function setForecastHorizon(horizon) {
     if (destroyed) return forecastHorizon;
     const normalized = Number(horizon);
@@ -958,6 +976,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     setForecasts,
     setForecastHorizon,
     getForecastHorizon,
+    setMarkerLayers,
     setRange,
     setLocale,
     destroy,
