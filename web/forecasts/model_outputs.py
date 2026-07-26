@@ -5,71 +5,171 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from web.contracts import json_safe
+from web.forecasts.output_registry import (
+    ModelOutputContext,
+    ModelOutputRegistration,
+    ModelOutputRegistry,
+)
 
 
-def build_model_outputs(forecast, chart_row, evaluation):
+def build_model_outputs(forecast, chart_row, evaluation, *, registry=None):
     """Group one point-in-time forecast into semantic model families."""
     forecast = _mapping(forecast)
     chart_row = _mapping(chart_row)
     evaluation = _mapping(evaluation)
     decision = _mapping(forecast.get("decision"))
 
+    context = ModelOutputContext(
+        forecast=forecast,
+        chart_row=chart_row,
+        evaluation=evaluation,
+        decision=decision,
+    )
+    grouped = (registry or DEFAULT_MODEL_OUTPUT_REGISTRY).build(context)
     return {
-        "primary": [_primary_output(forecast, evaluation)],
-        "downside": [
-            _immediate_risk(forecast),
-            _remembered_risk(
+        **grouped,
+        "decision": _decision_output(decision),
+    }
+
+
+def build_default_output_registry():
+    return ModelOutputRegistry(
+        (
+            ModelOutputRegistration(
+                "ridge_direction_v1",
+                "primary",
+                10,
+                lambda context: _primary_output(
+                    context.forecast,
+                    context.evaluation,
+                ),
+            ),
+            ModelOutputRegistration(
+                "bearish_turn_immediate_v1",
+                "downside",
+                10,
+                lambda context: _immediate_risk(context.forecast),
+            ),
+            ModelOutputRegistration(
                 "bearish_turn_risk_rules_v2",
-                decision.get("individual_risk_score"),
-                decision,
+                "downside",
+                20,
+                lambda context: _remembered_risk(
+                "bearish_turn_risk_rules_v2",
+                context.decision.get("individual_risk_score"),
+                context.decision,
                 "model.individualRisk",
             ),
-            _remembered_risk(
+            ),
+            ModelOutputRegistration(
                 "group_regime_risk_v1",
-                decision.get("group_risk_score"),
-                decision,
+                "downside",
+                30,
+                lambda context: _remembered_risk(
+                "group_regime_risk_v1",
+                context.decision.get("group_risk_score"),
+                context.decision,
                 "model.groupRisk",
             ),
-            _remembered_risk(
+            ),
+            ModelOutputRegistration(
                 "slow_decline_risk_v1",
-                decision.get("slow_decline_risk_score"),
-                decision,
+                "downside",
+                40,
+                lambda context: _remembered_risk(
+                "slow_decline_risk_v1",
+                context.decision.get("slow_decline_risk_score"),
+                context.decision,
                 "model.slowDecline",
             ),
-            _high_level_distribution_risk(decision),
-            _planned("macro_risk", "remembered_state", "model.macroRisk"),
-            _planned(
+            ),
+            ModelOutputRegistration(
+                "high_level_distribution_risk_v1",
+                "downside",
+                50,
+                lambda context: _high_level_distribution_risk(
+                    context.decision
+                ),
+            ),
+            ModelOutputRegistration(
+                "macro_risk",
+                "downside",
+                60,
+                lambda _context: _planned(
+                    "macro_risk",
+                    "remembered_state",
+                    "model.macroRisk",
+                ),
+            ),
+            ModelOutputRegistration(
+                "intraday_order_flow",
+                "downside",
+                70,
+                lambda _context: _planned(
                 "intraday_order_flow",
                 "rule_score",
                 "model.intradayOrderFlow",
                 timing="intraday",
             ),
-        ],
-        "bullish_structure": [
-            _structural_reversal(chart_row),
-            _early_reversal(chart_row),
-            _shape_state(
-                chart_row,
+            ),
+            ModelOutputRegistration(
+                "bullish_structure_reversal_v1",
+                "bullish_structure",
+                10,
+                lambda context: _structural_reversal(context.chart_row),
+            ),
+            ModelOutputRegistration(
+                "early_bullish_reversal_watch_v1",
+                "bullish_structure",
+                20,
+                lambda context: _early_reversal(context.chart_row),
+            ),
+            ModelOutputRegistration(
+                "strict_vcp",
+                "bullish_structure",
+                30,
+                lambda context: _shape_state(
+                context.chart_row,
                 "strict_vcp",
                 "strict_vcp",
                 "model.strictVcp",
             ),
-            _shape_state(
-                chart_row,
+            ),
+            ModelOutputRegistration(
+                "tight_platform",
+                "bullish_structure",
+                40,
+                lambda context: _shape_state(
+                context.chart_row,
                 "tight_platform",
                 "tight_platform",
                 "model.tightPlatform",
             ),
-            _vcp_breakout(chart_row),
-            _pocket_pivot(chart_row),
-            _planned(
+            ),
+            ModelOutputRegistration(
+                "vcp_breakout_confirmed_v1",
+                "bullish_structure",
+                50,
+                lambda context: _vcp_breakout(context.chart_row),
+            ),
+            ModelOutputRegistration(
+                "pocket_pivot_v1",
+                "bullish_structure",
+                60,
+                lambda context: _pocket_pivot(context.chart_row),
+            ),
+            ModelOutputRegistration(
+                "demand_confirmation",
+                "bullish_structure",
+                70,
+                lambda _context: _planned(
                 "demand_confirmation",
                 "rule_score",
                 "model.demandConfirmation",
             ),
-        ],
-        "decision": _decision_output(decision),
-    }
+            ),
+        )
+    )
 
 
 def _primary_output(forecast, evaluation):
@@ -557,3 +657,6 @@ def _identity(key, version, kind, lifecycle, status, timing, translation_prefix)
 
 def _mapping(value):
     return value if isinstance(value, Mapping) else {}
+
+
+DEFAULT_MODEL_OUTPUT_REGISTRY = build_default_output_registry()

@@ -2,6 +2,11 @@ import copy
 import unittest
 
 from web.forecasts.model_outputs import build_model_outputs
+from web.forecasts.output_registry import (
+    ModelOutputContext,
+    ModelOutputRegistration,
+    ModelOutputRegistry,
+)
 
 
 def forecast_payload():
@@ -130,6 +135,63 @@ def chart_row():
 
 
 class ModelOutputContractTest(unittest.TestCase):
+    def test_registry_orders_families_and_isolates_builder_failures(self):
+        def broken(_context):
+            raise RuntimeError("private implementation detail")
+
+        registry = ModelOutputRegistry(
+            (
+                ModelOutputRegistration(
+                    "later", "downside", 20, lambda _context: {
+                        "key": "later", "status": "active"
+                    }
+                ),
+                ModelOutputRegistration(
+                    "broken", "downside", 10, broken
+                ),
+                ModelOutputRegistration(
+                    "primary", "primary", 5, lambda context: {
+                        "key": "primary",
+                        "status": "available",
+                        "value": context.forecast.get("predicted_return"),
+                    }
+                ),
+            )
+        )
+
+        result = registry.build(
+            ModelOutputContext(
+                forecast={"predicted_return": 0.1},
+                chart_row={},
+                evaluation={},
+                decision={},
+            )
+        )
+
+        self.assertEqual([row["key"] for row in result["primary"]], ["primary"])
+        self.assertEqual(
+            [row["key"] for row in result["downside"]],
+            ["broken", "later"],
+        )
+        self.assertEqual(result["downside"][0]["status"], "unavailable")
+        self.assertEqual(
+            result["downside"][0]["unavailable_reason"],
+            "builder_failed",
+        )
+        self.assertNotIn("error", result["downside"][0])
+        self.assertEqual(result["bullish_structure"], [])
+
+    def test_registry_rejects_duplicate_keys_and_invalid_families(self):
+        valid = ModelOutputRegistration(
+            "same", "primary", 1, lambda _context: {}
+        )
+        with self.assertRaises(ValueError):
+            ModelOutputRegistry((valid, valid))
+        with self.assertRaises(ValueError):
+            ModelOutputRegistration(
+                "invalid", "decision", 1, lambda _context: {}
+            )
+
     def test_groups_models_by_semantics_without_rule_probabilities(self):
         forecast = forecast_payload()
         row = chart_row()
