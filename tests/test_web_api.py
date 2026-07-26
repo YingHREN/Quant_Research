@@ -468,10 +468,74 @@ class RevisionAwareInjectedForecastService(InjectedForecastService):
         return payload
 
 
+class InjectedEntrySignalService:
+    def __init__(self, active_latest=False):
+        self.active_latest = active_latest
+        self.calls = []
+
+    def build(self, ticker, history):
+        self.calls.append((ticker, history.copy()))
+        rows = []
+        for position, timestamp in enumerate(history.index):
+            active = self.active_latest and position == len(history) - 1
+            rows.append(
+                {
+                    "time": pd.Timestamp(timestamp).date().isoformat(),
+                    "strict_vcp_active": active,
+                    "strict_vcp_start": active,
+                    "strict_vcp_stage": "near_pivot" if active else "none",
+                    "strict_vcp_pivot": 141.5 if active else None,
+                    "strict_vcp_pivot_date": (
+                        pd.Timestamp(timestamp).date().isoformat()
+                        if active
+                        else None
+                    ),
+                    "strict_vcp_reject_reason": (
+                        None if active else "insufficient_swings"
+                    ),
+                    "strict_vcp_evidence": {
+                        "accepted": active,
+                        "reject_reason": (
+                            None if active else "insufficient_swings"
+                        ),
+                        "vcp_pivot": 141.5 if active else None,
+                    },
+                    "tight_platform_active": False,
+                    "tight_platform_start": False,
+                    "tight_platform_pivot": None,
+                    "tight_platform_reject_reason": "not_sideways",
+                    "tight_platform_evidence": {
+                        "active": False,
+                        "reject_reason": "not_sideways",
+                    },
+                    "vcp_breakout_confirmed": False,
+                    "vcp_breakout_price_confirmed": False,
+                    "vcp_breakout_volume_confirmed": False,
+                    "vcp_breakout_buy_zone_confirmed": False,
+                    "vcp_breakout_pivot": None,
+                    "vcp_breakout_volume_ratio": None,
+                    "vcp_breakout_pct_over_pivot": None,
+                    "vcp_breakout_reject_reason": "no_prior_vcp_pivot",
+                    "pocket_pivot": False,
+                    "pocket_pivot_current_volume": None,
+                    "pocket_pivot_prior_down_volume": None,
+                    "pocket_pivot_down_day_count": 0,
+                    "pocket_pivot_reject_reason": "insufficient_history",
+                    "pocket_pivot_evidence": {
+                        "available": False,
+                        "active": False,
+                        "reject_reason": "insufficient_history",
+                    },
+                }
+            )
+        return rows
+
+
 def test_config(**overrides):
     config = {
         "TESTING": True,
         "FORECAST_SERVICE": InjectedForecastService(),
+        "ENTRY_SIGNAL_SERVICE": InjectedEntrySignalService(),
     }
     config.update(overrides)
     return config
@@ -536,6 +600,42 @@ class WebApiTest(unittest.TestCase):
         self.assertFalse(
             any(call[0] == "load_history" for call in self.repository.calls)
         )
+
+    def test_stock_merges_injected_entry_rows_by_date(self):
+        service = InjectedEntrySignalService(active_latest=True)
+        app = create_app(
+            test_config(ENTRY_SIGNAL_SERVICE=service),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(service.calls), 1)
+        self.assertEqual(service.calls[0][0], "AAA")
+        self.assertTrue(response.json["chart"][-1]["strict_vcp_active"])
+        self.assertEqual(
+            response.json["chart"][-1]["strict_vcp_pivot"],
+            141.5,
+        )
+        self.assertIs(
+            app.extensions["dashboard_entry_signal_service"],
+            service,
+        )
+
+    def test_universe_never_calls_entry_signal_service(self):
+        service = InjectedEntrySignalService()
+        app = create_app(
+            test_config(ENTRY_SIGNAL_SERVICE=service),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/universe")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(service.calls, [])
 
     def test_default_forecast_artifact_store_respects_factory_configuration(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -944,6 +1044,27 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_historical_forecast_uses_same_entry_signal_history(self):
+        service = InjectedEntrySignalService(active_latest=True)
+        app = create_app(
+            test_config(ENTRY_SIGNAL_SERVICE=service),
+            self.repository,
+            self.manager,
+        )
+        requested = self.repository.histories["AAA"].index[-20].date().isoformat()
+
+        response = app.test_client().get(
+            f"/api/stocks/AAA/forecasts/{requested}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(service.calls), 1)
+        self.assertEqual(service.calls[0][0], "AAA")
+        self.assertEqual(
+            len(service.calls[0][1]),
+            len(self.repository.histories["AAA"]),
+        )
+
     def test_historical_forecast_rejects_snapshot_from_prior_revision(self):
         class RacingService(InjectedForecastService):
             database_revision = 3
@@ -1230,7 +1351,7 @@ class WebApiTest(unittest.TestCase):
             all(item["time"] == response.json["observation_date"] for item in structures["annotations"])
         )
 
-    def test_stock_exposes_stable_codes_for_legacy_chinese_structure_rejections(self):
+    def test_stock_exposes_stable_codes_for_structure_rejections(self):
         repository = FakeRepository()
         repository.histories["AAA"] = price_history(periods=40)
         response = create_app(
@@ -1240,7 +1361,8 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         factors = {factor["key"]: factor for factor in response.json["factors"]}
         self.assertEqual(
-            factors["strict_vcp"]["raw_value"]["reject_reason"], "历史不足"
+            factors["strict_vcp"]["raw_value"]["reject_reason"],
+            "insufficient_history",
         )
         self.assertEqual(
             factors["strict_vcp"]["raw_value"]["rejection_reason_code"],
