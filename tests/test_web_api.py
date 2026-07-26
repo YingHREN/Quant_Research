@@ -829,7 +829,8 @@ class WebApiTest(unittest.TestCase):
             "warnings",
         }
         self.assertEqual(
-            set(payload), legacy_keys | {"forecasts", "forecast_evaluation"}
+            set(payload),
+            legacy_keys | {"forecasts", "forecast_evaluation", "top_risk"},
         )
         self.assertEqual(payload["ticker"], "AAA")
         self.assertEqual(payload["chart"][-1]["time"], payload["observation_date"])
@@ -964,6 +965,159 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(
             latest["market_bearish_turn_state"],
             "unavailable",
+        )
+
+    def test_stock_payload_includes_top_risk_summary_and_annotations(self):
+        event_date = (
+            self.repository.histories["AAA"].index[-3].date().isoformat()
+        )
+        latest_date = (
+            self.repository.histories["AAA"].index[-1].date().isoformat()
+        )
+
+        class TimelineForecastService(InjectedForecastService):
+            def build_top_risk_timeline(
+                self,
+                ticker,
+                chart_dates,
+                histories,
+                *,
+                expected_revision=None,
+            ):
+                return {
+                    "model_key": "high_level_distribution_risk_v1",
+                    "model_version": "v1",
+                    "status": "available",
+                    "unavailable_reason": None,
+                    "latest": {
+                        "time": latest_date,
+                        "score": 72.0,
+                        "raw_score": 72.0,
+                        "state": "confirmed",
+                        "raw_state": "confirmed",
+                        "memory_age_sessions": 0,
+                    },
+                    "events": [
+                        {
+                            "time": event_date,
+                            "type": "top_risk_confirmed",
+                            "score": 72.0,
+                            "state": "confirmed",
+                        }
+                    ],
+                }
+
+        app = create_app(
+            test_config(FORECAST_SERVICE=TimelineForecastService()),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json["top_risk"]["latest"]["state"],
+            "confirmed",
+        )
+        self.assertIn(
+            {
+                "time": event_date,
+                "type": "top_risk_confirmed",
+                "label": "Top downside risk confirmed",
+                "score": 72.0,
+                "state": "confirmed",
+            },
+            response.json["structures"]["annotations"],
+        )
+
+    def test_legacy_forecast_service_keeps_top_risk_unavailable(self):
+        response = self.client.get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json["top_risk"],
+            {
+                "model_key": "high_level_distribution_risk_v1",
+                "model_version": "v1",
+                "status": "unavailable",
+                "unavailable_reason": "service_unsupported",
+                "latest": None,
+                "events": [],
+            },
+        )
+
+    def test_top_risk_timeline_failure_does_not_fail_stock_endpoint(self):
+        class BrokenTimelineForecastService(InjectedForecastService):
+            def build_top_risk_timeline(self, *args, **kwargs):
+                raise RuntimeError("private timeline failure")
+
+        app = create_app(
+            test_config(FORECAST_SERVICE=BrokenTimelineForecastService()),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["top_risk"]["status"], "unavailable")
+        self.assertEqual(
+            response.json["top_risk"]["unavailable_reason"],
+            "model_error",
+        )
+
+    def test_top_risk_annotations_filter_unknown_types_and_non_chart_dates(self):
+        latest_date = (
+            self.repository.histories["AAA"].index[-1].date().isoformat()
+        )
+
+        class InvalidEventForecastService(InjectedForecastService):
+            def build_top_risk_timeline(self, *args, **kwargs):
+                return {
+                    "model_key": "high_level_distribution_risk_v1",
+                    "model_version": "v1",
+                    "status": "available",
+                    "unavailable_reason": None,
+                    "latest": {
+                        "time": latest_date,
+                        "score": 45.0,
+                        "raw_score": 45.0,
+                        "state": "watch",
+                        "raw_state": "watch",
+                        "memory_age_sessions": 0,
+                    },
+                    "events": [
+                        {
+                            "time": latest_date,
+                            "type": "unknown_top_risk",
+                            "score": 45.0,
+                            "state": "watch",
+                        },
+                        {
+                            "time": "1999-01-01",
+                            "type": "top_risk_watch",
+                            "score": 45.0,
+                            "state": "watch",
+                        },
+                    ],
+                }
+
+        app = create_app(
+            test_config(FORECAST_SERVICE=InvalidEventForecastService()),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["top_risk"]["status"], "available")
+        self.assertFalse(
+            any(
+                annotation["type"].startswith("top_risk")
+                for annotation in response.json["structures"]["annotations"]
+            )
         )
 
     def test_historical_forecast_endpoint_computes_only_requested_date(self):

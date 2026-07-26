@@ -46,6 +46,7 @@ from web.services.forecasts import (
 )
 from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.forecast_warmup import ForecastCacheWarmer
+from web.services.top_risk_timeline import unavailable_top_risk_timeline
 from web.services.entry_signals import (
     EntrySignalArtifactStore,
     EntrySignalService,
@@ -364,7 +365,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         _attach_forecast_target_dates(
             forecast_payload, snapshot.histories[normalized_ticker].index
         )
-        structures = _structure_payload(factor_payload, chart)
+        top_risk = _top_risk_payload(
+            forecast_service,
+            forecast_arguments,
+            forecast_revision,
+            update_in_progress=(
+                getattr(update_snapshot, "state", None) == "running"
+            ),
+        )
+        structures = _structure_payload(factor_payload, chart, top_risk)
         _attach_model_outputs(forecast_payload, chart, structures)
         payload = {
             "ticker": normalized_ticker,
@@ -377,6 +386,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "warnings": warnings,
             "forecasts": forecast_payload["forecasts"],
             "forecast_evaluation": forecast_payload["forecast_evaluation"],
+            "top_risk": top_risk,
         }
         return _json_response(payload)
 
@@ -648,7 +658,32 @@ def _stock_summary(chart, ticker_summary):
     }
 
 
-def _structure_payload(factors, chart):
+def _top_risk_payload(
+    forecast_service,
+    forecast_arguments,
+    expected_revision,
+    *,
+    update_in_progress=False,
+):
+    if update_in_progress:
+        return unavailable_top_risk_timeline("update_in_progress")
+    builder = getattr(forecast_service, "build_top_risk_timeline", None)
+    if not callable(builder):
+        return unavailable_top_risk_timeline("service_unsupported")
+    try:
+        if expected_revision is None:
+            return builder(*forecast_arguments)
+        return builder(
+            *forecast_arguments,
+            expected_revision=expected_revision,
+        )
+    except ForecastRevisionChanged:
+        return unavailable_top_risk_timeline("update_in_progress")
+    except Exception:
+        return unavailable_top_risk_timeline("model_error")
+
+
+def _structure_payload(factors, chart, top_risk=None):
     by_key = {factor["key"]: factor for factor in factors}
     latest = chart[-1]
     strict_vcp = latest.get("strict_vcp_evidence")
@@ -735,6 +770,7 @@ def _structure_payload(factors, chart):
                     "label": "Bullish breakout setup (tight platform)",
                 }
             )
+    annotations.extend(_top_risk_annotations(top_risk, chart))
     return {
         "strict_vcp": strict_vcp,
         "tight_platform": tight_platform,
@@ -753,6 +789,40 @@ def _structure_payload(factors, chart):
             "atr20": latest.get("atr20"),
         },
     }
+
+
+def _top_risk_annotations(top_risk, chart):
+    if not isinstance(top_risk, dict) or top_risk.get("status") != "available":
+        return []
+    chart_dates = {
+        row.get("time")
+        for row in chart
+        if isinstance(row, dict) and isinstance(row.get("time"), str)
+    }
+    labels = {
+        "top_risk_watch": "Top downside risk watch",
+        "top_risk_high": "Top downside risk high",
+        "top_risk_confirmed": "Top downside risk confirmed",
+        "top_risk_recovery": "Top downside risk cleared",
+    }
+    annotations = []
+    for event in top_risk.get("events", ()):
+        if not isinstance(event, dict):
+            continue
+        event_type = event.get("type")
+        event_time = event.get("time")
+        if event_type not in labels or event_time not in chart_dates:
+            continue
+        annotations.append(
+            {
+                "time": event_time,
+                "type": event_type,
+                "label": labels[event_type],
+                "score": _optional_number(event.get("score")),
+                "state": event.get("state"),
+            }
+        )
+    return annotations
 
 
 app = create_app()
