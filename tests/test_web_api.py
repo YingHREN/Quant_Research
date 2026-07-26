@@ -935,8 +935,26 @@ class WebApiTest(unittest.TestCase):
         }
         self.assertEqual(
             set(payload),
-            legacy_keys | {"forecasts", "forecast_evaluation", "top_risk"},
+            legacy_keys
+            | {
+                "forecasts",
+                "forecast_evaluation",
+                "model_output_registry",
+                "top_risk",
+            },
         )
+        self.assertEqual(
+            payload["model_output_registry"]["version"],
+            "model_output_registry_v1",
+        )
+        for horizons in payload["forecasts"]["by_date"].values():
+            for forecast in horizons.values():
+                outputs = forecast["model_outputs"]
+                self.assertNotIn("registry", outputs)
+                self.assertEqual(
+                    outputs["registry_ref"],
+                    payload["model_output_registry"]["version"],
+                )
         self.assertEqual(payload["ticker"], "AAA")
         self.assertEqual(payload["chart"][-1]["time"], payload["observation_date"])
         self.assertEqual(
@@ -1231,7 +1249,18 @@ class WebApiTest(unittest.TestCase):
         response = self.client.get(f"/api/stocks/AAA/forecasts/{requested}")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(set(response.json), {"forecasts", "forecast_evaluation"})
+        self.assertEqual(
+            set(response.json),
+            {
+                "forecasts",
+                "forecast_evaluation",
+                "model_output_registry",
+            },
+        )
+        self.assertEqual(
+            response.json["model_output_registry"]["version"],
+            "model_output_registry_v1",
+        )
         ticker, dates, histories = self.app.config["FORECAST_SERVICE"].calls[-1]
         self.assertEqual(ticker, "AAA")
         self.assertEqual(dates, (requested,))
@@ -1303,6 +1332,15 @@ class WebApiTest(unittest.TestCase):
         ]
         self.assertEqual(outputs["primary"][0]["evidence_status"], "unproven")
         self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
+        self.assertEqual(
+            payload["model_output_registry"]["version"],
+            "model_output_registry_v1",
+        )
+        self.assertEqual(
+            outputs["registry_ref"],
+            "model_output_registry_v1",
+        )
+        self.assertNotIn("registry", outputs)
 
     def test_historical_forecast_endpoint_rejects_non_session_date(self):
         response = self.client.get("/api/stocks/AAA/forecasts/2026-07-19")
