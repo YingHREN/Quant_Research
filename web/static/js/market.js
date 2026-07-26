@@ -139,28 +139,11 @@ function sectorButton(row) {
   return button;
 }
 
-function renderSectorHeatmap(rows = [], selectedGroup = {}) {
+function renderSectorHeatmap(rows = [], themeGroups = []) {
   const root = document.querySelector("#sector-heatmap");
   const grid = element("div", "sector-heatmap-grid");
-  const semiconductor = {
-    key: "semiconductor",
-    label_key: "market.group.semiconductor",
-    relative_return: null,
-    downside_risk: selectedGroup.key === "semiconductor"
-      ? selectedGroup.downside_risk
-      : { score: null },
-  };
-  const software = {
-    key: "software",
-    label_key: "market.group.software",
-    relative_return: null,
-    downside_risk: selectedGroup.key === "software"
-      ? selectedGroup.downside_risk
-      : { score: null },
-  };
   grid.append(
-    sectorButton(semiconductor),
-    sectorButton(software),
+    ...themeGroups.map(sectorButton),
     ...rows.map(sectorButton),
   );
   root.replaceChildren(grid);
@@ -320,7 +303,10 @@ function renderEvents(events = []) {
 function render(payload) {
   state.payload = payload;
   renderPosture(payload.market_posture);
-  renderSectorHeatmap(payload.sectors || [], payload.selected_group);
+  renderSectorHeatmap(
+    payload.sectors || [],
+    payload.theme_groups || [],
+  );
   renderEvidence(payload.market_posture?.evidence || []);
   renderDrilldown(payload.selected_group, payload.constituents);
   renderEvents(payload.changed_events);

@@ -21,6 +21,7 @@ from web.market_groups import (
     REFERENCE_TICKERS,
     SECTOR_ETFS,
     MarketGroup,
+    modeled_market_groups,
 )
 
 
@@ -158,6 +159,59 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
     checked_horizon = _horizon(horizon)
     cutoff = _cutoff(asof)
     prepared = _prepare_histories(histories, cutoff)
+    common_asof = _common_asof(prepared, cutoff)
+    selected_group, constituents, sector = _group_payload(
+        prepared,
+        group,
+        common_asof,
+    )
+    market_score = _market_score(prepared, sector, common_asof)
+    theme_groups = []
+    qqq = prepared.get("QQQ")
+    qqq_return = (
+        None
+        if qqq is None
+        else _return_at(qqq.history["Close"], common_asof, checked_horizon)
+    )
+    for theme in modeled_market_groups():
+        if theme.key == group.key:
+            summary = selected_group
+        else:
+            summary, _, _ = _group_payload(
+                prepared,
+                theme,
+                common_asof,
+            )
+        theme_return = summary["returns"][str(checked_horizon)]
+        theme_groups.append(
+            {
+                **summary,
+                "relative_return": (
+                    None
+                    if theme_return is None or qqq_return is None
+                    else theme_return - qqq_return
+                ),
+            }
+        )
+    return {
+        "asof": _iso(common_asof),
+        "requested_horizon": checked_horizon,
+        "selected_sector": group.key,
+        "evidence_tier": "daily_proxy",
+        "intraday": {
+            "state": "unavailable",
+            "reason": "intraday_not_integrated",
+        },
+        "market_posture": market_score.to_dict(),
+        "sectors": _sector_rows(prepared, common_asof, checked_horizon),
+        "theme_groups": theme_groups,
+        "selected_group": selected_group,
+        "constituents": constituents,
+        "changed_events": _changed_events(prepared, group, common_asof),
+    }
+
+
+def _group_payload(prepared, group, asof):
     sector = _sector_composite(prepared, group)
     available_benchmarks = [
         ticker for ticker in group.benchmark_tickers if ticker in prepared
@@ -168,13 +222,11 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
         if group.benchmark_tickers
         else 0.0
     )
-    common_asof = _common_asof(prepared, cutoff)
-    market_score = _market_score(prepared, sector, common_asof)
     constituents = _constituent_payloads(
         prepared,
         group,
         sector,
-        common_asof,
+        asof,
     )
     opportunity_scores = [
         row["reversal_opportunity"]["score"]
@@ -191,10 +243,6 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
         for row in constituents
         if row["downside_risk"]["state_score"] is not None
     ]
-    selected_returns = {
-        str(window): _return_at(sector, common_asof, window)
-        for window in (1, 5, 20, 60)
-    }
     group_raw_risk = _aggregate_score(risk_scores, benchmark_coverage)
     aggregated_state_risk = _aggregate_score(
         risk_state_scores,
@@ -217,36 +265,25 @@ def build_market_context(histories, asof, group: MarketGroup, horizon):
             "model_key": "bearish_turn_risk_rules_v2",
         }
     )
-    selected_group = {
+    summary = {
         "key": group.key,
         "label_key": group.label_key,
         "benchmark_tickers": list(group.benchmark_tickers),
         "available_benchmarks": available_benchmarks,
         "source_tickers": list(source_tickers),
         "coverage": benchmark_coverage,
-        "latest_source_date": _iso(common_asof),
-        "returns": selected_returns,
+        "latest_source_date": _iso(asof),
+        "returns": {
+            str(window): _return_at(sector, asof, window)
+            for window in (1, 5, 20, 60)
+        },
         "reversal_opportunity": _aggregate_score(
             opportunity_scores,
             benchmark_coverage,
         ),
         "downside_risk": group_risk,
     }
-    return {
-        "asof": _iso(common_asof),
-        "requested_horizon": checked_horizon,
-        "selected_sector": group.key,
-        "evidence_tier": "daily_proxy",
-        "intraday": {
-            "state": "unavailable",
-            "reason": "intraday_not_integrated",
-        },
-        "market_posture": market_score.to_dict(),
-        "sectors": _sector_rows(prepared, common_asof, checked_horizon),
-        "selected_group": selected_group,
-        "constituents": constituents,
-        "changed_events": _changed_events(prepared, group, common_asof),
-    }
+    return summary, constituents, sector
 
 
 def build_atomic_model_rows(histories, group: MarketGroup) -> pd.DataFrame:

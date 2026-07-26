@@ -29,6 +29,7 @@ class MarketAssetTest(unittest.TestCase):
         source = (ROOT / "web/static/js/market.js").read_text()
         self.assertIn("payload.market_posture", source)
         self.assertIn("payload.selected_group", source)
+        self.assertIn("payload.theme_groups", source)
         self.assertIn('setAttribute("aria-pressed"', source)
         self.assertIn("row.relative_return", source)
         self.assertIn("row.downside_risk", source)
@@ -39,6 +40,8 @@ class MarketAssetTest(unittest.TestCase):
         self.assertNotIn("reversalOpportunityScore(", source)
         self.assertNotIn("downsideRiskScore(", source)
         self.assertNotIn("innerHTML", source)
+        self.assertNotIn("const semiconductor = {", source)
+        self.assertNotIn("const software = {", source)
 
     def test_locale_change_renders_current_request_status(self):
         source = (ROOT / "web/static/js/market.js").read_text()

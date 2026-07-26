@@ -119,6 +119,7 @@ def _empty_payload(horizon, sector):
             "evidence": [],
         },
         "sectors": [],
+        "theme_groups": [],
         "selected_group": {
             "key": sector,
             "score": None,

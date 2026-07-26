@@ -30,6 +30,36 @@ def rising(periods=260, slope=0.2, end="2026-07-23"):
 
 
 class MarketContextTest(unittest.TestCase):
+    def test_every_market_response_includes_real_theme_heatmap_rows(self):
+        histories = {
+            ticker: rising(slope=slope)
+            for ticker, slope in (
+                ("QQQ", 0.2),
+                ("SPY", 0.15),
+                ("XLK", 0.22),
+                ("SOXX", 0.3),
+                ("SMH", 0.32),
+                ("IGV", 0.18),
+                ("XSW", 0.17),
+                ("AMD", 0.35),
+                ("ADBE", 0.16),
+            )
+        }
+
+        result = build_market_context(
+            histories,
+            pd.Timestamp("2026-07-23"),
+            market_group("technology"),
+            5,
+        )
+
+        themes = {row["key"]: row for row in result["theme_groups"]}
+        self.assertEqual(set(themes), {"semiconductor", "software"})
+        for row in themes.values():
+            self.assertIsNotNone(row["relative_return"])
+            self.assertIsNotNone(row["downside_risk"]["score"])
+            self.assertEqual(row["coverage"], 1.0)
+
     def test_constituent_classification_is_group_specific(self):
         histories = {
             ticker: rising()
