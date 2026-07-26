@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import replace
 import math
 from numbers import Real
+from threading import RLock
 
 import pandas as pd
 
@@ -23,9 +25,24 @@ class DuplicateFactorKey(ValueError):
 class FactorRegistry:
     """Ordered factor collection with isolated per-factor evaluation failures."""
 
-    def __init__(self, factors=(), group_metadata=()):
+    def __init__(
+        self,
+        factors=(),
+        group_metadata=(),
+        max_peer_cache_size=4096,
+    ):
+        if isinstance(max_peer_cache_size, bool) or not isinstance(
+            max_peer_cache_size,
+            int,
+        ):
+            raise TypeError("max_peer_cache_size must be an integer")
+        if max_peer_cache_size <= 0:
+            raise ValueError("max_peer_cache_size must be positive")
         self._factors = {}
         self._groups = {}
+        self._max_peer_cache_size = max_peer_cache_size
+        self._peer_cache = OrderedDict()
+        self._peer_cache_lock = RLock()
         for group in group_metadata:
             metadata = group if isinstance(group, FactorGroup) else FactorGroup(**group)
             self._groups[metadata.key] = metadata
@@ -39,6 +56,11 @@ class FactorRegistry:
     @property
     def groups(self):
         return tuple(self._groups.values())
+
+    @property
+    def peer_cache_size(self):
+        with self._peer_cache_lock:
+            return len(self._peer_cache)
 
     def register(self, factor: FactorDefinition):
         if factor.key in self._factors:
@@ -108,7 +130,12 @@ class FactorRegistry:
         }
         return self._add_percentiles(rows)
 
-    def evaluate_selected_with_peers(self, selected_context, peer_contexts):
+    def evaluate_selected_with_peers(
+        self,
+        selected_context,
+        peer_contexts,
+        cache_namespace=None,
+    ):
         """Evaluate all selected factors and only eligible factors for exact-date peers."""
         results = [
             self.evaluate_one(factor, selected_context) for factor in self.factors
@@ -131,7 +158,11 @@ class FactorRegistry:
                 continue
             values = [float(selected_result.raw_value)]
             for peer_context in exact_date_peers:
-                peer_result = self.evaluate_one(factor, peer_context)
+                peer_result = self._evaluate_peer(
+                    factor,
+                    peer_context,
+                    cache_namespace,
+                )
                 if not peer_result.missing and _is_finite_number(peer_result.raw_value):
                     values.append(float(peer_result.raw_value))
 
@@ -149,6 +180,28 @@ class FactorRegistry:
                 display_score=_display_score(selected_result.direction, percentile),
             )
         return results
+
+    def _evaluate_peer(self, factor, context, cache_namespace):
+        if cache_namespace is None:
+            return self.evaluate_one(factor, context)
+        key = (
+            cache_namespace,
+            factor.key,
+            factor.version,
+            context.ticker,
+            iso_date(context.observation_date),
+        )
+        with self._peer_cache_lock:
+            cached = self._peer_cache.get(key)
+            if cached is not None:
+                self._peer_cache.move_to_end(key)
+                return replace(cached)
+            result = self.evaluate_one(factor, context)
+            self._peer_cache[key] = replace(result)
+            self._peer_cache.move_to_end(key)
+            while len(self._peer_cache) > self._max_peer_cache_size:
+                self._peer_cache.popitem(last=False)
+            return replace(result)
 
     @staticmethod
     def _add_percentiles(rows):

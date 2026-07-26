@@ -101,7 +101,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
-        factor_registry = build_default_registry()
+        factor_registry = build_default_registry(
+            max_peer_cache_size=flask_app.config.get(
+                "FACTOR_PEER_CACHE_SIZE",
+                4096,
+            )
+        )
     universe_service = flask_app.config.get("UNIVERSE_SERVICE")
     if universe_service is None:
         universe_service = UniverseSnapshotService(
@@ -230,7 +235,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             if context.ticker == normalized_ticker
         )
         factor_rows = factor_registry.evaluate_selected_with_peers(
-            context, peer_contexts
+            context,
+            peer_contexts,
+            cache_namespace=forecast_revision,
         )
         factor_payload = [result.to_dict() for result in factor_rows]
         chart = build_chart_rows(context)

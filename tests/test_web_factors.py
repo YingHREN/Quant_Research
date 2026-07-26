@@ -152,6 +152,48 @@ class FactorRegistryTest(unittest.TestCase):
             ["AAA", "BBB", "CCC"],
         )
 
+    def test_peer_factor_cache_is_revision_scoped_and_bounded(self):
+        calls = []
+
+        class CountingFactor(ConstantFactor):
+            def compute(self, factor_context):
+                calls.append(factor_context.ticker)
+                return factor_context.metadata["value"]
+
+        registry = FactorRegistry(
+            [CountingFactor()],
+            max_peer_cache_size=2,
+        )
+        selected = context("AAA", 1)
+        peers = [context("BBB", 2), context("CCC", 3)]
+
+        first = registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=7,
+        )
+        second = registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=7,
+        )
+
+        self.assertEqual(calls.count("AAA"), 2)
+        self.assertEqual(calls.count("BBB"), 1)
+        self.assertEqual(calls.count("CCC"), 1)
+        self.assertIsNot(first[0], second[0])
+        self.assertLessEqual(registry.peer_cache_size, 2)
+
+        registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=8,
+        )
+
+        self.assertEqual(calls.count("BBB"), 2)
+        self.assertEqual(calls.count("CCC"), 2)
+        self.assertLessEqual(registry.peer_cache_size, 2)
+
     def test_result_json_shape_is_safe_and_stable(self):
         result = self.registry.evaluate_one(ConstantFactor(), context(value=2.5))
 

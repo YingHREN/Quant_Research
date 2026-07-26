@@ -344,7 +344,7 @@ GROUP_ZH = {
 }
 
 
-def build_default_registry():
+def build_default_registry(max_peer_cache_size=4096):
     """Return the ordered first-party factor collection used by the dashboard."""
     factors = [
         BuiltinFactor("close_vs_ema20_pct", "Close vs EMA20", "trend", "higher",
@@ -445,7 +445,11 @@ def build_default_registry():
     groups = [
         replace(group, i18n={"zh-CN": GROUP_ZH[group.key]}) for group in groups
     ]
-    return FactorRegistry(factors, group_metadata=groups)
+    return FactorRegistry(
+        factors,
+        group_metadata=groups,
+        max_peer_cache_size=max_peer_cache_size,
+    )
 
 
 def _distance_from(context, average_key):
