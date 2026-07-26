@@ -4,7 +4,7 @@
 
 **Goal:** 建立向后兼容、可验证的模型输出注册接口，使后端按注册定义构建输出，前端无需硬编码即可渲染新增模型组。
 
-**Architecture:** 新增纯 Python 注册表保存组、模型和构建器，并生成公开 JSON 契约；现有模型输出函数作为构建器接入默认注册表。API 保留旧分组字段并附加 `registry`，前端优先按注册契约动态渲染，旧 payload 回退到原四组。
+**Architecture:** 新增纯 Python 注册表保存组、模型和构建器，并生成公开 JSON 契约；现有模型输出函数作为构建器接入默认注册表。API 保留旧分组字段，将完整目录放在响应顶层并让各日期使用 `registry_ref`，前端优先按注册契约动态渲染，旧 payload 回退到原四组。
 
 **Tech Stack:** Python 3.9、dataclasses、Flask JSON 合约、原生 ES modules、Node 运行时 DOM 测试、unittest。
 
@@ -106,7 +106,7 @@ git commit -m "feat: add model output registry"
 
 **Interfaces:**
 - Consumes: Task 1 的 `ModelOutputRegistry` 和定义类。
-- Produces: `default_model_output_registry()`；`build_model_outputs()` 返回旧字段加 `registry`，每个输出带 `group/order/decision_permission`。
+- Produces: `default_model_output_registry()`；`build_model_outputs()` 返回旧字段加 `registry`，HTTP 装配层将目录提升到顶层并在各日期保留 `registry_ref`，每个输出带 `group/order/decision_permission`。
 
 - [ ] **Step 1: 写失败测试，要求默认模型全部注册**
 
@@ -148,11 +148,14 @@ Expected: FAIL because `registry` is missing。
 
 - Ridge、VCP、Pocket Pivot、结构转强：`informational`；
 - 早期观察、板块风险、需求、宏观、盘中：`advisory`；
-- 持续阴跌和高位派发：`downgrade_to_neutral`；
-- 8 项即时向下确认和 12 项个股记忆风险：`veto_to_down`；
+- 持续阴跌：`downgrade_to_neutral`；
+- 8 项即时向下确认、12 项个股记忆风险和确认后的高位派发：`veto_to_down`；
 - `forecast_decision_policy`：`final_policy`。
 
 - [ ] **Step 5: 运行模型输出和 API 合约测试**
+
+API 合约同时断言完整目录只出现于响应顶层，每日期不重复目录且
+`registry_ref` 与顶层版本一致。
 
 Run: `../../venv/bin/python -m unittest tests.test_web_model_outputs tests.test_web_api.WebApiTest.test_model_outputs_attach_same_date_chart_evidence -v`
 

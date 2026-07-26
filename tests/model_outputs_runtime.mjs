@@ -68,12 +68,49 @@ const identity = (key, nameKey, kind, status = "active") => ({
   lifecycle: "production",
   status,
   timing: "close_confirmed",
+  decision_permission: "advisory",
   name_key: nameKey,
   explanation_key: `${nameKey.replace(/\.name$/, "")}.explanation`,
   limitation_key: `${nameKey.replace(/\.name$/, "")}.limitation`,
 });
 const forecast = {
   model_outputs: {
+    registry: {
+      version: "model_output_registry_v1",
+      groups: [
+        {
+          key: "primary",
+          label_key: "modelOutput.group.primary",
+          order: 10,
+          cardinality: "many",
+        },
+        {
+          key: "downside",
+          label_key: "modelOutput.group.downside",
+          order: 20,
+          cardinality: "many",
+        },
+        {
+          key: "bullish_structure",
+          label_key: "modelOutput.group.bullish",
+          order: 30,
+          cardinality: "many",
+        },
+        {
+          key: "macro_context",
+          label_key: "modelOutput.group.macro",
+          order: 35,
+          cardinality: "many",
+        },
+        {
+          key: "decision",
+          label_key: "modelOutput.group.decision",
+          order: 40,
+          cardinality: "single",
+        },
+      ],
+      models: [],
+    },
     primary: [{
       ...identity("ridge_direction_v1", "model.ridge.name", "statistical_forecast", "available"),
       horizon_sessions: 20,
@@ -146,8 +183,14 @@ const forecast = {
       lifecycle: "planned",
       unavailable_reason: "not_implemented",
     }],
+    macro_context: [{
+      ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
+      lifecycle: "planned",
+      unavailable_reason: "not_implemented",
+    }],
     decision: {
       ...identity("forecast_decision_policy", "model.decisionPolicy.name", "decision_policy", "available"),
+      decision_permission: "final_policy",
       final_direction: "down",
       risk_state: "veto",
       action: "risk_override",
@@ -156,15 +199,18 @@ const forecast = {
   },
 };
 
+const externalRegistry = forecast.model_outputs.registry;
+delete forecast.model_outputs.registry;
 renderModelOutputs(container, {
   forecast,
   date: "2026-07-01",
   locale: "zh-CN",
+  registry: externalRegistry,
 });
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
 assert.equal(container.dataset.state, "available");
-assert.equal(cards.length, 10);
+assert.equal(cards.length, 11);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
 assert.match(zh, /最终方向/);
@@ -194,11 +240,14 @@ assert.match(zh, /历史数据不足/);
 assert.match(zh, /收缩幅度未递减/);
 assert.match(zh, /当前成交量 1\.25M/);
 assert.match(zh, /更广义需求确认/);
+assert.match(zh, /宏观环境/);
+assert.match(zh, /决策权限/);
 
 renderModelOutputs(container, {
   forecast,
   date: "2026-07-01",
   locale: "en",
+  registry: externalRegistry,
 });
 const en = textTree(container);
 assert.match(en, /Final direction/);
@@ -215,6 +264,8 @@ assert.match(en, /Insufficient history/);
 assert.match(en, /Contraction depths did not decrease/);
 assert.match(en, /Current volume 1\.25M/);
 assert.match(en, /Broader demand confirmation/);
+assert.match(en, /Macro context/);
+assert.match(en, /Decision permission/);
 
 const notPrecomputed = structuredClone(forecast);
 Object.assign(notPrecomputed.model_outputs.primary[0], {
@@ -229,11 +280,24 @@ renderModelOutputs(container, {
   forecast: notPrecomputed,
   date: "2026-07-23",
   locale: "zh-CN",
+  registry: externalRegistry,
 });
 const notPrecomputedText = textTree(container);
 assert.match(notPrecomputedText, /尚未预计算/);
 assert.doesNotMatch(notPrecomputedText, /方向准确率/);
 assert.doesNotMatch(notPrecomputedText, /始终上涨基线/);
+
+const legacyForecast = structuredClone(forecast);
+delete legacyForecast.model_outputs.macro_context;
+renderModelOutputs(container, {
+  forecast: legacyForecast,
+  date: "2026-07-23",
+  locale: "zh-CN",
+});
+const legacyCards = descendants(container)
+  .filter((node) => node.dataset.modelCard);
+assert.equal(legacyCards.length, 10);
+assert.match(textTree(container), /最终决策/);
 
 renderModelOutputs(container, {
   forecast: null,

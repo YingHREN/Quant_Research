@@ -1,9 +1,30 @@
 import { getLocale, t } from "./i18n.js";
 
-const GROUPS = Object.freeze([
-  ["primary", "modelOutput.group.primary"],
-  ["downside", "modelOutput.group.downside"],
-  ["bullish_structure", "modelOutput.group.bullish"],
+const LEGACY_GROUPS = Object.freeze([
+  {
+    key: "primary",
+    label_key: "modelOutput.group.primary",
+    order: 10,
+    cardinality: "many",
+  },
+  {
+    key: "downside",
+    label_key: "modelOutput.group.downside",
+    order: 20,
+    cardinality: "many",
+  },
+  {
+    key: "bullish_structure",
+    label_key: "modelOutput.group.bullish",
+    order: 30,
+    cardinality: "many",
+  },
+  {
+    key: "decision",
+    label_key: "modelOutput.group.decision",
+    order: 40,
+    cardinality: "single",
+  },
 ]);
 
 function element(tag, className, text) {
@@ -293,6 +314,14 @@ function modelCard(model, locale, { open = false } = {}) {
     t("modelOutput.field.timing", {}, locale),
     enumLabel("modelOutput.timing", model.timing, locale),
   ));
+  values.append(labeledValue(
+    t("modelOutput.field.decisionPermission", {}, locale),
+    enumLabel(
+      "modelOutput.permission",
+      model.decision_permission,
+      locale,
+    ),
+  ));
 
   const explanation = element("p", "model-output-explanation");
   explanation.textContent = translated(model.explanation_key, locale);
@@ -351,11 +380,48 @@ function summaryStrip(outputs, date, locale) {
   return strip;
 }
 
+function registeredGroups(outputs, registry) {
+  const groups = registry?.groups || outputs?.registry?.groups;
+  if (!Array.isArray(groups) || !groups.length) return LEGACY_GROUPS;
+  const keys = new Set();
+  for (const group of groups) {
+    if (
+      !group
+      || typeof group.key !== "string"
+      || !group.key
+      || typeof group.label_key !== "string"
+      || !Number.isFinite(Number(group.order))
+      || !["many", "single"].includes(group.cardinality)
+      || keys.has(group.key)
+    ) {
+      return LEGACY_GROUPS;
+    }
+    keys.add(group.key);
+  }
+  return [...groups].sort(
+    (left, right) => (
+      Number(left.order) - Number(right.order)
+      || left.key.localeCompare(right.key)
+    ),
+  );
+}
+
+function groupModels(outputs, group) {
+  const value = outputs?.[group.key];
+  if (group.cardinality === "single") {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? [value]
+      : [];
+  }
+  return Array.isArray(value) ? value : [];
+}
+
 export function renderModelOutputs(container, options = {}) {
   if (!container) return;
   const locale = options.locale || getLocale();
   const date = options.date || "—";
   const outputs = options.forecast?.model_outputs;
+  const registry = options.registry || null;
   const requestState = options.requestState || null;
 
   container.replaceChildren();
@@ -387,22 +453,33 @@ export function renderModelOutputs(container, options = {}) {
   container.append(summaryStrip(outputs, date, locale));
 
   const grid = element("div", "model-output-groups");
-  GROUPS.forEach(([key, labelKey]) => {
-    const group = element("section", "model-output-group");
-    group.append(element("h4", "", t(labelKey, {}, locale)));
+  registeredGroups(outputs, registry).forEach((definition) => {
+    const group = element(
+      "section",
+      definition.key === "decision"
+        ? "model-output-group model-output-decision"
+        : "model-output-group",
+    );
+    group.append(element(
+      "h4",
+      "",
+      translated(
+        definition.label_key,
+        locale,
+        definition.key,
+      ),
+    ));
     const cards = element("div", "model-output-cards");
-    (outputs[key] || []).forEach((model, index) => {
-      cards.append(modelCard(model, locale, { open: key === "primary" && index === 0 }));
+    groupModels(outputs, definition).forEach((model, index) => {
+      cards.append(modelCard(model, locale, {
+        open: (
+          (definition.key === "primary" && index === 0)
+          || definition.cardinality === "single"
+        ),
+      }));
     });
     group.append(cards);
     grid.append(group);
   });
-
-  const decisionGroup = element("section", "model-output-group model-output-decision");
-  decisionGroup.append(
-    element("h4", "", t("modelOutput.group.decision", {}, locale)),
-    modelCard(outputs.decision || {}, locale, { open: true }),
-  );
-  grid.append(decisionGroup);
   container.append(grid);
 }

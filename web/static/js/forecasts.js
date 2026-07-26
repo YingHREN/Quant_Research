@@ -7,7 +7,13 @@ export const DEFAULT_FORECAST_HORIZON = 20;
 let currentIndex = emptyIndex();
 
 function emptyIndex() {
-  return Object.freeze({ byDate: new Map(), evaluation: new Map(), model: null, dateCoverage: null });
+  return Object.freeze({
+    byDate: new Map(),
+    evaluation: new Map(),
+    model: null,
+    dateCoverage: null,
+    modelOutputRegistry: null,
+  });
 }
 
 function dateKey(value) {
@@ -52,6 +58,7 @@ export function indexForecasts(payload) {
     evaluation,
     model: forecasts?.model || null,
     dateCoverage: forecasts?.date_coverage || null,
+    modelOutputRegistry: payload?.model_output_registry || null,
   });
   return currentIndex;
 }

@@ -26,7 +26,10 @@ from werkzeug.exceptions import HTTPException
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
 from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
-from web.forecasts.model_outputs import build_model_outputs
+from web.forecasts.model_outputs import (
+    build_model_outputs,
+    default_model_output_registry,
+)
 from research.market_context import build_group_score_frame
 from research.risk_memory import (
     RISK_MEMORY_HALF_LIFE_SESSIONS,
@@ -399,6 +402,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "warnings": warnings,
             "forecasts": forecast_payload["forecasts"],
             "forecast_evaluation": forecast_payload["forecast_evaluation"],
+            "model_output_registry": forecast_payload.get(
+                "model_output_registry"
+            ),
             "top_risk": top_risk,
         }
         return _json_response(payload)
@@ -559,6 +565,7 @@ def _attach_model_outputs(payload, chart, structures=None):
         for row in chart
         if isinstance(row, dict) and isinstance(row.get("time"), str)
     }
+    registry = default_model_output_registry().public_contract()
     for raw_date, horizons in by_date.items():
         if not isinstance(horizons, dict):
             continue
@@ -566,11 +573,17 @@ def _attach_model_outputs(payload, chart, structures=None):
         for raw_horizon, forecast in horizons.items():
             if not isinstance(forecast, dict):
                 continue
-            forecast["model_outputs"] = build_model_outputs(
+            outputs = build_model_outputs(
                 forecast,
                 row,
                 evaluations.get(str(raw_horizon), {}),
             )
+            current_registry = outputs.pop("registry")
+            if current_registry != registry:
+                raise ValueError("inconsistent model output registry")
+            outputs["registry_ref"] = registry["version"]
+            forecast["model_outputs"] = outputs
+    payload["model_output_registry"] = registry
 
 
 def _finite_number(value):

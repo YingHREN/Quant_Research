@@ -592,6 +592,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         forecast,
         date,
         locale,
+        registry: selectedForecastIndex.modelOutputRegistry,
         requestState: date === null ? null : forecastRequestStates.get(date) || null,
       });
       if (forecastRequestTimer !== null) {
