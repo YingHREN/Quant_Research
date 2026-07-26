@@ -6,6 +6,8 @@ import pandas as pd
 from research.downside_specialist import (
     PRESSURE_REGIMES,
     attach_next_open_mae_targets,
+    downside_promotion_decision,
+    evaluate_downside_predictions,
     walk_forward_downside_predictions,
 )
 
@@ -70,6 +72,43 @@ def specialist_frame(periods=100):
             names=("ticker", "observation_date"),
         ),
     ).sort_index()
+
+
+def comparison_predictions():
+    dates = pd.bdate_range("2026-01-02", periods=8)
+    actual = (True, False, True, False, True, False, True, False)
+    rows = []
+    predictions = {
+        "pressure_downside_logistic_v1": actual,
+        "ridge_down": (False,) * 8,
+        "general_logistic_down": (
+            True, False, False, False, True, False, False, False
+        ),
+        "negative_baseline": (False,) * 8,
+    }
+    for specification, predicted in predictions.items():
+        for position, date in enumerate(dates):
+            rows.append(
+                {
+                    "ticker": f"T{position % 2}",
+                    "observation_date": date,
+                    "horizon": 5,
+                    "fold": 1 if position < 4 else 2,
+                    "regime": (
+                        "correction"
+                        if position < 4
+                        else "under_pressure"
+                    ),
+                    "specification": specification,
+                    "actual_event": actual[position],
+                    "actual_mae": -0.06 if actual[position] else -0.01,
+                    "predicted_event": predicted[position],
+                    "predicted_score": (
+                        0.9 if predicted[position] else 0.1
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 class DownsideSpecialistTest(unittest.TestCase):
@@ -189,6 +228,71 @@ class DownsideSpecialistTest(unittest.TestCase):
         )
 
         self.assertTrue(predictions.empty)
+
+    def test_downside_metrics_use_real_binary_outcomes_and_scores(self):
+        metrics = evaluate_downside_predictions(
+            comparison_predictions(),
+            group_map={"T0": "semiconductor", "T1": "software"},
+            minimum_fold_samples=2,
+        )
+
+        selected = metrics.loc[
+            (metrics["scope"] == "all")
+            & (metrics["regime_scope"] == "all_pressure")
+            & (metrics["sample_mode"] == "overlapping")
+        ].set_index("specification")
+        specialist = selected.loc["pressure_downside_logistic_v1"]
+        ridge = selected.loc["ridge_down"]
+        self.assertEqual(specialist["precision"], 1.0)
+        self.assertEqual(specialist["recall"], 1.0)
+        self.assertEqual(specialist["specificity"], 1.0)
+        self.assertEqual(specialist["balanced_accuracy"], 1.0)
+        self.assertEqual(specialist["roc_auc"], 1.0)
+        self.assertEqual(specialist["pr_auc"], 1.0)
+        self.assertAlmostEqual(specialist["brier_score"], 0.01)
+        self.assertEqual(
+            specialist["fold_win_rate_vs_ridge_down"],
+            1.0,
+        )
+        self.assertEqual(ridge["balanced_accuracy"], 0.5)
+
+    def test_downside_metrics_report_non_overlapping_groups_and_regimes(self):
+        metrics = evaluate_downside_predictions(
+            comparison_predictions(),
+            group_map={"T0": "semiconductor", "T1": "software"},
+            minimum_fold_samples=1,
+        )
+
+        self.assertEqual(
+            set(metrics["sample_mode"]),
+            {"overlapping", "non_overlapping"},
+        )
+        self.assertTrue(
+            {"all", "semiconductor", "software"}.issubset(
+                set(metrics["scope"])
+            )
+        )
+        self.assertTrue(
+            {"all_pressure", "correction", "under_pressure"}.issubset(
+                set(metrics["regime_scope"])
+            )
+        )
+
+    def test_promotion_gate_blocks_subgroup_and_regime_instability(self):
+        metrics = evaluate_downside_predictions(
+            comparison_predictions(),
+            group_map={"T0": "semiconductor", "T1": "software"},
+            minimum_fold_samples=1,
+        )
+
+        decision = downside_promotion_decision(metrics)
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn(
+            "survivorship_and_point_in_time_classification_history_missing",
+            decision["production_block_reason"],
+        )
+        self.assertIn("20d_comparison_missing", decision["reasons"])
 
 
 if __name__ == "__main__":

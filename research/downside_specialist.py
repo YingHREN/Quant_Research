@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 from research.market_direction_model import _training_only_design
 
@@ -194,6 +195,323 @@ def walk_forward_downside_predictions(
     if not output:
         return _empty_prediction_frame()
     return pd.concat(output, ignore_index=True, sort=False)
+
+
+def evaluate_downside_predictions(
+    predictions: pd.DataFrame,
+    *,
+    group_map=None,
+    minimum_fold_samples: int = 30,
+) -> pd.DataFrame:
+    """Report binary path-risk metrics on matched rows and folds."""
+    required = {
+        "ticker",
+        "observation_date",
+        "horizon",
+        "fold",
+        "regime",
+        "specification",
+        "actual_event",
+        "actual_mae",
+        "predicted_event",
+        "predicted_score",
+    }
+    missing = sorted(required.difference(predictions.columns))
+    if missing:
+        raise ValueError(f"predictions are missing columns: {missing}")
+    minimum = int(minimum_fold_samples)
+    if minimum < 1:
+        raise ValueError("minimum_fold_samples must be positive")
+    checked = predictions.copy(deep=True)
+    checked["ticker"] = checked["ticker"].astype(str).str.upper()
+    checked["observation_date"] = pd.to_datetime(
+        checked["observation_date"],
+        errors="raise",
+    ).dt.tz_localize(None)
+    groups = {
+        str(ticker).strip().upper(): str(group)
+        for ticker, group in (group_map or {}).items()
+    }
+    checked["study_group"] = checked["ticker"].map(
+        lambda ticker: groups.get(ticker, "other")
+    )
+    rows = []
+    for horizon, horizon_rows in checked.groupby("horizon", sort=True):
+        modes = {
+            "overlapping": horizon_rows,
+            "non_overlapping": _non_overlapping_rows(
+                horizon_rows,
+                int(horizon),
+            ),
+        }
+        for sample_mode, sample_rows in modes.items():
+            scope_frames = {"all": sample_rows}
+            for scope in ("semiconductor", "software", "other"):
+                selected_scope = sample_rows.loc[
+                    sample_rows["study_group"] == scope
+                ]
+                if not selected_scope.empty:
+                    scope_frames[scope] = selected_scope
+            for scope, scope_rows in scope_frames.items():
+                regime_frames = {"all_pressure": scope_rows}
+                for regime in sorted(PRESSURE_REGIMES):
+                    selected_regime = scope_rows.loc[
+                        scope_rows["regime"] == regime
+                    ]
+                    if not selected_regime.empty:
+                        regime_frames[regime] = selected_regime
+                for regime_scope, selected in regime_frames.items():
+                    comparisons = _fold_comparisons(
+                        selected,
+                        baseline="ridge_down",
+                        minimum_fold_samples=minimum,
+                    )
+                    for specification, model_rows in selected.groupby(
+                        "specification",
+                        sort=True,
+                    ):
+                        metrics = _binary_metric_row(model_rows)
+                        comparable, win_rate = comparisons.get(
+                            str(specification),
+                            (0, np.nan),
+                        )
+                        metrics.update(
+                            {
+                                "scope": scope,
+                                "horizon": int(horizon),
+                                "regime_scope": regime_scope,
+                                "sample_mode": sample_mode,
+                                "specification": str(specification),
+                                "comparable_fold_count": comparable,
+                                "fold_win_rate_vs_ridge_down": win_rate,
+                            }
+                        )
+                        rows.append(metrics)
+    return pd.DataFrame(rows)
+
+
+def downside_promotion_decision(metrics: pd.DataFrame) -> dict:
+    """Apply frozen research gates while retaining the production block."""
+    reasons = []
+
+    def row(scope, horizon, regime, mode, specification):
+        selected = metrics.loc[
+            (metrics["scope"] == scope)
+            & (metrics["horizon"] == horizon)
+            & (metrics["regime_scope"] == regime)
+            & (metrics["sample_mode"] == mode)
+            & (metrics["specification"] == specification)
+        ]
+        return None if selected.empty else selected.iloc[0]
+
+    specialist_name = "pressure_downside_logistic_v1"
+    for mode in ("overlapping", "non_overlapping"):
+        specialist = row(
+            "all", 5, "all_pressure", mode, specialist_name
+        )
+        ridge = row("all", 5, "all_pressure", mode, "ridge_down")
+        prefix = f"5d:{mode}"
+        if specialist is None or ridge is None:
+            reasons.append(f"{prefix}:comparison_missing")
+            continue
+        if (
+            specialist["balanced_accuracy"]
+            < ridge["balanced_accuracy"] + 0.01
+        ):
+            reasons.append(f"{prefix}:balanced_accuracy_gain_below_0.01")
+        if specialist["pr_auc"] <= specialist["event_rate"]:
+            reasons.append(f"{prefix}:pr_auc_not_above_event_rate")
+        if specialist["recall"] < ridge["recall"]:
+            reasons.append(f"{prefix}:recall_below_ridge")
+        if (
+            pd.isna(specialist["fold_win_rate_vs_ridge_down"])
+            or specialist["fold_win_rate_vs_ridge_down"] <= 0.5
+        ):
+            reasons.append(f"{prefix}:fold_majority_not_won")
+
+    for scope in ("semiconductor", "software"):
+        for mode in ("overlapping", "non_overlapping"):
+            specialist = row(
+                scope, 5, "all_pressure", mode, specialist_name
+            )
+            ridge = row(scope, 5, "all_pressure", mode, "ridge_down")
+            prefix = f"5d:{scope}:{mode}"
+            if specialist is None or ridge is None:
+                reasons.append(f"{prefix}:comparison_missing")
+                continue
+            if (
+                specialist["balanced_accuracy"] + 0.005
+                < ridge["balanced_accuracy"]
+            ):
+                reasons.append(f"{prefix}:subgroup_degraded")
+            if (
+                pd.isna(specialist["fold_win_rate_vs_ridge_down"])
+                or specialist["fold_win_rate_vs_ridge_down"] <= 0.5
+            ):
+                reasons.append(f"{prefix}:fold_majority_not_won")
+
+    regime_wins = 0
+    available_regimes = 0
+    for regime in PRESSURE_REGIMES:
+        specialist = row(
+            "all", 5, regime, "overlapping", specialist_name
+        )
+        if specialist is None:
+            continue
+        win_rate = specialist["fold_win_rate_vs_ridge_down"]
+        if pd.notna(win_rate):
+            available_regimes += 1
+            regime_wins += int(win_rate > 0.5)
+    if available_regimes < 3 or regime_wins < 2:
+        reasons.append("5d:pressure_regimes:majority_not_won_in_two_states")
+
+    twenty_available = False
+    for mode in ("overlapping", "non_overlapping"):
+        specialist = row(
+            "all", 20, "all_pressure", mode, specialist_name
+        )
+        ridge = row("all", 20, "all_pressure", mode, "ridge_down")
+        if specialist is None or ridge is None:
+            continue
+        twenty_available = True
+        if (
+            specialist["balanced_accuracy"] + 0.01
+            < ridge["balanced_accuracy"]
+        ):
+            reasons.append(f"20d:{mode}:balanced_accuracy_degraded")
+    if not twenty_available:
+        reasons.append("20d_comparison_missing")
+
+    return {
+        "eligible": False,
+        "metric_gate_passed": not reasons,
+        "reasons": reasons,
+        "production_block_reason": (
+            "survivorship_and_point_in_time_classification_history_missing"
+        ),
+    }
+
+
+def _binary_metric_row(rows):
+    actual = rows["actual_event"].astype(bool)
+    predicted = rows["predicted_event"].astype(bool)
+    score = pd.to_numeric(rows["predicted_score"], errors="coerce")
+    valid = score.notna() & np.isfinite(score)
+    actual = actual.loc[valid]
+    predicted = predicted.loc[valid]
+    score = score.loc[valid].clip(0.0, 1.0)
+    tp = int((predicted & actual).sum())
+    fp = int((predicted & ~actual).sum())
+    fn = int((~predicted & actual).sum())
+    tn = int((~predicted & ~actual).sum())
+    recall = _ratio(tp, tp + fn)
+    specificity = _ratio(tn, tn + fp)
+    both_classes = actual.nunique() == 2
+    return {
+        "sample_count": len(actual),
+        "coverage": len(actual) / len(rows) if len(rows) else np.nan,
+        "event_rate": float(actual.mean()) if len(actual) else np.nan,
+        "signal_rate": float(predicted.mean()) if len(predicted) else np.nan,
+        "precision": _ratio(tp, tp + fp),
+        "recall": recall,
+        "specificity": specificity,
+        "balanced_accuracy": (
+            np.nan
+            if pd.isna(recall) or pd.isna(specificity)
+            else (recall + specificity) / 2.0
+        ),
+        "roc_auc": (
+            float(roc_auc_score(actual, score))
+            if both_classes
+            else np.nan
+        ),
+        "pr_auc": (
+            float(average_precision_score(actual, score))
+            if both_classes
+            else np.nan
+        ),
+        "brier_score": (
+            float(np.mean((score.to_numpy() - actual.to_numpy()) ** 2))
+            if len(actual)
+            else np.nan
+        ),
+        "mean_mae_when_signaled": _finite_mean(
+            rows.loc[predicted.index[predicted], "actual_mae"]
+        ),
+    }
+
+
+def _fold_comparisons(
+    predictions,
+    *,
+    baseline,
+    minimum_fold_samples,
+):
+    by_spec = {
+        str(specification): selected
+        for specification, selected in predictions.groupby(
+            "specification",
+            sort=False,
+        )
+    }
+    baseline_rows = by_spec.get(baseline)
+    if baseline_rows is None:
+        return {
+            specification: (0, np.nan)
+            for specification in by_spec
+        }
+    result = {baseline: (0, np.nan)}
+    for specification, challenger in by_spec.items():
+        if specification == baseline:
+            continue
+        wins = []
+        folds = sorted(
+            set(baseline_rows["fold"]).intersection(challenger["fold"])
+        )
+        for fold in folds:
+            current = baseline_rows.loc[baseline_rows["fold"] == fold]
+            selected = challenger.loc[challenger["fold"] == fold]
+            if (
+                len(current) < minimum_fold_samples
+                or len(selected) < minimum_fold_samples
+                or current["actual_event"].nunique() < 2
+                or selected["actual_event"].nunique() < 2
+            ):
+                continue
+            delta = (
+                _binary_metric_row(selected)["balanced_accuracy"]
+                - _binary_metric_row(current)["balanced_accuracy"]
+            )
+            wins.append(
+                1.0 if delta > 1e-12 else 0.0 if delta < -1e-12 else 0.5
+            )
+        result[specification] = (
+            len(wins),
+            np.nan if not wins else float(np.mean(wins)),
+        )
+    return result
+
+
+def _non_overlapping_rows(predictions, horizon):
+    ordered = predictions.sort_values(
+        ["specification", "fold", "ticker", "observation_date"],
+        kind="mergesort",
+    ).copy()
+    position = ordered.groupby(
+        ["specification", "fold", "ticker"],
+        sort=False,
+    ).cumcount()
+    return ordered.loc[position.mod(int(horizon)) == 0].copy()
+
+
+def _ratio(numerator, denominator):
+    return np.nan if denominator == 0 else numerator / denominator
+
+
+def _finite_mean(values):
+    numeric = pd.to_numeric(values, errors="coerce")
+    finite = numeric[np.isfinite(numeric)]
+    return np.nan if finite.empty else float(finite.mean())
 
 
 def _empty_prediction_frame():
