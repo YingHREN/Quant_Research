@@ -133,6 +133,61 @@ class ForecastArtifactStoreTest(unittest.TestCase):
                 with self.assertRaises((TypeError, ValueError)):
                     ForecastArtifactStore(self.path, max_entries=value)
 
+    def test_status_reports_empty_cache_without_creating_database(self):
+        store = ForecastArtifactStore(self.path)
+
+        self.assertEqual(
+            store.status(),
+            {
+                "state": "empty",
+                "entry_count": 0,
+                "latest_created_at": None,
+                "market_asof": None,
+                "model_key": None,
+                "model_version": None,
+                "feature_version": None,
+                "risk_context_version": None,
+                "format_version": None,
+                "size_bytes": 0,
+            },
+        )
+        self.assertFalse(self.path.exists())
+
+    def test_status_reports_latest_public_metadata_without_decoding_payload(self):
+        store = ForecastArtifactStore(self.path)
+        self.assertTrue(store.save(_identity(), "market-a", _artifact()))
+
+        with mock.patch(
+            "web.services.forecast_artifacts._decode_row",
+            side_effect=AssertionError("status decoded artifact payload"),
+        ):
+            status = store.status()
+
+        self.assertEqual(status["state"], "ready")
+        self.assertEqual(status["entry_count"], 1)
+        self.assertEqual(status["market_asof"], "2026-07-21")
+        self.assertEqual(status["model_key"], "ridge_direction_v1")
+        self.assertEqual(status["model_version"], "v4")
+        self.assertEqual(status["feature_version"], "features-v1")
+        self.assertEqual(status["risk_context_version"], "risk-v1")
+        self.assertEqual(status["format_version"], "forecast-artifact-v1")
+        self.assertGreater(status["size_bytes"], 0)
+        self.assertRegex(
+            status["latest_created_at"],
+            r"^20\d\d-\d\d-\d\dT",
+        )
+
+    def test_status_degrades_invalid_database_without_exposing_error_or_path(self):
+        self.path.write_text("not a sqlite database", encoding="utf-8")
+
+        status = ForecastArtifactStore(self.path).status()
+
+        self.assertEqual(status["state"], "unavailable")
+        self.assertEqual(status["entry_count"], 0)
+        self.assertEqual(status["size_bytes"], 0)
+        self.assertNotIn("error", status)
+        self.assertNotIn("path", status)
+
 
 if __name__ == "__main__":
     unittest.main()

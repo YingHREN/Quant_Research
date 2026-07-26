@@ -122,11 +122,12 @@ class ForecastArtifactStore:
                             cache_key, market_signature, model_key,
                             model_version, feature_version,
                             risk_context_version, format_version,
-                            created_at, payload_codec, payload_checksum,
-                            payload
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            created_at, market_asof, payload_codec,
+                            payload_checksum, payload
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(cache_key) DO UPDATE SET
                             created_at = excluded.created_at,
+                            market_asof = excluded.market_asof,
                             payload_codec = excluded.payload_codec,
                             payload_checksum = excluded.payload_checksum,
                             payload = excluded.payload
@@ -140,6 +141,7 @@ class ForecastArtifactStore:
                             identity.risk_context_version,
                             FORMAT_VERSION,
                             datetime.now(timezone.utc).isoformat(),
+                            _artifact_market_asof(artifact.coverage),
                             PAYLOAD_CODEC,
                             checksum,
                             sqlite3.Binary(payload),
@@ -175,6 +177,50 @@ class ForecastArtifactStore:
             except sqlite3.Error:
                 return 0
 
+    def status(self):
+        """Return safe cache metadata without decoding artifact payloads."""
+        result = _empty_status()
+        if not self.path.exists():
+            return result
+        with self._lock:
+            try:
+                with sqlite3.connect(self.path) as connection:
+                    _ensure_schema(connection)
+                    count_row = connection.execute(
+                        """
+                        SELECT COUNT(*), COALESCE(SUM(LENGTH(payload)), 0)
+                        FROM forecast_artifacts
+                        """
+                    ).fetchone()
+                    latest = connection.execute(
+                        """
+                        SELECT created_at, market_asof, model_key,
+                               model_version, feature_version,
+                               risk_context_version, format_version
+                        FROM forecast_artifacts
+                        ORDER BY created_at DESC, rowid DESC
+                        LIMIT 1
+                        """
+                    ).fetchone()
+            except (OSError, sqlite3.Error):
+                result["state"] = "unavailable"
+                return result
+        result["entry_count"] = int(count_row[0])
+        result["size_bytes"] = int(count_row[1])
+        if latest is None:
+            return result
+        (
+            result["latest_created_at"],
+            result["market_asof"],
+            result["model_key"],
+            result["model_version"],
+            result["feature_version"],
+            result["risk_context_version"],
+            result["format_version"],
+        ) = latest
+        result["state"] = "ready"
+        return result
+
     def _delete_best_effort(self, cache_key):
         try:
             with sqlite3.connect(self.path) as connection:
@@ -198,12 +244,51 @@ def _ensure_schema(connection):
             risk_context_version TEXT NOT NULL,
             format_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
+            market_asof TEXT,
             payload_codec TEXT NOT NULL,
             payload_checksum TEXT NOT NULL,
             payload BLOB NOT NULL
         )
         """
     )
+    columns = {
+        row[1] for row in connection.execute(
+            "PRAGMA table_info(forecast_artifacts)"
+        )
+    }
+    if "market_asof" not in columns:
+        connection.execute(
+            "ALTER TABLE forecast_artifacts ADD COLUMN market_asof TEXT"
+        )
+
+
+def _empty_status():
+    return {
+        "state": "empty",
+        "entry_count": 0,
+        "latest_created_at": None,
+        "market_asof": None,
+        "model_key": None,
+        "model_version": None,
+        "feature_version": None,
+        "risk_context_version": None,
+        "format_version": None,
+        "size_bytes": 0,
+    }
+
+
+def _artifact_market_asof(coverage):
+    dates = []
+    for value in coverage.values():
+        try:
+            timestamp = pd.Timestamp(value[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if not pd.isna(timestamp):
+            dates.append(timestamp.normalize())
+    if not dates:
+        return None
+    return max(dates).date().isoformat()
 
 
 def _cache_key(identity, market_signature):

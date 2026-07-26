@@ -641,6 +641,48 @@ class WebApiTest(unittest.TestCase):
             any(call[0] == "load_history" for call in self.repository.calls)
         )
 
+    def test_cache_status_returns_safe_service_telemetry(self):
+        expected = {
+            "state": "ready",
+            "entry_count": 2,
+            "latest_created_at": "2026-07-24T10:00:00+00:00",
+            "market_asof": "2026-07-24",
+            "model_key": "ridge_direction_v1",
+            "model_version": "v4",
+            "feature_version": "ridge-features-v1",
+            "risk_context_version": "forecast-risk-context-v1",
+            "format_version": "forecast-artifact-v1",
+            "size_bytes": 1234,
+            "last_access": "disk_hit",
+            "database_revision": 7,
+            "memory_ready": True,
+            "build_started_at": None,
+            "build_finished_at": "2026-07-24T10:00:01+00:00",
+        }
+
+        class StatusService(RevisionAwareInjectedForecastService):
+            def cache_status(self):
+                return dict(expected)
+
+        app = create_app(
+            test_config(FORECAST_SERVICE=StatusService()),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/cache/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json, expected)
+
+    def test_cache_status_degrades_when_injected_service_has_no_status(self):
+        response = self.client.get("/api/cache/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["state"], "unavailable")
+        self.assertEqual(response.json["last_access"], "unavailable")
+        self.assertFalse(response.json["memory_ready"])
+
     def test_stock_merges_injected_entry_rows_by_date(self):
         service = InjectedEntrySignalService(active_latest=True)
         app = create_app(
@@ -2144,6 +2186,59 @@ class ForecastServiceTest(unittest.TestCase):
                 first_service._artifact_provider,
                 second_service._artifact_provider,
             )
+
+    def test_cache_status_tracks_rebuild_memory_hit_and_disk_hit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            first_service = ForecastService(artifact_store=store)
+
+            empty = first_service.cache_status()
+            self.assertEqual(empty["state"], "empty")
+            self.assertEqual(empty["last_access"], "miss")
+            self.assertFalse(empty["memory_ready"])
+
+            first_service.prewarm(self.histories)
+            rebuilt = first_service.cache_status()
+            self.assertEqual(rebuilt["state"], "ready")
+            self.assertEqual(rebuilt["last_access"], "rebuilt")
+            self.assertTrue(rebuilt["memory_ready"])
+            self.assertIsNotNone(rebuilt["build_started_at"])
+            self.assertIsNotNone(rebuilt["build_finished_at"])
+            self.assertEqual(rebuilt["market_asof"], "2026-07-21")
+
+            first_service.prewarm(self.histories)
+            self.assertEqual(
+                first_service.cache_status()["last_access"],
+                "memory_hit",
+            )
+
+            second_service = ForecastService(artifact_store=store)
+            second_service.prewarm(self.histories)
+            restored = second_service.cache_status()
+            self.assertEqual(restored["last_access"], "disk_hit")
+            self.assertTrue(restored["memory_ready"])
+            self.assertEqual(restored["database_revision"], 0)
+
+    def test_cache_status_is_safe_when_store_status_fails(self):
+        class FailingStatusStore:
+            def load(self, identity, market_signature):
+                return None
+
+            def save(self, identity, market_signature, artifact):
+                return False
+
+            def status(self):
+                raise RuntimeError("secret cache path")
+
+        status = ForecastService(
+            artifact_store=FailingStatusStore()
+        ).cache_status()
+
+        self.assertEqual(status["state"], "unavailable")
+        self.assertEqual(status["last_access"], "miss")
+        self.assertNotIn("error", status)
 
     def test_top_risk_timeline_restores_persistent_risk_context(self):
         with tempfile.TemporaryDirectory() as temporary:
