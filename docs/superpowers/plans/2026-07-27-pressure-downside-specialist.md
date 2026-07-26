@@ -81,4 +81,4 @@
 - [x] 运行 240 股票、2018-01-01 起点、五折真实实验。
 - [x] 检查所有组、阶段、周期和样本模式，冻结结论。
 - [x] 运行 `../../venv/bin/python -m unittest discover -s tests -q`。
-- [ ] 提交报告，合入 main 后无覆盖地更新中文 TODO。
+- [x] 提交报告，合入 main 后无覆盖地更新中文 TODO。
