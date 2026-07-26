@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
 
-REGISTRY_VERSION = "model_output_registry_v2"
+REGISTRY_VERSION = "model_output_registry_v3"
 VALID_CARDINALITIES = frozenset({"many", "single"})
 VALID_DECISION_PERMISSIONS = frozenset(
     {

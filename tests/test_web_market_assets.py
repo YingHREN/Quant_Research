@@ -13,6 +13,7 @@ class MarketAssetTest(unittest.TestCase):
             "market-posture",
             "sector-heatmap",
             "market-evidence",
+            "macro-risk",
             "sector-drilldown",
             "market-events",
             "market-data-tier",
@@ -28,6 +29,7 @@ class MarketAssetTest(unittest.TestCase):
     def test_market_js_uses_payload_evidence_without_recomputing_scores(self):
         source = (ROOT / "web/static/js/market.js").read_text()
         self.assertIn("payload.market_posture", source)
+        self.assertIn("payload.macro_risk", source)
         self.assertIn("payload.selected_group", source)
         self.assertIn("payload.theme_groups", source)
         self.assertIn('setAttribute("aria-pressed"', source)

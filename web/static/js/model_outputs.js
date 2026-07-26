@@ -20,6 +20,12 @@ const LEGACY_GROUPS = Object.freeze([
     cardinality: "many",
   },
   {
+    key: "macro_context",
+    label_key: "modelOutput.group.macro",
+    order: 35,
+    cardinality: "many",
+  },
+  {
     key: "decision",
     label_key: "modelOutput.group.decision",
     order: 40,

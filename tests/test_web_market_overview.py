@@ -62,6 +62,33 @@ class FakeRepository:
 
 
 class MarketOverviewServiceTest(unittest.TestCase):
+    def test_includes_independent_macro_risk_without_changing_market_score(self):
+        class MacroService:
+            def build(self, asof):
+                return {
+                    "score": 62.0,
+                    "state": "high",
+                    "coverage": 0.9,
+                    "conditions": ["two_year_yield_high"],
+                    "components": {},
+                    "evidence": [],
+                    "decision_permission": "advisory",
+                }
+
+        repository = FakeRepository(fixture_histories())
+        baseline = MarketOverviewService(repository).build()
+        payload = MarketOverviewService(
+            repository,
+            macro_risk_service=MacroService(),
+        ).build()
+
+        self.assertEqual(payload["macro_risk"]["score"], 62.0)
+        self.assertEqual(payload["macro_risk"]["state"], "high")
+        self.assertEqual(
+            payload["market_posture"]["score"],
+            baseline["market_posture"]["score"],
+        )
+
     def test_proxy_only_sector_returns_empty_calibration_without_error(self):
         histories = {
             "QQQ": history(),

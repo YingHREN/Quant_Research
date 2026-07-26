@@ -118,6 +118,39 @@ function renderPosture(posture = {}) {
   text(document.querySelector("#market-coverage"), formatPercent(coverage));
 }
 
+function renderMacroRisk(macro = {}) {
+  const root = document.querySelector("#macro-risk");
+  const stateLabel = localized(
+    `market.macro.state.${macro.state || "unavailable"}`,
+    macro.state || "—",
+  );
+  const cards = [
+    scoreBlock(
+      t("market.macro.total"),
+      formatScore(macro.score),
+      macro.score == null
+        ? unavailableText(macro.unavailable_reason)
+        : `${stateLabel} · ${t("market.coverage")} ${formatPercent(macro.coverage)}`,
+    ),
+  ];
+  for (const key of [
+    "rates",
+    "inflation_energy",
+    "credit_liquidity",
+    "risk_aversion",
+  ]) {
+    const component = macro.components?.[key] || {};
+    cards.push(
+      scoreBlock(
+        localized(`market.macro.component.${key}`, key),
+        formatScore(component.score),
+        `${t("market.coverage")} ${formatPercent(component.coverage)}`,
+      ),
+    );
+  }
+  root.replaceChildren(...cards);
+}
+
 function sectorButton(row) {
   const button = element("button", "sector-tile");
   button.type = "button";
@@ -303,6 +336,7 @@ function renderEvents(events = []) {
 function render(payload) {
   state.payload = payload;
   renderPosture(payload.market_posture);
+  renderMacroRisk(payload.macro_risk);
   renderSectorHeatmap(
     payload.sectors || [],
     payload.theme_groups || [],

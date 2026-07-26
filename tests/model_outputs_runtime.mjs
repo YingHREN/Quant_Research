@@ -85,7 +85,7 @@ const forecast = {
   },
   model_outputs: {
     registry: {
-      version: "model_output_registry_v2",
+      version: "model_output_registry_v3",
       groups: [
         {
           key: "primary",
@@ -170,10 +170,6 @@ const forecast = {
         {label_key: "modelOutput.metric.rejectionSupply", value: 17, format: "score"},
         {label_key: "modelOutput.metric.structureContextSupply", value: 15, format: "score"},
       ],
-    }, {
-      ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
-      lifecycle: "planned",
-      unavailable_reason: "not_implemented",
     }],
     bullish_structure: [{
       ...identity("bullish_structure_reversal_v1", "model.structuralReversal.name", "rule_score"),
@@ -215,9 +211,16 @@ const forecast = {
       ],
     }],
     macro_context: [{
-      ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
-      lifecycle: "planned",
-      unavailable_reason: "not_implemented",
+      ...identity("macro_risk_v1", "model.macroRisk.name", "rule_score"),
+      score: 68,
+      maximum_score: 100,
+      coverage: 0.9,
+      state: "high",
+      conditions: ["two_year_yield_high", "high_yield_spread_stressed"],
+      metrics: [
+        {label_key: "modelOutput.metric.macro.rates", value: 80, format: "score"},
+        {label_key: "modelOutput.metric.macro.credit_liquidity", value: 100, format: "score"},
+      ],
     }],
     decision: {
       ...identity("forecast_decision_policy", "model.decisionPolicy.name", "decision_policy", "available"),
@@ -247,13 +250,12 @@ renderModelOutputs(container, {
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
 assert.equal(container.dataset.state, "available");
-assert.equal(cards.length, 12);
+assert.equal(cards.length, 11);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
 assert.match(zh, /最终方向/);
 assert.match(zh, /下跌/);
 assert.match(zh, /规则分数，不是概率/);
-assert.match(zh, /计划中/);
 assert.match(zh, /90,076/);
 assert.match(zh, /始终上涨基线 \+61/);
 assert.match(zh, /阈值 70/);
@@ -300,7 +302,6 @@ renderModelOutputs(container, {
 const en = textTree(container);
 assert.match(en, /Final direction/);
 assert.match(en, /Rule score, not a probability/);
-assert.match(en, /Planned/);
 assert.match(en, /High-level distribution and bearish top-turn risk/);
 assert.match(en, /Suspected distribution proxy, not verified institutional trading/);
 assert.match(en, /VCP breakout confirmation/);
@@ -348,7 +349,7 @@ renderModelOutputs(container, {
 });
 const legacyCards = descendants(container)
   .filter((node) => node.dataset.modelCard);
-assert.equal(legacyCards.length, 11);
+assert.equal(legacyCards.length, 10);
 assert.match(textTree(container), /最终决策/);
 
 const mismatchedForecast = structuredClone(forecast);

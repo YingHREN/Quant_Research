@@ -57,6 +57,12 @@ def _default_registry():
             "many",
         ),
         ModelOutputGroup(
+            "macro_context",
+            "modelOutput.group.macro",
+            35,
+            "many",
+        ),
+        ModelOutputGroup(
             "decision",
             "modelOutput.group.decision",
             40,
@@ -205,20 +211,16 @@ def _default_registry():
         lambda context: _supply_pressure(context["chart_row"]),
     )
     register(
-        "macro_risk",
-        "downside",
+        "macro_risk_v1",
+        "macro_context",
         70,
-        None,
-        "remembered_state",
-        "planned",
+        "v1",
+        "rule_score",
+        "production",
         "close_confirmed",
         "advisory",
         "model.macroRisk",
-        lambda context: _planned(
-            "macro_risk",
-            "remembered_state",
-            "model.macroRisk",
-        ),
+        lambda context: _macro_risk(context["chart_row"]),
     )
     register(
         "intraday_order_flow",
@@ -547,6 +549,48 @@ def _demand_confirmation(row):
             ),
         ),
     )
+
+
+def _macro_risk(row):
+    score = row.get("macro_risk_score")
+    coverage = row.get("macro_risk_coverage")
+    state = row.get("macro_risk_state")
+    available = score is not None and state not in (None, "unavailable")
+    components = _mapping(row.get("macro_risk_components"))
+    return {
+        **_identity(
+            row.get("macro_risk_model_key") or "macro_risk_v1",
+            row.get("macro_risk_model_version") or "v1",
+            "rule_score",
+            "production",
+            (
+                "active"
+                if available and state in {"watch", "high", "severe"}
+                else ("inactive" if available else "unavailable")
+            ),
+            "close_confirmed",
+            "model.macroRisk",
+        ),
+        "score": json_safe(score),
+        "maximum_score": 100,
+        "coverage": json_safe(coverage),
+        "state": state or "unavailable",
+        "conditions": list(row.get("macro_risk_conditions") or ()),
+        "unavailable_reason": (
+            None
+            if available
+            else row.get("macro_risk_unavailable_reason")
+            or "macro_data_unavailable"
+        ),
+        "metrics": [
+            {
+                "label_key": f"modelOutput.metric.macro.{key}",
+                "value": json_safe(_mapping(value).get("score")),
+                "format": "score",
+            }
+            for key, value in components.items()
+        ],
+    }
 
 
 def _supply_demand_score(

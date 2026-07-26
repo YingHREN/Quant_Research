@@ -153,6 +153,22 @@ def chart_row():
         ],
         "supply_demand_state": "two_way_contest",
         "unavailable_reasons": [],
+        "macro_risk_model_key": "macro_risk_v1",
+        "macro_risk_model_version": "v1",
+        "macro_risk_score": 68.0,
+        "macro_risk_coverage": 0.9,
+        "macro_risk_state": "high",
+        "macro_risk_conditions": [
+            "two_year_yield_high",
+            "high_yield_spread_stressed",
+        ],
+        "macro_risk_components": {
+            "rates": {"score": 80.0, "coverage": 1.0},
+            "inflation_energy": {"score": 40.0, "coverage": 0.8},
+            "credit_liquidity": {"score": 100.0, "coverage": 1.0},
+            "risk_aversion": {"score": 50.0, "coverage": 0.75},
+        },
+        "macro_risk_unavailable_reason": None,
     }
 
 
@@ -251,6 +267,7 @@ class ModelOutputContractTest(unittest.TestCase):
                 "primary",
                 "downside",
                 "bullish_structure",
+                "macro_context",
                 "decision",
             },
         )
@@ -270,9 +287,18 @@ class ModelOutputContractTest(unittest.TestCase):
                 "slow_decline_risk_v1",
                 "high_level_distribution_risk_v1",
                 "supply_pressure_v1",
-                "macro_risk",
                 "intraday_order_flow",
             },
+        )
+        self.assertEqual(
+            [item["key"] for item in outputs["macro_context"]],
+            ["macro_risk_v1"],
+        )
+        self.assertEqual(outputs["macro_context"][0]["score"], 68.0)
+        self.assertEqual(outputs["macro_context"][0]["status"], "active")
+        self.assertEqual(
+            outputs["macro_context"][0]["decision_permission"],
+            "advisory",
         )
         immediate = outputs["downside"][0]
         self.assertEqual(immediate["kind"], "rule_score")
@@ -376,7 +402,12 @@ class ModelOutputContractTest(unittest.TestCase):
         }
         emitted = {
             item["key"]
-            for group in ("primary", "downside", "bullish_structure")
+            for group in (
+                "primary",
+                "downside",
+                "bullish_structure",
+                "macro_context",
+            )
             for item in outputs[group]
         }
         emitted.add(outputs["decision"]["key"])
@@ -384,13 +415,18 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(registered, emitted)
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v2",
+            "model_output_registry_v3",
         )
         self.assertEqual(
             outputs["decision"]["decision_permission"],
             "final_policy",
         )
-        for group in ("primary", "downside", "bullish_structure"):
+        for group in (
+            "primary",
+            "downside",
+            "bullish_structure",
+            "macro_context",
+        ):
             for item in outputs[group]:
                 self.assertEqual(item["group"], group)
                 self.assertIsInstance(item["order"], int)
@@ -408,14 +444,18 @@ class ModelOutputContractTest(unittest.TestCase):
         outputs = build_model_outputs(forecast_payload(), chart_row(), {})
         planned = [
             item
-            for group in ("downside", "bullish_structure")
+            for group in (
+                "downside",
+                "bullish_structure",
+                "macro_context",
+            )
             for item in outputs[group]
             if item["lifecycle"] == "planned"
         ]
 
         self.assertEqual(
             {item["key"] for item in planned},
-            {"macro_risk", "intraday_order_flow"},
+            {"intraday_order_flow"},
         )
         for item in planned:
             self.assertEqual(item["status"], "unavailable")

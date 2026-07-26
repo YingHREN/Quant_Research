@@ -26,6 +26,7 @@ class MarketOverviewService:
         repository,
         revision_getter=lambda: 0,
         max_cache_size=16,
+        macro_risk_service=None,
     ):
         if not callable(revision_getter):
             raise TypeError("revision_getter must be callable")
@@ -39,6 +40,7 @@ class MarketOverviewService:
         self._repository = repository
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
+        self._macro_risk_service = macro_risk_service
         self._cache = {}
         self._lock = RLock()
 
@@ -65,6 +67,7 @@ class MarketOverviewService:
             horizon,
             group.key,
             "market_evidence_v1",
+            _macro_cache_token(self._macro_risk_service),
         )
         with self._lock:
             cached = self._cache.get(key)
@@ -92,6 +95,10 @@ class MarketOverviewService:
             payload["calibration"] = _calibration_payload(
                 payload,
                 outcome_frame,
+                normalized_asof,
+            )
+            payload["macro_risk"] = _macro_payload(
+                self._macro_risk_service,
                 normalized_asof,
             )
 
@@ -129,6 +136,32 @@ def _empty_payload(horizon, sector):
         "constituents": [],
         "changed_events": [],
         "calibration": {},
+        "macro_risk": _macro_payload(None, None),
+    }
+
+
+def _macro_cache_token(service):
+    builder = getattr(service, "cache_token", None)
+    return builder() if callable(builder) else None
+
+
+def _macro_payload(service, asof):
+    builder = getattr(service, "build", None)
+    if callable(builder):
+        return builder(asof)
+    return {
+        "model_key": "macro_risk_v1",
+        "model_version": "v1",
+        "score": None,
+        "maximum_score": 100,
+        "coverage": 0.0,
+        "state": "unavailable",
+        "conditions": [],
+        "components": {},
+        "evidence": [],
+        "unavailable_reason": "macro_data_unavailable",
+        "decision_permission": "advisory",
+        "point_in_time": True,
     }
 
 

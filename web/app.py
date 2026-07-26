@@ -65,6 +65,7 @@ from web.services.market_data import (
     UnknownTicker,
 )
 from web.services.market_overview import MarketOverviewService
+from web.services.macro_risk import MacroRiskService
 from web.services.universe import UniverseSnapshotService
 from web.services.research_classification import ResearchClassificationService
 from web.services.research_relative_strength import (
@@ -101,6 +102,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         ),
         ENTRY_SIGNAL_ARTIFACT_CACHE_ENTRIES=64,
         RESEARCH_DATABASE=os.fspath(PROJECT_ROOT / "data" / "research_prices.db"),
+        MACRO_DATABASE=os.fspath(PROJECT_ROOT / "data" / "macro_data.db"),
     )
     if config:
         flask_app.config.update(config)
@@ -165,6 +167,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             on_cache_warmup=cache_warmer,
             reference_tickers=REFERENCE_TICKERS,
         )
+    macro_risk_service = flask_app.config.get("MACRO_RISK_SERVICE")
+    if macro_risk_service is None:
+        macro_risk_service = MacroRiskService(
+            flask_app.config["MACRO_DATABASE"]
+        )
     market_overview_service = flask_app.config.get(
         "MARKET_OVERVIEW_SERVICE"
     )
@@ -176,6 +183,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 "database_revision",
                 0,
             ),
+            macro_risk_service=macro_risk_service,
         )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
@@ -247,6 +255,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions[
         "dashboard_market_overview_service"
     ] = market_overview_service
+    flask_app.extensions["dashboard_macro_risk_service"] = macro_risk_service
 
     @flask_app.get("/")
     def index():
@@ -358,7 +367,6 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             normalized_ticker,
             peer_histories,
         )
-
         if selected_summary is not None and selected_summary.inactive:
             warnings.append("inactive_ticker")
         elif selected_summary is not None and selected_summary.lag_days > 0:
@@ -403,6 +411,10 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
         _attach_forecast_target_dates(
             forecast_payload, snapshot.histories[normalized_ticker].index
+        )
+        macro_risk_service.attach_chart_rows(
+            chart,
+            _forecast_observation_dates(forecast_payload),
         )
         top_risk = _top_risk_payload(
             forecast_service,
@@ -506,6 +518,10 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             chart,
             normalized_ticker,
             snapshot.histories,
+        )
+        macro_risk_service.attach_chart_rows(
+            chart,
+            _forecast_observation_dates(payload),
         )
         _attach_model_outputs(payload, chart)
         return _json_response(payload)
@@ -623,6 +639,16 @@ def _attach_forecast_target_dates(payload, known_sessions):
                 continue
             forecast["projection_dates"] = projection_dates
             forecast["target_date"] = projection_dates[-1] if projection_dates else raw_date
+
+
+def _forecast_observation_dates(payload):
+    return tuple(
+        str(raw_date)
+        for raw_date, horizons in (
+            payload.get("forecasts", {}).get("by_date", {})
+        ).items()
+        if isinstance(horizons, dict)
+    )
 
 
 def _attach_model_outputs(payload, chart, structures=None):
