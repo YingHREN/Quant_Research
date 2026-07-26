@@ -8,10 +8,9 @@ from pathlib import Path
 import sys
 from time import perf_counter
 
-import pandas as pd
-
 from marketdata.paths import DEFAULT_MARKET_DATA_DATABASE
 from web.services.forecast_artifacts import ForecastArtifactStore
+from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.forecasts import ForecastService
 from web.services.market_data import MarketDataRepository
 
@@ -47,24 +46,11 @@ def main(argv=None):
         if asof is None:
             raise RuntimeError("market data has no latest date")
         store = ForecastArtifactStore(args.cache)
-        summaries = repository.list_summaries()
-        cohort_dates = sorted(
-            {
-                summary.latest_date
-                for summary in summaries
-                if not summary.inactive
-            },
-            reverse=True,
-        )[:2]
-        if not cohort_dates:
-            cohort_dates = [asof]
-        cohorts = []
-        for cohort_date in cohort_dates:
-            histories = repository.load_universe_histories(
-                pd.Timestamp(cohort_date)
-            )
-            result = ForecastService(artifact_store=store).prewarm(histories)
-            cohorts.append({"asof": cohort_date, **result})
+        service = ForecastService(artifact_store=store)
+        warmup = ForecastCacheWarmer(repository, service)()
+        cohorts = warmup["cohorts"]
+        if not cohorts:
+            raise RuntimeError("market data has no active cohort")
         payload = {
             "status": "ready",
             "asof": asof,
@@ -72,7 +58,7 @@ def main(argv=None):
             "elapsed_seconds": round(perf_counter() - started, 3),
             "artifact_count": store.entry_count(),
             "cohorts": cohorts,
-            **cohorts[0],
+            **cohorts[-1],
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0

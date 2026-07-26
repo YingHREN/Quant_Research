@@ -45,6 +45,7 @@ from web.services.forecasts import (
     unavailable_forecast_bundle,
 )
 from web.services.forecast_artifacts import ForecastArtifactStore
+from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.market_data import (
     InvalidTicker,
     MarketDataRepository,
@@ -105,10 +106,16 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             artifact_store=artifact_store,
         )
     if update_manager is None:
+        cache_warmer = (
+            ForecastCacheWarmer(repository, forecast_service)
+            if callable(getattr(forecast_service, "prewarm", None))
+            else None
+        )
         update_manager = UpdateJobManager(
             repository,
             PriceProvider(),
             on_success=getattr(forecast_service, "invalidate", None),
+            on_cache_warmup=cache_warmer,
             reference_tickers=REFERENCE_TICKERS,
         )
     market_overview_service = flask_app.config.get(
