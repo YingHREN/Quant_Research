@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -32,7 +33,22 @@ class BuildForecastCacheTest(unittest.TestCase):
 
             def load_universe_histories(self, asof):
                 self.calls.append(("load_universe_histories", asof))
-                return {"AAA": history}
+                return {f"AAA-{asof.date().isoformat()}": history}
+
+            def list_summaries(self):
+                self.calls.append(("list_summaries",))
+                return [
+                    SimpleNamespace(
+                        ticker="AAA",
+                        latest_date="2026-07-24",
+                        inactive=False,
+                    ),
+                    SimpleNamespace(
+                        ticker="BBB",
+                        latest_date="2026-07-23",
+                        inactive=False,
+                    ),
+                ]
 
         service = mock.Mock()
         service.prewarm.return_value = {
@@ -63,17 +79,31 @@ class BuildForecastCacheTest(unittest.TestCase):
             repository.calls,
             [
                 ("freshness",),
+                ("list_summaries",),
                 (
                     "load_universe_histories",
                     pd.Timestamp("2026-07-24"),
                 ),
+                (
+                    "load_universe_histories",
+                    pd.Timestamp("2026-07-23"),
+                ),
             ],
         )
-        service.prewarm.assert_called_once_with({"AAA": history})
+        self.assertEqual(service.prewarm.call_count, 2)
+        self.assertEqual(
+            service.prewarm.call_args_list,
+            [
+                mock.call({"AAA-2026-07-24": history}),
+                mock.call({"AAA-2026-07-23": history}),
+            ],
+        )
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["asof"], "2026-07-24")
         self.assertEqual(payload["row_count"], 123)
         self.assertEqual(payload["cache_path"], str(cache))
+        self.assertEqual(payload["cohorts"][0]["asof"], "2026-07-24")
+        self.assertEqual(payload["cohorts"][1]["asof"], "2026-07-23")
         self.assertGreaterEqual(payload["elapsed_seconds"], 0)
 
     def test_main_returns_nonzero_with_safe_error(self):

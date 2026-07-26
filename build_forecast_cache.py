@@ -46,16 +46,33 @@ def main(argv=None):
         asof = freshness.get("latest_date")
         if asof is None:
             raise RuntimeError("market data has no latest date")
-        histories = repository.load_universe_histories(pd.Timestamp(asof))
         store = ForecastArtifactStore(args.cache)
-        service = ForecastService(artifact_store=store)
-        result = service.prewarm(histories)
+        summaries = repository.list_summaries()
+        cohort_dates = sorted(
+            {
+                summary.latest_date
+                for summary in summaries
+                if not summary.inactive
+            },
+            reverse=True,
+        )[:2]
+        if not cohort_dates:
+            cohort_dates = [asof]
+        cohorts = []
+        for cohort_date in cohort_dates:
+            histories = repository.load_universe_histories(
+                pd.Timestamp(cohort_date)
+            )
+            result = ForecastService(artifact_store=store).prewarm(histories)
+            cohorts.append({"asof": cohort_date, **result})
         payload = {
             "status": "ready",
             "asof": asof,
             "cache_path": str(Path(args.cache)),
             "elapsed_seconds": round(perf_counter() - started, 3),
-            **result,
+            "artifact_count": store.entry_count(),
+            "cohorts": cohorts,
+            **cohorts[0],
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
