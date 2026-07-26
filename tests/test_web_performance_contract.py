@@ -1,11 +1,15 @@
 """Deterministic operation-count contracts for dashboard request performance."""
 
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
 from web.app import create_app
 from web.factors.builtin import build_chart_rows
 from web.factors.registry import FactorRegistry
+from web.services.forecast_artifacts import ForecastArtifactStore
+from web.services.forecasts import ForecastService
 
 from tests.test_web_api import (
     FakeManager,
@@ -39,6 +43,31 @@ class WebPerformanceContractTest(unittest.TestCase):
 
         self.assertEqual(small_count, 1)
         self.assertEqual(large_count, 1)
+
+    def test_new_service_uses_persistent_artifact_without_rebuilding(self):
+        histories = {
+            "AAA": price_history(periods=80),
+            "BBB": price_history(periods=80, offset=10),
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            ForecastService(artifact_store=store).prewarm(histories)
+
+            with patch(
+                "web.services.forecasts.build_feature_frame",
+                side_effect=AssertionError("persistent hit rebuilt features"),
+            ), patch(
+                "web.services.forecasts.build_forecast_risk_context",
+                side_effect=AssertionError("persistent hit rebuilt risk"),
+            ):
+                result = ForecastService(artifact_store=store).prewarm(
+                    histories
+                )
+
+            self.assertGreater(result["row_count"], 0)
+            self.assertEqual(store.entry_count(), 1)
 
     @staticmethod
     def _chart_build_count(peer_count):

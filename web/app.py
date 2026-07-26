@@ -44,6 +44,7 @@ from web.services.forecasts import (
     ForecastService,
     unavailable_forecast_bundle,
 )
+from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.market_data import (
     InvalidTicker,
     MarketDataRepository,
@@ -66,9 +67,15 @@ from marketdata.storage import IntradayStore
 DEFAULT_DATABASE = DEFAULT_MARKET_DATA_DATABASE
 def create_app(config=None, repository=None, update_manager=None) -> Flask:
     """Build the dashboard app with optional repository and job-manager fakes."""
+    supplied_config = {} if config is None else dict(config)
     flask_app = Flask(__name__)
     flask_app.config.from_mapping(
         MARKET_DATA_DATABASE=os.fspath(DEFAULT_DATABASE),
+        FORECAST_ARTIFACT_CACHE_ENABLED=True,
+        FORECAST_ARTIFACT_CACHE_PATH=os.fspath(
+            PROJECT_ROOT / "data" / "analysis_cache.db"
+        ),
+        FORECAST_ARTIFACT_CACHE_ENTRIES=2,
     )
     if config:
         flask_app.config.update(config)
@@ -77,8 +84,25 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         repository = MarketDataRepository(flask_app.config["MARKET_DATA_DATABASE"])
     forecast_service = flask_app.config.get("FORECAST_SERVICE")
     if forecast_service is None:
+        persistent_cache_enabled = bool(
+            flask_app.config["FORECAST_ARTIFACT_CACHE_ENABLED"]
+        ) and (
+            not flask_app.config.get("TESTING")
+            or "FORECAST_ARTIFACT_CACHE_PATH" in supplied_config
+        )
+        artifact_store = (
+            ForecastArtifactStore(
+                flask_app.config["FORECAST_ARTIFACT_CACHE_PATH"],
+                max_entries=flask_app.config[
+                    "FORECAST_ARTIFACT_CACHE_ENTRIES"
+                ],
+            )
+            if persistent_cache_enabled
+            else None
+        )
         forecast_service = ForecastService(
-            max_cache_size=flask_app.config.get("FORECAST_CACHE_SIZE", 16)
+            max_cache_size=flask_app.config.get("FORECAST_CACHE_SIZE", 16),
+            artifact_store=artifact_store,
         )
     if update_manager is None:
         update_manager = UpdateJobManager(
