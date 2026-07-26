@@ -120,6 +120,29 @@ class FakeClassificationService:
         }
 
 
+class FakeRelativeStrengthService:
+    def __init__(self):
+        self.calls = []
+
+    def build(self, tickers):
+        self.calls.append(tuple(tickers))
+        return {
+            "status": "available",
+            "asof": "2026-07-21",
+            "sample_count": 1000,
+            "model_version": "cross_sectional_rs_v1",
+            "by_ticker": {
+                ticker: {
+                    "rs_rating": 91 if ticker == "AAA" else 60,
+                    "rs_asof": "2026-07-21",
+                    "rs_sample_count": 1000,
+                    "rs_model_version": "cross_sectional_rs_v1",
+                }
+                for ticker in tickers
+            },
+        }
+
+
 def _registry():
     return FactorRegistry(
         [
@@ -201,6 +224,49 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         self.assertEqual(
             set(classifications.calls[0]),
             set(repository.histories),
+        )
+
+    def test_build_merges_precomputed_relative_strength(self):
+        repository = FakeRepository()
+        relative_strength = FakeRelativeStrengthService()
+        service = UniverseSnapshotService(
+            repository,
+            _registry(),
+            relative_strength_service=relative_strength,
+        )
+
+        payload = service.build()
+
+        self.assertEqual(
+            payload["relative_strength_summary"],
+            {
+                "status": "available",
+                "asof": "2026-07-21",
+                "sample_count": 1000,
+                "model_version": "cross_sectional_rs_v1",
+            },
+        )
+        by_ticker = {row["ticker"]: row for row in payload["tickers"]}
+        self.assertEqual(by_ticker["AAA"]["rs_rating"], 91)
+        self.assertEqual(by_ticker["AAA"]["rs_asof"], "2026-07-21")
+        self.assertEqual(
+            by_ticker["AAA"]["rs_model_version"],
+            "cross_sectional_rs_v1",
+        )
+        self.assertEqual(len(relative_strength.calls), 1)
+
+    def test_missing_relative_strength_is_explicit(self):
+        payload = UniverseSnapshotService(
+            FakeRepository(),
+            _registry(),
+        ).build()
+
+        self.assertEqual(
+            payload["relative_strength_summary"]["status"],
+            "unavailable",
+        )
+        self.assertTrue(
+            all(row["rs_rating"] is None for row in payload["tickers"])
         )
 
 

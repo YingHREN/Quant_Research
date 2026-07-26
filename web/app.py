@@ -61,6 +61,9 @@ from web.services.market_data import (
 from web.services.market_overview import MarketOverviewService
 from web.services.universe import UniverseSnapshotService
 from web.services.research_classification import ResearchClassificationService
+from web.services.research_relative_strength import (
+    ResearchRelativeStrengthService,
+)
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
@@ -184,10 +187,18 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             classification_service = ResearchClassificationService(
                 flask_app.config["RESEARCH_DATABASE"]
             )
+        relative_strength_service = flask_app.config.get(
+            "RESEARCH_RELATIVE_STRENGTH_SERVICE"
+        )
+        if relative_strength_service is None:
+            relative_strength_service = ResearchRelativeStrengthService(
+                flask_app.config["RESEARCH_DATABASE"]
+            )
         universe_service = UniverseSnapshotService(
             repository,
             factor_registry,
             classification_service=classification_service,
+            relative_strength_service=relative_strength_service,
             revision_getter=lambda: getattr(
                 forecast_service,
                 "database_revision",
@@ -217,6 +228,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions[
         "dashboard_research_classification_service"
     ] = getattr(universe_service, "_classification_service", None)
+    flask_app.extensions[
+        "dashboard_research_relative_strength_service"
+    ] = getattr(universe_service, "_relative_strength_service", None)
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions[
@@ -481,6 +495,23 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     def update_status():
         return _json_response(_snapshot_dict(update_manager.snapshot()))
 
+    @flask_app.get("/api/cache/status")
+    def cache_status():
+        status_builder = getattr(forecast_service, "cache_status", None)
+        if not callable(status_builder):
+            return _json_response(_unavailable_cache_status())
+        try:
+            payload = status_builder()
+        except Exception as error:
+            flask_app.logger.warning(
+                "Forecast cache status is unavailable",
+                exc_info=error,
+            )
+            payload = _unavailable_cache_status()
+        if not isinstance(payload, dict):
+            payload = _unavailable_cache_status()
+        return _json_response(payload)
+
     @flask_app.get("/api/market-data/status")
     def market_data_status():
         return _json_response(intraday_status_service.snapshot())
@@ -525,6 +556,26 @@ def _json_response(payload, status=200):
 
 def _safe_error(code, message, status):
     return _json_response(ErrorPayload(code, message).to_dict(), status=status)
+
+
+def _unavailable_cache_status():
+    return {
+        "state": "unavailable",
+        "entry_count": 0,
+        "latest_created_at": None,
+        "market_asof": None,
+        "model_key": None,
+        "model_version": None,
+        "feature_version": None,
+        "risk_context_version": None,
+        "format_version": None,
+        "size_bytes": 0,
+        "last_access": "unavailable",
+        "database_revision": 0,
+        "memory_ready": False,
+        "build_started_at": None,
+        "build_finished_at": None,
+    }
 
 
 def _attach_forecast_target_dates(payload, known_sessions):

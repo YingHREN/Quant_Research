@@ -97,6 +97,59 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("top_risk", actual["all"])
         self.assertEqual(actual["persisted"], ["pocket_pivot"])
 
+    def test_chart_marker_layout_merges_same_lane_without_touching_forecast(self):
+        module_uri = (STATIC / "js/marker_layout.js").as_uri()
+        script = f"""
+            import {{ layoutChartMarkers }} from {json.dumps(module_uri)};
+            const result = layoutChartMarkers([
+              {{time: "2026-07-02", position: "belowBar", text: "A",
+                color: "blue", shape: "circle", priority: 10}},
+              {{time: "2026-07-02", position: "belowBar", text: "B",
+                color: "green", shape: "arrowUp", priority: 20}},
+              {{time: "2026-07-02", position: "belowBar", text: "B",
+                color: "green", shape: "arrowUp", priority: 20}},
+              {{time: "2026-07-02", position: "aboveBar", text: "C",
+                color: "yellow", shape: "square", priority: 5}},
+              {{time: "2026-07-02", position: "belowBar", text: "Forecast",
+                color: "cyan", shape: "arrowUp", priority: 100,
+                layoutGroup: "forecast"}},
+            ]);
+            console.log(JSON.stringify(result));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                {
+                    "time": "2026-07-02",
+                    "position": "aboveBar",
+                    "text": "C",
+                    "color": "yellow",
+                    "shape": "square",
+                },
+                {
+                    "time": "2026-07-02",
+                    "position": "belowBar",
+                    "text": "A · B",
+                    "color": "green",
+                    "shape": "arrowUp",
+                },
+                {
+                    "time": "2026-07-02",
+                    "position": "belowBar",
+                    "text": "Forecast",
+                    "color": "cyan",
+                    "shape": "arrowUp",
+                },
+            ],
+        )
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
@@ -153,6 +206,53 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('id="stock-retry"', html)
         self.assertIn('data-i18n="recovery.universe"', html)
         self.assertIn('data-i18n="recovery.stock"', html)
+
+    def test_page_has_collapsible_forecast_cache_status(self):
+        html = HTML.read_text()
+        self.assertIn('id="cache-status-panel"', html)
+        self.assertIn('id="cache-status-summary"', html)
+        self.assertIn('id="cache-status-details"', html)
+        self.assertIn('id="cache-status-refresh"', html)
+
+    def test_page_has_cross_sectional_rs_controls_and_badge(self):
+        html = HTML.read_text()
+        self.assertIn('value="rs_rating"', html)
+        self.assertIn('data-filter="rs80"', html)
+        self.assertIn('data-filter="rs90"', html)
+        self.assertIn('id="security-rs-state"', html)
+        i18n = (STATIC / "js/i18n.js").read_text()
+        self.assertGreaterEqual(i18n.count('"universe.rs.label"'), 2)
+        self.assertGreaterEqual(i18n.count('"universe.rs.disclaimer"'), 2)
+
+    def test_cache_status_formatter_is_bilingual_and_explicit(self):
+        module_uri = (STATIC / "js/cache_status.js").as_uri()
+        script = f"""
+            import {{ describeCacheStatus }} from {json.dumps(module_uri)};
+            const ready = {{
+              state: "ready", last_access: "disk_hit", entry_count: 2,
+              market_asof: "2026-07-24", size_bytes: 1536,
+              memory_ready: true
+            }};
+            console.log(JSON.stringify({{
+              zh: describeCacheStatus(ready, "zh-CN"),
+              en: describeCacheStatus(ready, "en"),
+              rebuilding: describeCacheStatus({{state: "rebuilding"}}, "zh-CN"),
+              unavailable: describeCacheStatus({{state: "unavailable"}}, "en")
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        actual = json.loads(result.stdout)
+        self.assertIn("磁盘命中", actual["zh"])
+        self.assertIn("2026-07-24", actual["zh"])
+        self.assertIn("Disk hit", actual["en"])
+        self.assertIn("正在重建", actual["rebuilding"])
+        self.assertIn("unavailable", actual["unavailable"])
 
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
@@ -253,19 +353,19 @@ class WebAssetTest(unittest.TestCase):
             const rows = [
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, stale: false, strict_vcp: true, tight_platform: false,
-                near_pivot: true, momentum_percentile: 92, volatility: 18,
+                near_pivot: true, momentum_percentile: 92, volatility: 18, rs_rating: 95,
                 sector_classification: {{state: 'agree',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'technology'}}}}}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, stale: true, strict_vcp: false, tight_platform: true,
-                near_pivot: false, momentum_percentile: 71, volatility: 24,
+                near_pivot: false, momentum_percentile: 71, volatility: 24, rs_rating: 84,
                 sector_classification: {{state: 'conflict',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'financials'}}}}}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
-                near_pivot: true, momentum_percentile: null, volatility: null,
+                near_pivot: true, momentum_percentile: null, volatility: null, rs_rating: null,
                 sector_classification: {{state: 'unclassified',
                   sec: null, market_behavior: null}}}}
             ];
@@ -277,6 +377,12 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             const sorted = sortTickers(rows, 'momentum_percentile', 'desc')
               .map(row => row.ticker);
+            const rsSorted = sortTickers(rows, 'rs_rating', 'desc')
+              .map(row => row.ticker);
+            const rs80 = filterTickers(rows, '', {{rs80: true}})
+              .map(row => row.ticker);
+            const rs90 = filterTickers(rows, '', {{rs80: true, rs90: true}})
+              .map(row => row.ticker);
             const secTechnology = filterTickers(rows, '', {{
               sectorTaxonomy: 'sec', sectorKey: 'technology'
             }}).map(row => row.ticker);
@@ -287,7 +393,7 @@ class WebAssetTest(unittest.TestCase):
               sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
             }}).map(row => row.ticker);
             console.log(JSON.stringify({{
-              searched, filtered, inactive, sorted, secTechnology,
+              searched, filtered, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
               behaviorFinancials, behaviorUnclassified,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
@@ -307,6 +413,9 @@ class WebAssetTest(unittest.TestCase):
                 "filtered": ["MSFT"],
                 "inactive": ["AAPL", "OLD"],
                 "sorted": ["MSFT", "AAPL", "OLD"],
+                "rsSorted": ["MSFT", "AAPL", "OLD"],
+                "rs80": ["MSFT", "AAPL"],
+                "rs90": ["MSFT"],
                 "secTechnology": ["MSFT", "AAPL"],
                 "behaviorFinancials": ["AAPL"],
                 "behaviorUnclassified": ["OLD"],
@@ -2277,11 +2386,14 @@ class WebAssetTest(unittest.TestCase):
         )
         entry_markers = [
             marker for marker in actual["markers"]
-            if marker["text"] in {
-                "Strict VCP setup detected",
-                "VCP breakout confirmed",
-                "Pocket Pivot",
-            }
+            if any(
+                label in marker["text"]
+                for label in (
+                    "Strict VCP setup detected",
+                    "VCP breakout confirmed",
+                    "Pocket Pivot",
+                )
+            )
         ]
         self.assertEqual(
             entry_markers,
@@ -2298,14 +2410,7 @@ class WebAssetTest(unittest.TestCase):
                     "position": "belowBar",
                     "color": "#35c6a5",
                     "shape": "arrowUp",
-                    "text": "VCP breakout confirmed",
-                },
-                {
-                    "time": "2026-07-23",
-                    "position": "belowBar",
-                    "color": "#5cc8ff",
-                    "shape": "circle",
-                    "text": "Pocket Pivot",
+                    "text": "VCP breakout confirmed · Pocket Pivot",
                 },
             ],
         )
@@ -2329,14 +2434,11 @@ class WebAssetTest(unittest.TestCase):
             "发现严格 VCP 准备形态",
             [marker["text"] for marker in actual["zhMarkers"]],
         )
-        self.assertIn(
-            "VCP 向上突破已确认",
-            [marker["text"] for marker in actual["zhMarkers"]],
+        zh_marker_text = " | ".join(
+            marker["text"] for marker in actual["zhMarkers"]
         )
-        self.assertIn(
-            "Pocket Pivot 需求确认",
-            [marker["text"] for marker in actual["zhMarkers"]],
-        )
+        self.assertIn("VCP 向上突破已确认", zh_marker_text)
+        self.assertIn("Pocket Pivot 需求确认", zh_marker_text)
         self.assertEqual(
             next(line for line in actual["priceLineSeries"] if line[0] == "Descending resistance"),
             [
@@ -2532,15 +2634,14 @@ class WebAssetTest(unittest.TestCase):
             const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
             assert.deepEqual(markerTexts(), [
               '发现严格 VCP 准备形态',
-              'VCP 向上突破已确认',
-              'Pocket Pivot 需求确认',
+              'VCP 向上突破已确认 · Pocket Pivot 需求确认',
             ]);
             const rangeCallCount = visibleRanges.length;
             assert.deepEqual(
               controller.setMarkerLayers(['pocket_pivot', 'higher_low']),
               ['pocket_pivot', 'higher_low'],
             );
-            assert.deepEqual(markerTexts(), ['Pocket Pivot 需求确认', '更高低点']);
+            assert.deepEqual(markerTexts(), ['Pocket Pivot 需求确认 · 更高低点']);
             assert.equal(visibleRanges.length, rangeCallCount);
             controller.destroy();
         """

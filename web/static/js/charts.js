@@ -10,6 +10,7 @@ import {
 } from "./forecasts.js";
 import { renderModelOutputs } from "./model_outputs.js";
 import { normalizeMarkerLayers } from "./marker_layers.js";
+import { layoutChartMarkers } from "./marker_layout.js";
 import { factorValuesByDate, trendEvidence } from "./trend_evidence.js";
 
 const RANGE_BARS = Object.freeze({
@@ -85,6 +86,23 @@ const ENTRY_MARKER_LAYERS = Object.freeze({
   top_risk_high: "top_risk",
   top_risk_confirmed: "top_risk",
   top_risk_recovery: "top_risk",
+});
+
+const MARKER_PRIORITIES = Object.freeze({
+  top_risk_confirmed: 100,
+  top_risk_high: 95,
+  top_risk_watch: 90,
+  vcp_breakout_confirmed: 80,
+  pocket_pivot: 75,
+  strict_vcp_start: 70,
+  strict_vcp: 65,
+  tight_platform: 60,
+  top_risk_recovery: 55,
+  structure_reversal: 50,
+  early_reversal: 45,
+  prior_high_breakout: 40,
+  trendline_breakout: 35,
+  higher_low: 30,
 });
 
 function finite(value) {
@@ -534,8 +552,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       ...shapeMarkerData,
       ...(forecastMarkerData ? [forecastMarkerData] : []),
     ];
-    markers.sort((left, right) => String(left.time).localeCompare(String(right.time)));
-    seriesMarkers.setMarkers(markers);
+    seriesMarkers.setMarkers(layoutChartMarkers(markers));
   }
 
   function paintDetail(row, locked) {
@@ -576,7 +593,10 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       ) {
         forecastRequestStates.set(date, "loading");
       }
-      forecastMarkerData = forecastMarker(forecast, date, locale);
+      const marker = forecastMarker(forecast, date, locale);
+      forecastMarkerData = marker
+        ? { ...marker, layoutGroup: "forecast", priority: 1000 }
+        : null;
       refreshMarkers();
       renderDetail(detailEl, row, locked, locale, {
         forecast,
@@ -827,6 +847,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
         return {
           time: annotation.time,
           ...style,
+          priority: MARKER_PRIORITIES[annotation.type] || 0,
           text: localized === key
             ? annotation.label || t("chart.shape.default", {}, locale)
             : localized,
@@ -837,30 +858,35 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       if (row.prior_high_breakout && markerLayers.has("prior_high_breakout")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.up, shape: "arrowUp",
+          priority: MARKER_PRIORITIES.prior_high_breakout,
           text: t("chart.reversal.priorHighBreakout", {}, locale),
         });
       }
       if (row.trendline_breakout && markerLayers.has("trendline_breakout")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.trendline, shape: "arrowUp",
+          priority: MARKER_PRIORITIES.trendline_breakout,
           text: t("chart.reversal.trendlineBreakout", {}, locale),
         });
       }
       if (row.higher_low_confirmed && markerLayers.has("higher_low")) {
         markers.push({
           time: row.time, position: "belowBar", color: COLORS.sma50, shape: "circle",
+          priority: MARKER_PRIORITIES.higher_low,
           text: t("chart.reversal.higherLow", {}, locale),
         });
       }
       if (row.early_reversal_watch && markerLayers.has("early_reversal")) {
         markers.push({
           time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "arrowUp",
+          priority: MARKER_PRIORITIES.early_reversal,
           text: t("chart.earlyReversal.marker", { score: row.early_reversal_score }, locale),
         });
       }
       if (row.reversal_candidate && markerLayers.has("structure_reversal")) {
         markers.push({
           time: row.time, position: "aboveBar", color: COLORS.reversal, shape: "circle",
+          priority: MARKER_PRIORITIES.structure_reversal,
           text: t("chart.reversal.candidate", { count: row.reversal_signal_count }, locale),
         });
       }

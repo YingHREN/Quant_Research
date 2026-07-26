@@ -33,6 +33,11 @@ export function filterTickers(rows, query = "", filters = {}) {
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
     if (filters.inactive && !(row.inactive || row.stale)) return false;
+    const rsThreshold = filters.rs90 ? 90 : filters.rs80 ? 80 : null;
+    if (
+      rsThreshold !== null
+      && (!Number.isFinite(row.rs_rating) || row.rs_rating < rsThreshold)
+    ) return false;
     const sectorKey = String(filters.sectorKey || "");
     if (sectorKey && sectorKey !== "all") {
       const classification = classificationFor(
@@ -160,6 +165,13 @@ export function renderUniverse(container, rows, options = {}) {
       percentile == null
         ? t("universe.momentumMissing", {}, locale)
         : t("universe.momentum", { percentile }, locale),
+    );
+    appendText(
+      metadata,
+      "ticker-rs",
+      Number.isFinite(row.rs_rating)
+        ? t("universe.rs.value", { rating: row.rs_rating }, locale)
+        : t("universe.rs.unavailable", {}, locale),
     );
     appendText(metadata, "ticker-date", row.latest_date || t("universe.noDate", {}, locale));
 

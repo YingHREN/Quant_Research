@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
+from datetime import datetime, timezone
 from hashlib import blake2b
 import json
 import threading
@@ -119,12 +120,48 @@ class ForecastService:
         self._artifact_risk_context = None
         self._artifact_coverage = None
         self._artifact_fingerprints = None
+        self._last_cache_access = "miss"
+        self._build_started_at = None
+        self._build_finished_at = None
         self._lock = threading.RLock()
 
     @property
     def database_revision(self):
         with self._lock:
             return self._database_revision
+
+    def cache_status(self):
+        """Return safe operational metadata for the dashboard."""
+        with self._lock:
+            base = _unavailable_cache_status()
+            if self._artifact_store is not None:
+                try:
+                    store_status = self._artifact_store.status()
+                except Exception:
+                    store_status = None
+                if isinstance(store_status, dict):
+                    base.update(
+                        {
+                            key: store_status.get(key)
+                            for key in base
+                            if key in store_status
+                        }
+                    )
+            memory_ready = self._artifact_revision == self._database_revision
+            if self._build_started_at and self._build_finished_at is None:
+                base["state"] = "rebuilding"
+            elif memory_ready and base["state"] in {"empty", "unavailable"}:
+                base["state"] = "ready"
+            base.update(
+                {
+                    "last_access": self._last_cache_access,
+                    "database_revision": self._database_revision,
+                    "memory_ready": memory_ready,
+                    "build_started_at": self._build_started_at,
+                    "build_finished_at": self._build_finished_at,
+                }
+            )
+            return base
 
     def build(self, ticker, chart_dates, histories, *, expected_revision=None):
         """Return a fresh JSON-ready bundle without mutating input histories."""
@@ -241,6 +278,7 @@ class ForecastService:
             self._artifact_risk_context = None
             self._artifact_coverage = None
             self._artifact_fingerprints = None
+            self._last_cache_access = "miss"
 
     def _compute(self, ticker, dates, provider, evaluations, risk_context):
         forecast_dates = (
@@ -306,6 +344,7 @@ class ForecastService:
             and fingerprints != self._artifact_fingerprints
         )
         if same_revision and not richer_snapshot and not corrected_snapshot:
+            self._last_cache_access = "memory_hit"
             return (
                 self._artifact_frame,
                 self._artifact_provider,
@@ -328,27 +367,35 @@ class ForecastService:
                 coverage,
                 fingerprints,
             )
+            self._last_cache_access = "disk_hit"
             return (
                 artifact.frame,
                 provider,
                 artifact.evaluations,
                 artifact.risk_context,
             )
-        frame = attach_forward_targets(build_feature_frame(histories))
-        provider = self._provider_factory(frame)
-        risk_context = build_forecast_risk_context(histories)
-        _validate_provider_identity(provider, self.model_key, self.model_version)
-        if self._evaluator is None:
-            evaluations = _unavailable_evaluations(
-                self.model_key,
-                self.model_version,
-                EvaluationUnavailableReason.NOT_PRECOMPUTED,
-            )
-        else:
-            evaluations = {
-                str(horizon): self._evaluator(frame, horizon, provider).to_dict()
-                for horizon in SUPPORTED_HORIZONS
-            }
+        self._build_started_at = _utc_now()
+        self._build_finished_at = None
+        try:
+            frame = attach_forward_targets(build_feature_frame(histories))
+            provider = self._provider_factory(frame)
+            risk_context = build_forecast_risk_context(histories)
+            _validate_provider_identity(provider, self.model_key, self.model_version)
+            if self._evaluator is None:
+                evaluations = _unavailable_evaluations(
+                    self.model_key,
+                    self.model_version,
+                    EvaluationUnavailableReason.NOT_PRECOMPUTED,
+                )
+            else:
+                evaluations = {
+                    str(horizon): self._evaluator(
+                        frame, horizon, provider
+                    ).to_dict()
+                    for horizon in SUPPORTED_HORIZONS
+                }
+        finally:
+            self._build_finished_at = _utc_now()
         self._publish_artifacts(
             frame,
             provider,
@@ -368,6 +415,7 @@ class ForecastService:
                 fingerprints=fingerprints,
             ),
         )
+        self._last_cache_access = "rebuilt"
         return frame, provider, evaluations, risk_context
 
     def _check_expected_revision(self, expected_revision):
@@ -663,3 +711,22 @@ def _validate_provider_identity(provider, model_key, model_version):
         or getattr(provider, "model_version", None) != model_version
     ):
         raise ValueError("provider identity does not match provider_factory")
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _unavailable_cache_status():
+    return {
+        "state": "unavailable",
+        "entry_count": 0,
+        "latest_created_at": None,
+        "market_asof": None,
+        "model_key": None,
+        "model_version": None,
+        "feature_version": None,
+        "risk_context_version": None,
+        "format_version": None,
+        "size_bytes": 0,
+    }

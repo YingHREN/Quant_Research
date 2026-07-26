@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { createCacheStatusController } from "./cache_status.js";
 import { createLinkedCharts } from "./charts.js";
 import { renderFactors, renderStructures } from "./factors.js";
 import {
@@ -40,6 +41,7 @@ const elements = {};
 let stockRequestSequence = 0;
 let chartController = null;
 let updateController = null;
+let cacheStatusController = null;
 let unsubscribeLocale = null;
 let universeError = null;
 let researchError = null;
@@ -288,6 +290,39 @@ export function renderSecurityClassification(
   container.dataset.state = classification.state || "unclassified";
 }
 
+export function renderSecurityRelativeStrength(
+  ticker = store.getState().selectedTicker,
+  locale = store.getState().locale,
+) {
+  const element = elements.securityRsState;
+  if (!element) return;
+  const row = store.getState().universe.find((item) => item.ticker === ticker);
+  const rating = row?.rs_rating;
+  setText(
+    element,
+    Number.isFinite(rating)
+      ? t("universe.rs.value", { rating }, locale)
+      : t("universe.rs.unavailable", {}, locale),
+  );
+  element.dataset.tone = Number.isFinite(rating)
+    ? rating >= 90 ? "current" : rating >= 80 ? "watch" : "neutral"
+    : "unavailable";
+  element.setAttribute(
+    "title",
+    Number.isFinite(rating)
+      ? t(
+        "universe.rs.detail",
+        {
+          date: row.rs_asof || "—",
+          sample: row.rs_sample_count ?? "—",
+          model: row.rs_model_version || "—",
+        },
+        locale,
+      )
+      : t("universe.rs.disclaimer", {}, locale),
+  );
+}
+
 function renderSectorControls(rows, state) {
   const taxonomy = state.filters.sectorTaxonomy || "sec";
   const selectedSector = state.filters.sectorKey || "all";
@@ -374,6 +409,7 @@ function paintUniverse() {
   });
   renderSectorControls(rows, state);
   renderSecurityClassification(state.selectedTicker, state.locale);
+  renderSecurityRelativeStrength(state.selectedTicker, state.locale);
   setText(elements.universeCount, `${rows.length}/${state.universe.length}`);
   setText(
     elements.universeStatus,
@@ -630,6 +666,8 @@ async function refreshUniverseAfterUpdate(updateSnapshot = {}) {
     universeError = errorState(error);
     setText(elements.universeStatus, errorText(universeError, store.getState().locale));
     elements.universeStatus.dataset.tone = "error";
+  } finally {
+    await cacheStatusController?.refresh();
   }
 }
 
@@ -782,6 +820,7 @@ function captureElements() {
     selectedChange: byId("selected-change"),
     observationDate: byId("observation-date"),
     securityState: byId("security-state"),
+    securityRsState: byId("security-rs-state"),
     topRiskState: byId("top-risk-state"),
     securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),
@@ -798,6 +837,9 @@ function captureElements() {
     scenarioMeta: byId("scenario-meta"),
     updateData: byId("update-data"),
     updateStatus: byId("update-status"),
+    cacheStatusSummary: byId("cache-status-summary"),
+    cacheStatusDetails: byId("cache-status-details"),
+    cacheStatusRefresh: byId("cache-status-refresh"),
     markerLayerCount: byId("marker-layer-count"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
     forecastControls: [...document.querySelectorAll("[data-forecast-horizon]")],
@@ -837,8 +879,14 @@ export async function initializeDashboard() {
     status: elements.updateStatus,
     onTerminal: refreshUniverseAfterUpdate,
   });
+  cacheStatusController = createCacheStatusController({
+    summary: elements.cacheStatusSummary,
+    details: elements.cacheStatusDetails,
+    refreshButton: elements.cacheStatusRefresh,
+  });
   bindControls();
   await updateController.initialize();
+  await cacheStatusController.initialize();
   await loadUniverse();
 }
 
@@ -847,6 +895,7 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", () => {
     chartController?.destroy();
     updateController?.destroy();
+    cacheStatusController?.destroy();
     unsubscribeLocale?.();
   }, { once: true });
 }

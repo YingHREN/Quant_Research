@@ -659,11 +659,9 @@ if (mode === "success") {
   topRiskControl.checked = true;
   topRiskControl.dispatch("change");
   assert.deepEqual(markerTexts(), [
-    "顶部向下风险观察",
-    "顶部向下高风险",
-    "顶部向下风险确认",
-    "顶部向下风险解除",
+    "顶部向下风险观察 · 顶部向下高风险 · 顶部向下风险确认",
     "预测起点 · 下跌",
+    "顶部向下风险解除",
   ]);
   enButton.dispatch("click");
   assert.deepEqual(
@@ -671,11 +669,9 @@ if (mode === "success") {
     ["top_risk"],
   );
   assert.deepEqual(markerTexts(), [
-    "Top downside risk watch",
-    "Top downside high risk",
-    "Top downside risk confirmed",
-    "Top downside risk cleared",
+    "Top downside risk watch · Top downside high risk · Top downside risk confirmed",
     "Forecast start · Down",
+    "Top downside risk cleared",
   ]);
   assert.equal(elements.get("marker-layer-count").textContent, "1/10 model layers shown");
   console.log(JSON.stringify({
