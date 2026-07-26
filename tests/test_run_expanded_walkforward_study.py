@@ -10,8 +10,10 @@ from research.run_expanded_walkforward_study import (
     evaluate_expanded_scope,
     evaluate_predictions_by_regime,
     expanded_feature_sets,
+    render_market_regime_report,
     research_promotion_decision,
     select_analysis_tickers,
+    summarize_market_regimes,
 )
 
 
@@ -318,6 +320,36 @@ class RunExpandedWalkForwardStudyTest(unittest.TestCase):
             metrics["specification"] == "ridge_current"
         ]
         self.assertTrue(ridge["rank_ic"].isna().all())
+
+    def test_regime_report_exposes_coverage_metrics_and_sparse_evidence(self):
+        predictions, regimes = regime_predictions()
+        metrics = evaluate_predictions_by_regime(
+            predictions,
+            regimes,
+            minimum_fold_samples=10,
+        )
+        coverage = summarize_market_regimes(regimes)
+
+        report = render_market_regime_report(
+            metrics,
+            coverage,
+            {
+                "latest_date": "2026-01-13",
+                "ticker_count": 240,
+                "start_date": "2018-01-01",
+                "folds": 5,
+                "minimum_fold_samples": 10,
+            },
+        )
+
+        self.assertIn("# 市场阶段分层走步诊断", report)
+        self.assertIn("上涨趋势", report)
+        self.assertIn("市场承压", report)
+        self.assertIn("半导体", report)
+        self.assertIn("证据不足", report)
+        self.assertIn("Logistic 相对 Ridge", report)
+        self.assertIn("平衡准确率差", report)
+        self.assertIn("下跌召回差", report)
 
 
 if __name__ == "__main__":

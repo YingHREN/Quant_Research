@@ -51,6 +51,20 @@ FOCUS_TICKERS = (
     "INTC",
     "ADBE",
 )
+REGIME_LABELS_ZH = {
+    "uptrend": "上涨趋势",
+    "range_bound": "震荡",
+    "under_pressure": "市场承压",
+    "correction": "修正",
+    "acute_selloff": "急跌",
+    "unavailable": "不可用",
+}
+SCOPE_LABELS_ZH = {
+    "all": "全部",
+    "semiconductor": "半导体",
+    "software": "软件",
+    "other": "其他",
+}
 
 
 def classify_study_groups(classifications):
@@ -341,6 +355,184 @@ def evaluate_predictions_by_regime(
     if not metric_frames:
         return pd.DataFrame()
     return pd.concat(metric_frames, ignore_index=True, sort=False)
+
+
+def summarize_market_regimes(regimes):
+    """Summarize dates and shares for every observed market state."""
+    if not isinstance(regimes, pd.DataFrame) or "regime" not in regimes:
+        raise ValueError("regimes must be a DataFrame with a regime column")
+    if not isinstance(regimes.index, pd.DatetimeIndex):
+        raise ValueError("regimes index must be a DatetimeIndex")
+    if regimes.empty:
+        return pd.DataFrame(
+            columns=(
+                "regime",
+                "session_count",
+                "start_date",
+                "end_date",
+                "session_share",
+            )
+        )
+    total = len(regimes)
+    rows = []
+    for regime, selected in regimes.groupby("regime", sort=True):
+        rows.append(
+            {
+                "regime": str(regime),
+                "session_count": len(selected),
+                "start_date": selected.index.min(),
+                "end_date": selected.index.max(),
+                "session_share": len(selected) / total,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_market_regime_report(metrics, coverage, manifest):
+    """Render the frozen market-regime diagnosis without promotion claims."""
+    coverage_display = coverage.copy(deep=True)
+    if not coverage_display.empty:
+        coverage_display.insert(
+            1,
+            "阶段",
+            coverage_display["regime"].map(REGIME_LABELS_ZH).fillna(
+                coverage_display["regime"]
+            ),
+        )
+    selected_columns = (
+        "scope",
+        "horizon",
+        "regime",
+        "sample_mode",
+        "specification",
+        "sample_count",
+        "balanced_accuracy",
+        "macro_f1",
+        "down_precision",
+        "down_recall",
+        "up_precision",
+        "up_recall",
+        "return_mae",
+        "rank_ic",
+        "comparable_fold_count",
+        "fold_win_rate_vs_ridge_current",
+    )
+    metric_display = metrics.copy(deep=True)
+    metric_display = metric_display.loc[
+        metric_display["specification"].isin(
+            ("ridge_current", "logistic_decay_market")
+        )
+    ].copy()
+    for column in selected_columns:
+        if column not in metric_display:
+            metric_display[column] = np.nan
+    metric_display = metric_display.loc[:, selected_columns]
+    metric_display.insert(
+        1,
+        "股票组",
+        metric_display["scope"].map(SCOPE_LABELS_ZH).fillna(
+            metric_display["scope"]
+        ),
+    )
+    metric_display.insert(
+        4,
+        "市场阶段",
+        metric_display["regime"].map(REGIME_LABELS_ZH).fillna(
+            metric_display["regime"]
+        ),
+    )
+    metric_display["证据状态"] = np.where(
+        (
+            metric_display["specification"] == "ridge_current"
+        ),
+        "基线",
+        np.where(
+            pd.to_numeric(
+                metric_display["comparable_fold_count"],
+                errors="coerce",
+            ).fillna(0)
+            >= 2,
+            "可比较",
+            "证据不足",
+        ),
+    )
+    semiconductor = metric_display.loc[
+        (metric_display["scope"] == "semiconductor")
+        & (metric_display["horizon"] == 5)
+        & (metric_display["sample_mode"] == "overlapping")
+    ]
+    diagnosis = _semiconductor_regime_diagnosis(semiconductor)
+    return "\n".join(
+        (
+            "# 市场阶段分层走步诊断",
+            "",
+            f"- 数据截止：{manifest['latest_date']}",
+            f"- 研究股票：{manifest['ticker_count']} 只",
+            f"- 样本起点：{manifest['start_date']}",
+            f"- 走步折数：{manifest['folds']}",
+            "- 状态规则：`market_regime_v1`，只使用观察日及此前 QQQ/SPY。",
+            "- 执行口径：观察日收盘后生成信号，下一交易日开盘进入。",
+            "- 结果只用于诊断，不修改 Ridge、Logistic 或线上决策。",
+            "",
+            "## 阶段覆盖",
+            "",
+            _markdown_table(coverage_display),
+            "",
+            "## Logistic 相对 Ridge 的半导体诊断",
+            "",
+            diagnosis,
+            "",
+            "## 分层指标",
+            "",
+            _markdown_table(metric_display),
+            "",
+            "## 判读限制",
+            "",
+            "- `comparable_fold_count` 少于 2 的阶段标为证据不足，不据此判断模型优劣。",
+            "- 当前股票池和 SEC 分类仍存在幸存者偏差；阶段拆分不能消除该偏差。",
+            "- 阶段规则在查看本轮结果前已经冻结，不根据已知案例回调阈值。",
+            "",
+        )
+    )
+
+
+def _semiconductor_regime_diagnosis(rows):
+    if rows.empty:
+        return "- 没有成熟的半导体五日重叠样本。"
+    lines = []
+    for regime, selected in rows.groupby("regime", sort=True):
+        indexed = selected.set_index("specification")
+        if not {
+            "ridge_current",
+            "logistic_decay_market",
+        }.issubset(indexed.index):
+            continue
+        ridge = indexed.loc["ridge_current"]
+        logistic = indexed.loc["logistic_decay_market"]
+        label = REGIME_LABELS_ZH.get(regime, regime)
+        fold_count = int(logistic["comparable_fold_count"] or 0)
+        win_rate = logistic["fold_win_rate_vs_ridge_current"]
+        if fold_count < 2 or pd.isna(win_rate):
+            conclusion = "证据不足"
+        elif win_rate > 0.5:
+            conclusion = "Logistic 跨折占优"
+        elif win_rate < 0.5:
+            conclusion = "Ridge 跨折占优"
+        else:
+            conclusion = "两者持平"
+        lines.append(
+            f"- {label}：{conclusion}；可比较 {fold_count} 折，"
+            + (
+                "胜率不可用。"
+                if pd.isna(win_rate)
+                else f"Logistic 相对 Ridge 折次胜率 {win_rate:.1%}。"
+            )
+            + " 平衡准确率差 "
+            f"{logistic['balanced_accuracy'] - ridge['balanced_accuracy']:+.3f}；"
+            + "下跌召回差 "
+            f"{logistic['down_recall'] - ridge['down_recall']:+.3f}。"
+        )
+    return "\n".join(lines)
 
 
 def _regime_fold_comparison(predictions, *, minimum_fold_samples):
@@ -934,6 +1126,15 @@ def main(argv=None):
         "--diagnostics",
         default="reports/expanded-walkforward-diagnostics.csv",
     )
+    parser.add_argument(
+        "--regime-metrics",
+        default="reports/expanded-walkforward-regimes.csv",
+    )
+    parser.add_argument(
+        "--regime-report",
+        default="reports/expanded-walkforward-regimes.md",
+    )
+    parser.add_argument("--minimum-regime-fold-samples", type=int, default=30)
     args = parser.parse_args(argv)
 
     repository = ExpandedMarketDataRepository(args.database)
@@ -959,6 +1160,15 @@ def main(argv=None):
     )
     decision = research_promotion_decision(metrics)
     diagnostics = focus_diagnostics(predictions)
+    regimes = build_market_regime_frame(histories)
+    start_timestamp = pd.Timestamp(args.start).normalize()
+    regimes = regimes.loc[regimes.index >= start_timestamp]
+    regime_metrics = evaluate_predictions_by_regime(
+        predictions,
+        regimes,
+        minimum_fold_samples=args.minimum_regime_fold_samples,
+    )
+    regime_coverage = summarize_market_regimes(regimes)
     latest = frame.index.get_level_values("observation_date").max()
     manifest = {
         "study_version": "expanded-walkforward-v1",
@@ -979,22 +1189,36 @@ def main(argv=None):
         "minimum_samples": args.minimum_samples,
         "decision": decision,
         "diagnostic_prediction_rows": len(diagnostics),
+        "market_regime_version": "market_regime_v1",
+        "market_regime_rows": len(regime_metrics),
+        "minimum_regime_fold_samples": args.minimum_regime_fold_samples,
     }
     report = render_expanded_report(metrics, manifest, diagnostics)
+    regime_report = render_market_regime_report(
+        regime_metrics,
+        regime_coverage,
+        manifest,
+    )
     report_path = Path(args.report)
     metrics_path = Path(args.metrics)
     manifest_path = Path(args.manifest)
     diagnostics_path = Path(args.diagnostics)
+    regime_metrics_path = Path(args.regime_metrics)
+    regime_report_path = Path(args.regime_report)
     for path in (
         report_path,
         metrics_path,
         manifest_path,
         diagnostics_path,
+        regime_metrics_path,
+        regime_report_path,
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report, encoding="utf-8")
     metrics.to_csv(metrics_path, index=False)
     diagnostics.to_csv(diagnostics_path, index=False)
+    regime_metrics.to_csv(regime_metrics_path, index=False)
+    regime_report_path.write_text(regime_report, encoding="utf-8")
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
