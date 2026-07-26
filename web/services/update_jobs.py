@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
 import threading
+from collections.abc import Mapping
 from urllib.error import HTTPError
 
 
@@ -31,6 +32,11 @@ class JobSnapshot:
     current_ticker: str | None
     error: str | None
     resumable: bool
+    cache_warmup_state: str = "idle"
+    cache_warmup_error: str | None = None
+    cache_warmup_started_at: datetime | None = None
+    cache_warmup_finished_at: datetime | None = None
+    cache_warmup_cohorts: tuple[str, ...] = ()
 
     def to_dict(self):
         return {
@@ -43,6 +49,15 @@ class JobSnapshot:
             "current_ticker": self.current_ticker,
             "error": self.error,
             "resumable": self.resumable,
+            "cache_warmup_state": self.cache_warmup_state,
+            "cache_warmup_error": self.cache_warmup_error,
+            "cache_warmup_started_at": _iso_timestamp(
+                self.cache_warmup_started_at
+            ),
+            "cache_warmup_finished_at": _iso_timestamp(
+                self.cache_warmup_finished_at
+            ),
+            "cache_warmup_cohorts": list(self.cache_warmup_cohorts),
         }
 
 
@@ -81,10 +96,13 @@ class UpdateJobManager:
         repository,
         provider,
         on_success=None,
+        on_cache_warmup=None,
         reference_tickers=(),
     ):
         if on_success is not None and not callable(on_success):
             raise TypeError("on_success must be callable")
+        if on_cache_warmup is not None and not callable(on_cache_warmup):
+            raise TypeError("on_cache_warmup must be callable")
         checked_references = tuple(
             str(value).strip().upper() for value in reference_tickers
         )
@@ -98,6 +116,7 @@ class UpdateJobManager:
         self._repository = repository
         self._provider = provider
         self._on_success = on_success
+        self._on_cache_warmup = on_cache_warmup
         self._reference_tickers = checked_references
         self._lock = threading.Lock()
         self._thread = None
@@ -113,6 +132,11 @@ class UpdateJobManager:
         self._remaining_tickers = None
         self._had_errors = False
         self._run_updated_start = 0
+        self._cache_warmup_state = "idle"
+        self._cache_warmup_error = None
+        self._cache_warmup_started_at = None
+        self._cache_warmup_finished_at = None
+        self._cache_warmup_cohorts = ()
 
     def start(self):
         """Start one daemon worker and return its initial running snapshot."""
@@ -167,6 +191,11 @@ class UpdateJobManager:
         self._error = None
         self._resumable = False
         self._run_updated_start = self._updated
+        self._cache_warmup_state = "idle"
+        self._cache_warmup_error = None
+        self._cache_warmup_started_at = None
+        self._cache_warmup_finished_at = None
+        self._cache_warmup_cohorts = ()
         self._transition_locked("running")
 
     def _run(self):
@@ -223,8 +252,40 @@ class UpdateJobManager:
                 state = "failed"
                 error = "cache_invalidation_error"
                 resumable = False
+                with self._lock:
+                    self._cache_warmup_state = "skipped"
+                    self._cache_warmup_finished_at = datetime.now(timezone.utc)
+        if (
+            wrote_prices
+            and error != "cache_invalidation_error"
+            and self._on_cache_warmup is not None
+        ):
+            self._run_cache_warmup()
+        elif self._cache_warmup_state == "idle":
+            with self._lock:
+                self._cache_warmup_state = "skipped"
+                self._cache_warmup_finished_at = datetime.now(timezone.utc)
         with self._lock:
             self._finish_locked(state, error, resumable)
+
+    def _run_cache_warmup(self):
+        with self._lock:
+            self._cache_warmup_state = "running"
+            self._cache_warmup_started_at = datetime.now(timezone.utc)
+        try:
+            result = self._on_cache_warmup()
+            cohorts = _warmup_cohorts(result)
+        except Exception:
+            logger.exception("Post-write forecast cache warmup failed")
+            with self._lock:
+                self._cache_warmup_state = "failed"
+                self._cache_warmup_error = "cache_warmup_error"
+                self._cache_warmup_finished_at = datetime.now(timezone.utc)
+            return
+        with self._lock:
+            self._cache_warmup_state = "ready"
+            self._cache_warmup_cohorts = cohorts
+            self._cache_warmup_finished_at = datetime.now(timezone.utc)
 
     def _load_tickers_if_needed(self):
         with self._lock:
@@ -266,4 +327,22 @@ class UpdateJobManager:
             current_ticker=self._current_ticker,
             error=self._error,
             resumable=self._resumable,
+            cache_warmup_state=self._cache_warmup_state,
+            cache_warmup_error=self._cache_warmup_error,
+            cache_warmup_started_at=self._cache_warmup_started_at,
+            cache_warmup_finished_at=self._cache_warmup_finished_at,
+            cache_warmup_cohorts=self._cache_warmup_cohorts,
         )
+
+
+def _warmup_cohorts(result):
+    if not isinstance(result, Mapping):
+        return ()
+    values = result.get("cohorts", ())
+    if not isinstance(values, (list, tuple)):
+        return ()
+    return tuple(
+        str(value["asof"])
+        for value in values
+        if isinstance(value, Mapping) and value.get("asof")
+    )

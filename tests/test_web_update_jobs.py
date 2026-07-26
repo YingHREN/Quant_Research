@@ -157,6 +157,61 @@ class UpdateJobManagerTest(unittest.TestCase):
         self.assertEqual(snapshot.state, "completed")
         self.assertEqual(callbacks, ["invalidated"])
 
+    def test_completed_update_invalidates_then_warms_before_terminal(self):
+        callbacks = []
+
+        def invalidate():
+            callbacks.append(("invalidate", manager.snapshot().state))
+
+        def warm():
+            snapshot = manager.snapshot()
+            callbacks.append(
+                ("warm", snapshot.state, snapshot.cache_warmup_state)
+            )
+            return {"cohorts": [{"asof": "2026-07-23"}, {"asof": "2026-07-24"}]}
+
+        manager = UpdateJobManager(
+            FakeRepository(("AAA",)),
+            FakeProvider({"AAA": history()}),
+            on_success=invalidate,
+            on_cache_warmup=warm,
+        )
+
+        snapshot = manager.run_synchronously_for_test()
+
+        self.assertEqual(
+            callbacks,
+            [
+                ("invalidate", "running"),
+                ("warm", "running", "running"),
+            ],
+        )
+        self.assertEqual(snapshot.state, "completed")
+        self.assertEqual(snapshot.cache_warmup_state, "ready")
+        self.assertEqual(
+            snapshot.cache_warmup_cohorts,
+            ("2026-07-23", "2026-07-24"),
+        )
+        self.assertIsNotNone(snapshot.cache_warmup_started_at)
+        self.assertIsNotNone(snapshot.cache_warmup_finished_at)
+
+    def test_warmup_failure_does_not_replace_price_terminal_state(self):
+        manager = UpdateJobManager(
+            FakeRepository(("AAA",)),
+            FakeProvider({"AAA": history()}),
+            on_success=lambda: None,
+            on_cache_warmup=mock.Mock(side_effect=RuntimeError("/secret/cache.db")),
+        )
+
+        with self.assertLogs("web.services.update_jobs", level="ERROR"):
+            snapshot = manager.run_synchronously_for_test().to_dict()
+
+        self.assertEqual(snapshot["state"], "completed")
+        self.assertIsNone(snapshot["error"])
+        self.assertEqual(snapshot["cache_warmup_state"], "failed")
+        self.assertEqual(snapshot["cache_warmup_error"], "cache_warmup_error")
+        self.assertNotIn("/secret", str(snapshot))
+
     def test_completed_state_is_not_published_before_success_callback_finishes(self):
         callback_entered = threading.Event()
         release_callback = threading.Event()
