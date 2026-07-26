@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from research.expanded_market_data import ExpandedMarketDataRepository
+from research.market_regime import build_market_regime_frame
 from research.market_direction_model import (
     attach_next_open_targets,
     evaluate_direction_ablation,
@@ -220,6 +221,186 @@ def evaluate_expanded_scope(
     return (
         pd.concat(metric_frames, ignore_index=True),
         pd.concat(prediction_frames, ignore_index=True),
+    )
+
+
+def evaluate_predictions_by_regime(
+    predictions,
+    regimes,
+    *,
+    minimum_fold_samples=30,
+):
+    """Stratify fixed predictions by causal market state and comparable fold."""
+    required = {
+        "scope",
+        "ticker",
+        "observation_date",
+        "horizon",
+        "fold",
+        "specification",
+        "actual_return",
+        "actual_direction",
+        "predicted_direction",
+    }
+    missing = sorted(required.difference(predictions.columns))
+    if missing:
+        raise ValueError(f"predictions are missing columns: {missing}")
+    if not isinstance(regimes, pd.DataFrame) or "regime" not in regimes:
+        raise ValueError("regimes must be a DataFrame with a regime column")
+    if not isinstance(regimes.index, pd.DatetimeIndex):
+        raise ValueError("regimes index must be a DatetimeIndex")
+    if regimes.index.has_duplicates:
+        raise ValueError("regimes index must not contain duplicate dates")
+    checked_minimum = int(minimum_fold_samples)
+    if checked_minimum < 1:
+        raise ValueError("minimum_fold_samples must be positive")
+
+    regime_lookup = regimes.copy(deep=True)
+    regime_lookup.index = regime_lookup.index.tz_localize(None).normalize()
+    attached = predictions.copy(deep=True)
+    observation_dates = pd.to_datetime(
+        attached["observation_date"],
+        errors="raise",
+    )
+    if observation_dates.dt.tz is not None:
+        observation_dates = observation_dates.dt.tz_localize(None)
+    attached["observation_date"] = observation_dates.dt.normalize()
+    attached["regime"] = (
+        attached["observation_date"]
+        .map(regime_lookup["regime"])
+        .fillna("unavailable")
+    )
+    if "regime_version" in regime_lookup:
+        attached["regime_version"] = (
+            attached["observation_date"]
+            .map(regime_lookup["regime_version"])
+            .fillna("unavailable")
+        )
+    else:
+        attached["regime_version"] = "unavailable"
+
+    metric_frames = []
+    for (scope, horizon), horizon_rows in attached.groupby(
+        ["scope", "horizon"],
+        sort=True,
+    ):
+        modes = {
+            "overlapping": horizon_rows,
+            "non_overlapping": _non_overlapping_rows(
+                horizon_rows,
+                int(horizon),
+            ),
+        }
+        for sample_mode, sample_rows in modes.items():
+            for (regime, version), selected in sample_rows.groupby(
+                ["regime", "regime_version"],
+                sort=True,
+                dropna=False,
+            ):
+                if selected.empty:
+                    continue
+                metrics = _evaluate_prediction_sample(
+                    selected,
+                    sample_mode=sample_mode,
+                )
+                fold_comparison = _regime_fold_comparison(
+                    selected,
+                    minimum_fold_samples=checked_minimum,
+                )
+                metrics["comparable_fold_count"] = metrics[
+                    "specification"
+                ].map(
+                    lambda specification: fold_comparison.get(
+                        str(specification),
+                        (0, np.nan),
+                    )[0]
+                )
+                metrics["fold_win_rate_vs_ridge_current"] = metrics[
+                    "specification"
+                ].map(
+                    lambda specification: fold_comparison.get(
+                        str(specification),
+                        (0, np.nan),
+                    )[1]
+                )
+                metrics.insert(
+                    0,
+                    "regime_end",
+                    selected["observation_date"].max(),
+                )
+                metrics.insert(
+                    0,
+                    "regime_start",
+                    selected["observation_date"].min(),
+                )
+                metrics.insert(0, "regime_version", str(version))
+                metrics.insert(0, "regime", str(regime))
+                metrics.insert(0, "horizon", int(horizon))
+                metrics.insert(0, "scope", str(scope))
+                metric_frames.append(metrics)
+    if not metric_frames:
+        return pd.DataFrame()
+    return pd.concat(metric_frames, ignore_index=True, sort=False)
+
+
+def _regime_fold_comparison(predictions, *, minimum_fold_samples):
+    baseline = "ridge_current"
+    by_specification = {
+        str(specification): selected
+        for specification, selected in predictions.groupby(
+            "specification",
+            sort=False,
+        )
+    }
+    baseline_rows = by_specification.get(baseline)
+    if baseline_rows is None:
+        return {
+            specification: (0, np.nan)
+            for specification in by_specification
+        }
+    result = {baseline: (0, np.nan)}
+    for specification, challenger_rows in by_specification.items():
+        if specification == baseline:
+            continue
+        wins = []
+        common_folds = sorted(
+            set(baseline_rows["fold"]).intersection(challenger_rows["fold"])
+        )
+        for fold in common_folds:
+            current = baseline_rows.loc[baseline_rows["fold"] == fold]
+            challenger = challenger_rows.loc[
+                challenger_rows["fold"] == fold
+            ]
+            if (
+                len(current) < minimum_fold_samples
+                or len(challenger) < minimum_fold_samples
+                or current["actual_direction"].nunique() < 2
+                or challenger["actual_direction"].nunique() < 2
+            ):
+                continue
+            current_score = _balanced_accuracy_rows(current)
+            challenger_score = _balanced_accuracy_rows(challenger)
+            delta = challenger_score - current_score
+            wins.append(
+                1.0 if delta > 1e-12 else 0.0 if delta < -1e-12 else 0.5
+            )
+        result[specification] = (
+            len(wins),
+            np.nan if not wins else float(np.mean(wins)),
+        )
+    return result
+
+
+def _balanced_accuracy_rows(rows):
+    actual = rows["actual_direction"].astype(str).to_numpy()
+    predicted = rows["predicted_direction"].astype(str).to_numpy()
+    return float(
+        np.mean(
+            [
+                np.mean(predicted[actual == label] == label)
+                for label in np.unique(actual)
+            ]
+        )
     )
 
 
@@ -667,9 +848,16 @@ def _attach_continuous_metrics(metrics, predictions):
         result.loc[location, "return_mae"] = float(
             (predicted.loc[valid] - actual.loc[valid]).abs().mean()
         )
-        result.loc[location, "rank_ic"] = float(
-            predicted.loc[valid].corr(actual.loc[valid], method="spearman")
-        )
+        if (
+            predicted.loc[valid].nunique() > 1
+            and actual.loc[valid].nunique() > 1
+        ):
+            result.loc[location, "rank_ic"] = float(
+                predicted.loc[valid].corr(
+                    actual.loc[valid],
+                    method="spearman",
+                )
+            )
     return result
 
 

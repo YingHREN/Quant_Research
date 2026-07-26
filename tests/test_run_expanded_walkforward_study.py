@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,7 @@ from research.recency_momentum import RECENCY_FEATURE_COLUMNS
 from research.run_expanded_walkforward_study import (
     classify_study_groups,
     evaluate_expanded_scope,
+    evaluate_predictions_by_regime,
     expanded_feature_sets,
     research_promotion_decision,
     select_analysis_tickers,
@@ -41,6 +43,43 @@ def labeled_frame(periods=100):
             names=("ticker", "observation_date"),
         ),
     ).sort_index()
+
+
+def regime_predictions():
+    dates = pd.bdate_range("2026-01-02", periods=8)
+    actual = ("down", "up", "down", "up", "down", "up", "down", "up")
+    rows = []
+    for specification in ("ridge_current", "logistic_decay_market"):
+        for position, date in enumerate(dates):
+            if specification == "ridge_current":
+                predicted = "up"
+                predicted_return = 0.01
+            else:
+                predicted = actual[position]
+                predicted_return = np.nan
+            rows.append(
+                {
+                    "scope": "semiconductor",
+                    "ticker": f"T{position % 2}",
+                    "observation_date": date,
+                    "horizon": 5,
+                    "fold": 1 if position < 4 else 2,
+                    "specification": specification,
+                    "actual_return": -0.04 if actual[position] == "down" else 0.04,
+                    "actual_direction": actual[position],
+                    "predicted_direction": predicted,
+                    "predicted_return": predicted_return,
+                    "training_samples": 100,
+                }
+            )
+    regimes = pd.DataFrame(
+        {
+            "regime": ["under_pressure"] * 4 + ["uptrend"] * 4,
+            "regime_version": ["market_regime_v1"] * 8,
+        },
+        index=dates,
+    )
+    return pd.DataFrame(rows), regimes
 
 
 class RunExpandedWalkForwardStudyTest(unittest.TestCase):
@@ -187,6 +226,98 @@ class RunExpandedWalkForwardStudyTest(unittest.TestCase):
                 for reason in decision["metric_gate_reasons"]
             )
         )
+
+    def test_regime_evaluation_reports_each_sample_mode_and_state(self):
+        predictions, regimes = regime_predictions()
+
+        metrics = evaluate_predictions_by_regime(
+            predictions,
+            regimes,
+            minimum_fold_samples=2,
+        )
+
+        self.assertEqual(
+            set(metrics["sample_mode"]),
+            {"overlapping", "non_overlapping"},
+        )
+        self.assertEqual(
+            set(metrics["regime"]),
+            {"under_pressure", "uptrend"},
+        )
+        pressure = metrics.loc[
+            (metrics["sample_mode"] == "overlapping")
+            & (metrics["regime"] == "under_pressure")
+        ].set_index("specification")
+        self.assertGreater(
+            pressure.loc["logistic_decay_market", "balanced_accuracy"],
+            pressure.loc["ridge_current", "balanced_accuracy"],
+        )
+        self.assertEqual(
+            pressure.loc[
+                "logistic_decay_market",
+                "comparable_fold_count",
+            ],
+            1,
+        )
+        self.assertEqual(
+            pressure.loc[
+                "logistic_decay_market",
+                "fold_win_rate_vs_ridge_current",
+            ],
+            1.0,
+        )
+
+    def test_regime_fold_comparison_excludes_one_class_fold(self):
+        predictions, regimes = regime_predictions()
+        regimes.loc[:, "regime"] = "under_pressure"
+        fold_two = predictions["fold"] == 2
+        predictions.loc[fold_two, "actual_direction"] = "up"
+        predictions.loc[fold_two, "actual_return"] = 0.04
+        logistic_fold_two = fold_two & (
+            predictions["specification"] == "logistic_decay_market"
+        )
+        predictions.loc[logistic_fold_two, "predicted_direction"] = "up"
+
+        metrics = evaluate_predictions_by_regime(
+            predictions,
+            regimes,
+            minimum_fold_samples=2,
+        )
+
+        overlapping = metrics.loc[
+            (metrics["sample_mode"] == "overlapping")
+            & (
+                metrics["specification"]
+                == "logistic_decay_market"
+            )
+        ].iloc[0]
+        self.assertEqual(overlapping["comparable_fold_count"], 1)
+        self.assertEqual(
+            overlapping["fold_win_rate_vs_ridge_current"],
+            1.0,
+        )
+
+    def test_regime_evaluation_does_not_warn_for_constant_return_predictor(self):
+        predictions, regimes = regime_predictions()
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            metrics = evaluate_predictions_by_regime(
+                predictions,
+                regimes,
+                minimum_fold_samples=2,
+            )
+
+        constant_warnings = [
+            warning
+            for warning in caught
+            if "constant" in str(warning.message).casefold()
+        ]
+        self.assertEqual(constant_warnings, [])
+        ridge = metrics.loc[
+            metrics["specification"] == "ridge_current"
+        ]
+        self.assertTrue(ridge["rank_ic"].isna().all())
 
 
 if __name__ == "__main__":
