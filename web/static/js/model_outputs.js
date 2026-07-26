@@ -55,6 +55,15 @@ function percent(value, locale) {
   }).format(number);
 }
 
+function unsignedPercent(value, locale) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return "—";
+  return new Intl.NumberFormat(locale, {
+    style: "percent",
+    maximumFractionDigits: 1,
+  }).format(numeric);
+}
+
 function number(value, locale) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
@@ -186,6 +195,22 @@ function modelCard(model, locale, { open = false } = {}) {
     values.append(labeledValue(
       t("modelOutput.field.score", {}, locale),
       scoreText(model, locale),
+    ));
+  }
+  if (model.coverage !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.coverage", {}, locale),
+      unsignedPercent(model.coverage, locale),
+    ));
+  }
+  if (model.supply_demand_state !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.supplyDemandState", {}, locale),
+      enumLabel(
+        "modelOutput.supplyDemandState",
+        model.supply_demand_state,
+        locale,
+      ),
     ));
   }
   if (model.threshold !== undefined) {

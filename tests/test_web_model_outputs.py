@@ -131,6 +131,28 @@ def chart_row():
             "down_day_count": 4,
             "reject_reason": "volume_not_above_prior_down_days",
         },
+        "supply_pressure_model_key": "supply_pressure_v1",
+        "supply_pressure_score": 62.0,
+        "supply_pressure_coverage": 0.92,
+        "supply_close_volume_score": 30.0,
+        "supply_rejection_score": 17.0,
+        "supply_structure_context_score": 15.0,
+        "supply_pressure_conditions": [
+            "distribution_day",
+            "failed_breakout",
+        ],
+        "demand_confirmation_model_key": "demand_confirmation_v1",
+        "demand_confirmation_score": 71.0,
+        "demand_confirmation_coverage": 0.92,
+        "demand_participation_score": 27.0,
+        "demand_absorption_score": 29.0,
+        "demand_breakout_context_score": 15.0,
+        "demand_confirmation_conditions": [
+            "buyer_absorption",
+            "breakout_acceptance",
+        ],
+        "supply_demand_state": "two_way_contest",
+        "unavailable_reasons": [],
     }
 
 
@@ -247,6 +269,7 @@ class ModelOutputContractTest(unittest.TestCase):
                 "group_regime_risk_v1",
                 "slow_decline_risk_v1",
                 "high_level_distribution_risk_v1",
+                "supply_pressure_v1",
                 "macro_risk",
                 "intraday_order_flow",
             },
@@ -361,7 +384,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(registered, emitted)
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v1",
+            "model_output_registry_v2",
         )
         self.assertEqual(
             outputs["decision"]["decision_permission"],
@@ -392,12 +415,61 @@ class ModelOutputContractTest(unittest.TestCase):
 
         self.assertEqual(
             {item["key"] for item in planned},
-            {"macro_risk", "intraday_order_flow", "demand_confirmation"},
+            {"macro_risk", "intraday_order_flow"},
         )
         for item in planned:
             self.assertEqual(item["status"], "unavailable")
             self.assertEqual(item["unavailable_reason"], "not_implemented")
             self.assertNotIn("score", item)
+
+    def test_supply_and_demand_models_expose_independent_scores_and_context(self):
+        outputs = build_model_outputs(forecast_payload(), chart_row(), {})
+        supply = next(
+            item
+            for item in outputs["downside"]
+            if item["key"] == "supply_pressure_v1"
+        )
+        demand = next(
+            item
+            for item in outputs["bullish_structure"]
+            if item["key"] == "demand_confirmation_v1"
+        )
+
+        self.assertEqual(supply["lifecycle"], "production")
+        self.assertEqual(supply["status"], "active")
+        self.assertEqual(supply["score"], 62.0)
+        self.assertEqual(supply["coverage"], 0.92)
+        self.assertEqual(supply["supply_demand_state"], "two_way_contest")
+        self.assertEqual(
+            supply["conditions"],
+            ["distribution_day", "failed_breakout"],
+        )
+        self.assertEqual(
+            {metric["label_key"] for metric in supply["metrics"]},
+            {
+                "modelOutput.metric.closeVolumeSupply",
+                "modelOutput.metric.rejectionSupply",
+                "modelOutput.metric.structureContextSupply",
+            },
+        )
+
+        self.assertEqual(demand["lifecycle"], "production")
+        self.assertEqual(demand["status"], "active")
+        self.assertEqual(demand["score"], 71.0)
+        self.assertEqual(demand["coverage"], 0.92)
+        self.assertEqual(demand["supply_demand_state"], "two_way_contest")
+        self.assertEqual(
+            demand["conditions"],
+            ["buyer_absorption", "breakout_acceptance"],
+        )
+        self.assertEqual(
+            {metric["label_key"] for metric in demand["metrics"]},
+            {
+                "modelOutput.metric.demandParticipation",
+                "modelOutput.metric.demandAbsorption",
+                "modelOutput.metric.breakoutContextDemand",
+            },
+        )
 
     def test_missing_chart_and_risk_values_are_typed_unavailable(self):
         forecast = forecast_payload()

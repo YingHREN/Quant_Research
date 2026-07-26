@@ -946,7 +946,7 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v1",
+            "model_output_registry_v2",
         )
         self.assertEqual(
             payload["feature_provenance_registry"]["version"],
@@ -1127,7 +1127,6 @@ class WebApiTest(unittest.TestCase):
                 "two_way_contest",
             },
         )
-
     def test_stock_without_group_keeps_market_risk_memory_unavailable(self):
         response = self.client.get("/api/stocks/AAA")
 
@@ -1309,7 +1308,7 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(
             response.json["model_output_registry"]["version"],
-            "model_output_registry_v1",
+            "model_output_registry_v2",
         )
         ticker, dates, histories = self.app.config["FORECAST_SERVICE"].calls[-1]
         self.assertEqual(ticker, "AAA")
@@ -1384,11 +1383,11 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v1",
+            "model_output_registry_v2",
         )
         self.assertEqual(
             outputs["registry_ref"],
-            "model_output_registry_v1",
+            "model_output_registry_v2",
         )
         self.assertNotIn("registry", outputs)
 
