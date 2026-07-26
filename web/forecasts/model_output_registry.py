@@ -64,7 +64,11 @@ class ModelOutputRegistry:
         self._groups: dict[str, ModelOutputGroup] = {}
         self._models: dict[
             str,
-            tuple[ModelOutputDefinition, Callable[[Mapping], Mapping]],
+            tuple[
+                ModelOutputDefinition,
+                Callable[[Mapping], Mapping],
+                Callable[[Mapping], str | None] | None,
+            ],
         ] = {}
 
     def register_group(self, group: ModelOutputGroup):
@@ -82,6 +86,8 @@ class ModelOutputRegistry:
         self,
         definition: ModelOutputDefinition,
         builder: Callable[[Mapping], Mapping],
+        *,
+        version_resolver: Callable[[Mapping], str | None] | None = None,
     ):
         if not isinstance(definition, ModelOutputDefinition):
             raise TypeError(
@@ -89,6 +95,8 @@ class ModelOutputRegistry:
             )
         if not callable(builder):
             raise TypeError("builder must be callable")
+        if version_resolver is not None and not callable(version_resolver):
+            raise TypeError("version_resolver must be callable")
         if definition.group not in self._groups:
             raise ValueError(
                 f"unknown model output group: {definition.group}"
@@ -105,12 +113,16 @@ class ModelOutputRegistry:
         group = self._groups[definition.group]
         if group.cardinality == "single" and any(
             row.group == definition.group
-            for row, _builder in self._models.values()
+            for row, _builder, _resolver in self._models.values()
         ):
             raise ValueError(
                 f"single model output group already populated: {group.key}"
             )
-        self._models[definition.key] = (definition, builder)
+        self._models[definition.key] = (
+            definition,
+            builder,
+            version_resolver,
+        )
 
     def public_contract(self):
         groups = sorted(
@@ -119,7 +131,10 @@ class ModelOutputRegistry:
         )
         group_order = {row.key: row.order for row in groups}
         models = sorted(
-            (definition for definition, _builder in self._models.values()),
+            (
+                definition
+                for definition, _builder, _resolver in self._models.values()
+            ),
             key=lambda row: (
                 group_order[row.group],
                 row.order,
@@ -140,9 +155,9 @@ class ModelOutputRegistry:
         definitions_by_group = {
             group["key"]: [] for group in contract["groups"]
         }
-        for definition, builder in self._models.values():
+        for definition, builder, version_resolver in self._models.values():
             definitions_by_group[definition.group].append(
-                (definition, builder)
+                (definition, builder, version_resolver)
             )
         for group in contract["groups"]:
             entries = []
@@ -150,7 +165,7 @@ class ModelOutputRegistry:
                 definitions_by_group[group["key"]],
                 key=lambda row: (row[0].order, row[0].key),
             )
-            for definition, builder in definitions:
+            for definition, builder, version_resolver in definitions:
                 payload = builder(context)
                 if not isinstance(payload, Mapping):
                     raise TypeError(
@@ -163,12 +178,10 @@ class ModelOutputRegistry:
                         f"model output builder overrides identity: "
                         f"{definition.key}"
                     )
-                entries.append(
-                    {
-                        **asdict(definition),
-                        **dict(payload),
-                    }
-                )
+                identity = asdict(definition)
+                if version_resolver is not None:
+                    identity["version"] = version_resolver(context)
+                entries.append({**identity, **dict(payload)})
             result[group["key"]] = (
                 entries[0]
                 if group["cardinality"] == "single" and entries

@@ -111,6 +111,30 @@ class ModelOutputRegistryTest(unittest.TestCase):
         self.assertEqual(outputs["decision"]["key"], "policy")
         self.assertEqual(outputs["decision"]["final_direction"], "down")
 
+    def test_explicit_version_resolver_preserves_runtime_model_version(self):
+        registry = ModelOutputRegistry()
+        registry.register_group(
+            ModelOutputGroup(
+                "primary",
+                "group.primary",
+                10,
+                "many",
+            )
+        )
+        registry.register_model(
+            definition("ridge", "primary"),
+            lambda context: {"status": "available"},
+            version_resolver=lambda context: context["model_version"],
+        )
+
+        outputs = registry.build({"model_version": "v4"})
+
+        self.assertEqual(outputs["primary"][0]["version"], "v4")
+        self.assertEqual(
+            outputs["registry"]["models"][0]["version"],
+            "v1",
+        )
+
     def test_registration_rejects_invalid_or_ambiguous_definitions(self):
         registry = ModelOutputRegistry()
         registry.register_group(

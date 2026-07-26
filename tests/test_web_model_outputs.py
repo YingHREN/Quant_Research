@@ -143,7 +143,13 @@ class ModelOutputContractTest(unittest.TestCase):
 
         self.assertEqual(
             set(outputs),
-            {"primary", "downside", "bullish_structure", "decision"},
+            {
+                "registry",
+                "primary",
+                "downside",
+                "bullish_structure",
+                "decision",
+            },
         )
         self.assertEqual(outputs["primary"][0]["kind"], "statistical_forecast")
         self.assertEqual(
@@ -253,6 +259,46 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(outputs["decision"]["kind"], "decision_policy")
         self.assertEqual(outputs["decision"]["final_direction"], "down")
         self.assertEqual((forecast, row, evaluation), original)
+
+    def test_default_registry_describes_every_emitted_model(self):
+        outputs = build_model_outputs(
+            forecast_payload(),
+            chart_row(),
+            {},
+        )
+
+        registered = {
+            item["key"] for item in outputs["registry"]["models"]
+        }
+        emitted = {
+            item["key"]
+            for group in ("primary", "downside", "bullish_structure")
+            for item in outputs[group]
+        }
+        emitted.add(outputs["decision"]["key"])
+
+        self.assertEqual(registered, emitted)
+        self.assertEqual(
+            outputs["registry"]["version"],
+            "model_output_registry_v1",
+        )
+        self.assertEqual(
+            outputs["decision"]["decision_permission"],
+            "final_policy",
+        )
+        for group in ("primary", "downside", "bullish_structure"):
+            for item in outputs[group]:
+                self.assertEqual(item["group"], group)
+                self.assertIsInstance(item["order"], int)
+                self.assertIn(
+                    item["decision_permission"],
+                    {
+                        "informational",
+                        "advisory",
+                        "downgrade_to_neutral",
+                        "veto_to_down",
+                    },
+                )
 
     def test_planned_models_never_fabricate_scores(self):
         outputs = build_model_outputs(forecast_payload(), chart_row(), {})

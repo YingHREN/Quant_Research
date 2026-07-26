@@ -1232,6 +1232,10 @@ class WebApiTest(unittest.TestCase):
         ]
         self.assertEqual(outputs["primary"][0]["evidence_status"], "unproven")
         self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
+        self.assertEqual(
+            outputs["registry"]["version"],
+            "model_output_registry_v1",
+        )
 
     def test_historical_forecast_endpoint_rejects_non_session_date(self):
         response = self.client.get("/api/stocks/AAA/forecasts/2026-07-19")

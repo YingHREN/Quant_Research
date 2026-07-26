@@ -5,6 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from web.contracts import json_safe
+from web.forecasts.model_output_registry import (
+    ModelOutputDefinition,
+    ModelOutputGroup,
+    ModelOutputRegistry,
+)
 
 
 def build_model_outputs(forecast, chart_row, evaluation):
@@ -14,62 +19,318 @@ def build_model_outputs(forecast, chart_row, evaluation):
     evaluation = _mapping(evaluation)
     decision = _mapping(forecast.get("decision"))
 
-    return {
-        "primary": [_primary_output(forecast, evaluation)],
-        "downside": [
-            _immediate_risk(forecast),
-            _remembered_risk(
-                "bearish_turn_risk_rules_v2",
-                decision.get("individual_risk_score"),
-                decision,
-                "model.individualRisk",
+    return default_model_output_registry().build(
+        {
+            "forecast": forecast,
+            "chart_row": chart_row,
+            "evaluation": evaluation,
+            "decision": decision,
+        }
+    )
+
+
+def default_model_output_registry():
+    return _DEFAULT_MODEL_OUTPUT_REGISTRY
+
+
+def _default_registry():
+    registry = ModelOutputRegistry()
+    for group in (
+        ModelOutputGroup(
+            "primary",
+            "modelOutput.group.primary",
+            10,
+            "many",
+        ),
+        ModelOutputGroup(
+            "downside",
+            "modelOutput.group.downside",
+            20,
+            "many",
+        ),
+        ModelOutputGroup(
+            "bullish_structure",
+            "modelOutput.group.bullish",
+            30,
+            "many",
+        ),
+        ModelOutputGroup(
+            "decision",
+            "modelOutput.group.decision",
+            40,
+            "single",
+        ),
+    ):
+        registry.register_group(group)
+
+    def register(
+        key,
+        group,
+        order,
+        version,
+        kind,
+        lifecycle,
+        timing,
+        permission,
+        translation_prefix,
+        builder,
+        *,
+        version_resolver=None,
+    ):
+        registry.register_model(
+            ModelOutputDefinition(
+                key=key,
+                group=group,
+                order=order,
+                version=version,
+                kind=kind,
+                lifecycle=lifecycle,
+                timing=timing,
+                decision_permission=permission,
+                name_key=f"{translation_prefix}.name",
+                explanation_key=f"{translation_prefix}.explanation",
+                limitation_key=f"{translation_prefix}.limitation",
             ),
-            _remembered_risk(
-                "group_regime_risk_v1",
-                decision.get("group_risk_score"),
-                decision,
-                "model.groupRisk",
+            builder,
+            version_resolver=version_resolver,
+        )
+
+    register(
+        "ridge_direction_v1",
+        "primary",
+        10,
+        None,
+        "statistical_forecast",
+        "production",
+        "next_session_open",
+        "informational",
+        "model.ridge",
+        lambda context: _primary_output(
+            context["forecast"],
+            context["evaluation"],
+        ),
+        version_resolver=lambda context: context["forecast"].get(
+            "model_version"
+        ),
+    )
+    register(
+        "bearish_turn_immediate_v1",
+        "downside",
+        10,
+        "v1",
+        "rule_score",
+        "production",
+        "close_confirmed",
+        "veto_to_down",
+        "model.immediateRisk",
+        lambda context: _immediate_risk(context["forecast"]),
+    )
+    register(
+        "bearish_turn_risk_rules_v2",
+        "downside",
+        20,
+        "v2",
+        "remembered_state",
+        "production",
+        "close_confirmed",
+        "veto_to_down",
+        "model.individualRisk",
+        lambda context: _remembered_risk(
+            "bearish_turn_risk_rules_v2",
+            context["decision"].get("individual_risk_score"),
+            context["decision"],
+            "model.individualRisk",
+        ),
+    )
+    register(
+        "group_regime_risk_v1",
+        "downside",
+        30,
+        "v1",
+        "remembered_state",
+        "production",
+        "close_confirmed",
+        "advisory",
+        "model.groupRisk",
+        lambda context: _remembered_risk(
+            "group_regime_risk_v1",
+            context["decision"].get("group_risk_score"),
+            context["decision"],
+            "model.groupRisk",
+        ),
+    )
+    register(
+        "slow_decline_risk_v1",
+        "downside",
+        40,
+        "v1",
+        "remembered_state",
+        "production",
+        "close_confirmed",
+        "downgrade_to_neutral",
+        "model.slowDecline",
+        lambda context: _remembered_risk(
+            "slow_decline_risk_v1",
+            context["decision"].get("slow_decline_risk_score"),
+            context["decision"],
+            "model.slowDecline",
+        ),
+    )
+    register(
+        "high_level_distribution_risk_v1",
+        "downside",
+        50,
+        "v1",
+        "remembered_state",
+        "production",
+        "close_confirmed",
+        "veto_to_down",
+        "model.highLevelDistribution",
+        lambda context: _high_level_distribution_risk(
+            context["decision"]
+        ),
+    )
+    register(
+        "macro_risk",
+        "downside",
+        60,
+        None,
+        "remembered_state",
+        "planned",
+        "close_confirmed",
+        "advisory",
+        "model.macroRisk",
+        lambda context: _planned(
+            "macro_risk",
+            "remembered_state",
+            "model.macroRisk",
+        ),
+    )
+    register(
+        "intraday_order_flow",
+        "downside",
+        70,
+        None,
+        "rule_score",
+        "planned",
+        "intraday",
+        "advisory",
+        "model.intradayOrderFlow",
+        lambda context: _planned(
+            "intraday_order_flow",
+            "rule_score",
+            "model.intradayOrderFlow",
+            timing="intraday",
+        ),
+    )
+    register(
+        "bullish_structure_reversal_v1",
+        "bullish_structure",
+        10,
+        "v1",
+        "rule_score",
+        "production",
+        "close_confirmed",
+        "informational",
+        "model.structuralReversal",
+        lambda context: _structural_reversal(context["chart_row"]),
+    )
+    register(
+        "early_bullish_reversal_watch_v1",
+        "bullish_structure",
+        20,
+        "v1",
+        "rule_score",
+        "production",
+        "close_confirmed",
+        "advisory",
+        "model.earlyReversal",
+        lambda context: _early_reversal(context["chart_row"]),
+    )
+    for order, field, key, translation_prefix in (
+        (30, "strict_vcp", "strict_vcp", "model.strictVcp"),
+        (
+            40,
+            "tight_platform",
+            "tight_platform",
+            "model.tightPlatform",
+        ),
+    ):
+        register(
+            key,
+            "bullish_structure",
+            order,
+            "v1",
+            "shape_state",
+            "production",
+            "close_confirmed",
+            "informational",
+            translation_prefix,
+            lambda context, shape=field, model_key=key, prefix=(
+                translation_prefix
+            ): _shape_state(
+                context["chart_row"],
+                shape,
+                model_key,
+                prefix,
             ),
-            _remembered_risk(
-                "slow_decline_risk_v1",
-                decision.get("slow_decline_risk_score"),
-                decision,
-                "model.slowDecline",
-            ),
-            _high_level_distribution_risk(decision),
-            _planned("macro_risk", "remembered_state", "model.macroRisk"),
-            _planned(
-                "intraday_order_flow",
-                "rule_score",
-                "model.intradayOrderFlow",
-                timing="intraday",
-            ),
-        ],
-        "bullish_structure": [
-            _structural_reversal(chart_row),
-            _early_reversal(chart_row),
-            _shape_state(
-                chart_row,
-                "strict_vcp",
-                "strict_vcp",
-                "model.strictVcp",
-            ),
-            _shape_state(
-                chart_row,
-                "tight_platform",
-                "tight_platform",
-                "model.tightPlatform",
-            ),
-            _vcp_breakout(chart_row),
-            _pocket_pivot(chart_row),
-            _planned(
-                "demand_confirmation",
-                "rule_score",
-                "model.demandConfirmation",
-            ),
-        ],
-        "decision": _decision_output(decision),
-    }
+        )
+    register(
+        "vcp_breakout_confirmed_v1",
+        "bullish_structure",
+        50,
+        "v1",
+        "rule_event",
+        "production",
+        "close_confirmed",
+        "informational",
+        "model.vcpBreakout",
+        lambda context: _vcp_breakout(context["chart_row"]),
+    )
+    register(
+        "pocket_pivot_v1",
+        "bullish_structure",
+        60,
+        "v1",
+        "rule_event",
+        "production",
+        "close_confirmed",
+        "informational",
+        "model.pocketPivot",
+        lambda context: _pocket_pivot(context["chart_row"]),
+    )
+    register(
+        "demand_confirmation",
+        "bullish_structure",
+        70,
+        None,
+        "rule_score",
+        "planned",
+        "close_confirmed",
+        "advisory",
+        "model.demandConfirmation",
+        lambda context: _planned(
+            "demand_confirmation",
+            "rule_score",
+            "model.demandConfirmation",
+        ),
+    )
+    register(
+        "forecast_decision_policy",
+        "decision",
+        10,
+        "v2",
+        "decision_policy",
+        "production",
+        "next_session_open",
+        "final_policy",
+        "model.decisionPolicy",
+        lambda context: _decision_output(context["decision"]),
+        version_resolver=lambda context: (
+            context["decision"].get("policy_version") or "v2"
+        ),
+    )
+    return registry
 
 
 def _primary_output(forecast, evaluation):
@@ -542,18 +803,11 @@ def _planned(key, kind, translation_prefix, *, timing="close_confirmed"):
 
 
 def _identity(key, version, kind, lifecycle, status, timing, translation_prefix):
-    return {
-        "key": key,
-        "version": version,
-        "kind": kind,
-        "lifecycle": lifecycle,
-        "status": status,
-        "timing": timing,
-        "name_key": f"{translation_prefix}.name",
-        "explanation_key": f"{translation_prefix}.explanation",
-        "limitation_key": f"{translation_prefix}.limitation",
-    }
+    return {"status": status}
 
 
 def _mapping(value):
     return value if isinstance(value, Mapping) else {}
+
+
+_DEFAULT_MODEL_OUTPUT_REGISTRY = _default_registry()
