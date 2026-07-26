@@ -97,6 +97,59 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("top_risk", actual["all"])
         self.assertEqual(actual["persisted"], ["pocket_pivot"])
 
+    def test_chart_marker_layout_merges_same_lane_without_touching_forecast(self):
+        module_uri = (STATIC / "js/marker_layout.js").as_uri()
+        script = f"""
+            import {{ layoutChartMarkers }} from {json.dumps(module_uri)};
+            const result = layoutChartMarkers([
+              {{time: "2026-07-02", position: "belowBar", text: "A",
+                color: "blue", shape: "circle", priority: 10}},
+              {{time: "2026-07-02", position: "belowBar", text: "B",
+                color: "green", shape: "arrowUp", priority: 20}},
+              {{time: "2026-07-02", position: "belowBar", text: "B",
+                color: "green", shape: "arrowUp", priority: 20}},
+              {{time: "2026-07-02", position: "aboveBar", text: "C",
+                color: "yellow", shape: "square", priority: 5}},
+              {{time: "2026-07-02", position: "belowBar", text: "Forecast",
+                color: "cyan", shape: "arrowUp", priority: 100,
+                layoutGroup: "forecast"}},
+            ]);
+            console.log(JSON.stringify(result));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            json.loads(result.stdout),
+            [
+                {
+                    "time": "2026-07-02",
+                    "position": "aboveBar",
+                    "text": "C",
+                    "color": "yellow",
+                    "shape": "square",
+                },
+                {
+                    "time": "2026-07-02",
+                    "position": "belowBar",
+                    "text": "A · B",
+                    "color": "green",
+                    "shape": "arrowUp",
+                },
+                {
+                    "time": "2026-07-02",
+                    "position": "belowBar",
+                    "text": "Forecast",
+                    "color": "cyan",
+                    "shape": "arrowUp",
+                },
+            ],
+        )
+
     def test_page_has_workstation_regions_and_research_copy(self):
         html = HTML.read_text()
         for marker in (
@@ -2314,11 +2367,14 @@ class WebAssetTest(unittest.TestCase):
         )
         entry_markers = [
             marker for marker in actual["markers"]
-            if marker["text"] in {
-                "Strict VCP setup detected",
-                "VCP breakout confirmed",
-                "Pocket Pivot",
-            }
+            if any(
+                label in marker["text"]
+                for label in (
+                    "Strict VCP setup detected",
+                    "VCP breakout confirmed",
+                    "Pocket Pivot",
+                )
+            )
         ]
         self.assertEqual(
             entry_markers,
@@ -2335,14 +2391,7 @@ class WebAssetTest(unittest.TestCase):
                     "position": "belowBar",
                     "color": "#35c6a5",
                     "shape": "arrowUp",
-                    "text": "VCP breakout confirmed",
-                },
-                {
-                    "time": "2026-07-23",
-                    "position": "belowBar",
-                    "color": "#5cc8ff",
-                    "shape": "circle",
-                    "text": "Pocket Pivot",
+                    "text": "VCP breakout confirmed · Pocket Pivot",
                 },
             ],
         )
@@ -2366,14 +2415,11 @@ class WebAssetTest(unittest.TestCase):
             "发现严格 VCP 准备形态",
             [marker["text"] for marker in actual["zhMarkers"]],
         )
-        self.assertIn(
-            "VCP 向上突破已确认",
-            [marker["text"] for marker in actual["zhMarkers"]],
+        zh_marker_text = " | ".join(
+            marker["text"] for marker in actual["zhMarkers"]
         )
-        self.assertIn(
-            "Pocket Pivot 需求确认",
-            [marker["text"] for marker in actual["zhMarkers"]],
-        )
+        self.assertIn("VCP 向上突破已确认", zh_marker_text)
+        self.assertIn("Pocket Pivot 需求确认", zh_marker_text)
         self.assertEqual(
             next(line for line in actual["priceLineSeries"] if line[0] == "Descending resistance"),
             [
@@ -2569,15 +2615,14 @@ class WebAssetTest(unittest.TestCase):
             const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
             assert.deepEqual(markerTexts(), [
               '发现严格 VCP 准备形态',
-              'VCP 向上突破已确认',
-              'Pocket Pivot 需求确认',
+              'VCP 向上突破已确认 · Pocket Pivot 需求确认',
             ]);
             const rangeCallCount = visibleRanges.length;
             assert.deepEqual(
               controller.setMarkerLayers(['pocket_pivot', 'higher_low']),
               ['pocket_pivot', 'higher_low'],
             );
-            assert.deepEqual(markerTexts(), ['Pocket Pivot 需求确认', '更高低点']);
+            assert.deepEqual(markerTexts(), ['Pocket Pivot 需求确认 · 更高低点']);
             assert.equal(visibleRanges.length, rangeCallCount);
             controller.destroy();
         """
