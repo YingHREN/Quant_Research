@@ -438,6 +438,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(supply["lifecycle"], "production")
         self.assertEqual(supply["status"], "active")
         self.assertEqual(supply["score"], 62.0)
+        self.assertEqual(supply["threshold"], 50.0)
         self.assertEqual(supply["coverage"], 0.92)
         self.assertEqual(supply["supply_demand_state"], "two_way_contest")
         self.assertEqual(
@@ -456,6 +457,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(demand["lifecycle"], "production")
         self.assertEqual(demand["status"], "active")
         self.assertEqual(demand["score"], 71.0)
+        self.assertEqual(demand["threshold"], 50.0)
         self.assertEqual(demand["coverage"], 0.92)
         self.assertEqual(demand["supply_demand_state"], "two_way_contest")
         self.assertEqual(

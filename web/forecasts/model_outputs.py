@@ -11,6 +11,8 @@ from web.forecasts.model_output_registry import (
     ModelOutputRegistry,
 )
 
+SUPPLY_DEMAND_ACTIVE_THRESHOLD = 50.0
+
 
 def build_model_outputs(forecast, chart_row, evaluation):
     """Group one point-in-time forecast into semantic model families."""
@@ -568,7 +570,10 @@ def _supply_demand_score(
             "production",
             (
                 "active"
-                if available and float(score) >= 50.0
+                if (
+                    available
+                    and float(score) >= SUPPLY_DEMAND_ACTIVE_THRESHOLD
+                )
                 else ("inactive" if available else "unavailable")
             ),
             "close_confirmed",
@@ -576,6 +581,7 @@ def _supply_demand_score(
         ),
         "score": json_safe(score),
         "maximum_score": 100,
+        "threshold": SUPPLY_DEMAND_ACTIVE_THRESHOLD,
         "coverage": json_safe(coverage),
         "supply_demand_state": row.get(
             "supply_demand_state",

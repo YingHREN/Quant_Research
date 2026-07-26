@@ -161,6 +161,7 @@ const forecast = {
       ...identity("supply_pressure_v1", "model.supplyPressure.name", "rule_score"),
       score: 62,
       maximum_score: 100,
+      threshold: 50,
       coverage: 0.92,
       supply_demand_state: "two_way_contest",
       conditions: ["distribution_day", "failed_breakout"],
@@ -203,6 +204,7 @@ const forecast = {
       ...identity("demand_confirmation_v1", "model.demandConfirmation.name", "rule_score"),
       score: 71,
       maximum_score: 100,
+      threshold: 50,
       coverage: 0.92,
       supply_demand_state: "two_way_contest",
       conditions: ["buyer_absorption", "breakout_acceptance"],
@@ -278,6 +280,7 @@ assert.match(zh, /供给压力代理/);
 assert.match(zh, /需求确认代理/);
 assert.match(zh, /证据覆盖率 92/);
 assert.match(zh, /供需状态 多空争夺/);
+assert.match(zh, /供给压力代理[^]*阈值 50/);
 assert.match(zh, /收盘与成交量供给 30/);
 assert.match(zh, /需求参与度 27/);
 assert.match(zh, /宏观环境/);
@@ -312,6 +315,7 @@ assert.match(en, /Supply pressure proxy/);
 assert.match(en, /Demand confirmation proxy/);
 assert.match(en, /Evidence coverage 92/);
 assert.match(en, /Supply-demand state Two-way contest/);
+assert.match(en, /Supply pressure proxy[^]*Threshold 50/);
 assert.match(en, /Macro context/);
 assert.match(en, /Decision permission/);
 
