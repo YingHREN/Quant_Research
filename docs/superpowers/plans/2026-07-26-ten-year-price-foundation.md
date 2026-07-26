@@ -148,8 +148,9 @@ Run from the main checkout after code integration:
 
 ```bash
 source env.sh
+unset FINNHUB_API_KEY ALPHAVANTAGE_API_KEY
 PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
-  ./venv/bin/python build_local_db.py --backfill-years 10
+  ./venv/bin/python build_local_db.py --backfill-years 10 --workers 4
 ```
 
 - [ ] **Step 4: Audit the resulting coverage**

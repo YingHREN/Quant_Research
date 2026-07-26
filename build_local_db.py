@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import glob
 import os
 import sqlite3
@@ -120,6 +121,7 @@ def backfill(
     years: int = 10,
     tickers: Optional[Iterable[str]] = None,
     *,
+    workers: int = 4,
     connection=None,
     fetcher=None,
     asof: Optional[date] = None,
@@ -128,6 +130,8 @@ def backfill(
     sys.path.insert(0, BASE)
     if not isinstance(years, int) or years <= 0:
         raise ValueError("years must be a positive integer")
+    if not isinstance(workers, int) or not 1 <= workers <= 16:
+        raise ValueError("workers must be an integer between 1 and 16")
     if fetcher is None:
         from data.fetch import fetch as fetcher
     from data.fetch import PROVIDER
@@ -139,37 +143,71 @@ def backfill(
     requested_start = history_start(observation_day, years)
     succeeded = failed = warnings = below_floor = 0
     rate_limited = False
-    for ticker in symbols:
-        sd = fetcher(ticker, period=f"{years}y", use_cache=False)
-        if not sd.ok:
-            if "429" in (sd.error or ""):
-                print(
-                    f"  {ticker}: 429限流，停止回填（已完成{succeeded}只）",
-                    file=sys.stderr,
-                )
-                rate_limited = True
-                break
-            failed += 1
-            print(f"  {ticker}: {sd.error or '供应商返回失败'}", file=sys.stderr)
-            continue
+    period = f"{years}y"
+
+    def fetch_one(ticker):
         try:
-            coverage = persist_history(
-                con,
-                ticker,
-                sd.history,
-                provider=PROVIDER,
-                adjustment="split_dividend_adjusted",
-                requested_start=requested_start,
-                fetched_at=datetime.now(timezone.utc),
-            )
+            return ticker, fetcher(ticker, period=period, use_cache=False)
         except Exception as error:
-            failed += 1
-            print(f"  {ticker}: 数据校验失败: {error}", file=sys.stderr)
-            continue
-        succeeded += 1
-        warnings += coverage.quality_status == "warning"
-        below_floor += not coverage.meets_eight_year_floor
-        time.sleep(0.3)
+            return ticker, error
+
+    if workers == 1:
+        fetched = map(fetch_one, symbols)
+        executor = None
+    else:
+        executor = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="daily-history-fetch",
+        )
+        fetched = executor.map(fetch_one, symbols)
+    try:
+        for ticker, outcome in fetched:
+            if isinstance(outcome, BaseException):
+                text = str(outcome)
+                if "429" in text:
+                    print(
+                        f"  {ticker}: 429限流，停止回填（已完成{succeeded}只）",
+                        file=sys.stderr,
+                    )
+                    rate_limited = True
+                    break
+                failed += 1
+                print(f"  {ticker}: {text or '供应商请求失败'}", file=sys.stderr)
+                continue
+            sd = outcome
+            if not sd.ok:
+                if "429" in (sd.error or ""):
+                    print(
+                        f"  {ticker}: 429限流，停止回填（已完成{succeeded}只）",
+                        file=sys.stderr,
+                    )
+                    rate_limited = True
+                    break
+                failed += 1
+                print(f"  {ticker}: {sd.error or '供应商返回失败'}", file=sys.stderr)
+                continue
+            try:
+                coverage = persist_history(
+                    con,
+                    ticker,
+                    sd.history,
+                    provider=PROVIDER,
+                    adjustment="split_dividend_adjusted",
+                    requested_start=requested_start,
+                    fetched_at=datetime.now(timezone.utc),
+                )
+            except Exception as error:
+                failed += 1
+                print(f"  {ticker}: 数据校验失败: {error}", file=sys.stderr)
+                continue
+            succeeded += 1
+            warnings += coverage.quality_status == "warning"
+            below_floor += not coverage.meets_eight_year_floor
+            if workers == 1:
+                time.sleep(0.3)
+    finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=True)
     if owns_connection:
         con.close()
     summary = BackfillSummary(
@@ -190,7 +228,7 @@ def backfill(
 
 def update():
     """Fetch a one-year overlap and upsert corrections without truncating history."""
-    return backfill(years=1)
+    return backfill(years=1, workers=1)
 
 
 def print_coverage():
@@ -228,6 +266,12 @@ def main():
         type=int,
         help="联网回填指定年数的复权日线；DATA-001 默认使用10",
     )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="长期回填并发下载数（1～16，默认4；写库仍为单线程）",
+    )
     ap.add_argument("--coverage", action="store_true", help="打印长期数据覆盖和质量审计")
     args = ap.parse_args()
     selected = sum(
@@ -238,7 +282,7 @@ def main():
     if args.coverage:
         print_coverage()
     elif args.backfill_years is not None:
-        backfill(args.backfill_years)
+        backfill(args.backfill_years, workers=args.workers)
     elif args.update:
         update()
     else:

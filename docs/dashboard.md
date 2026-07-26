@@ -77,8 +77,9 @@ symbol plus the fixed market and sector references:
 
 ```bash
 source env.sh
+unset FINNHUB_API_KEY ALPHAVANTAGE_API_KEY
 PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache \
-  ./venv/bin/python build_local_db.py --backfill-years 10
+  ./venv/bin/python build_local_db.py --backfill-years 10 --workers 4
 
 ./venv/bin/python build_local_db.py --coverage
 ```
@@ -89,6 +90,10 @@ an append-only `price_ingestions` record and refreshes `price_coverage` with
 the provider, request start, UTC fetch time, source start/cutoff, source row
 count, deterministic response revision, persisted coverage, and basic quality
 counts. Existing `prices` readers remain unchanged.
+The explicit backfill downloads up to four symbols concurrently but validates
+and commits them on one thread. The ordinary dashboard update stays
+single-worker. Unsetting the optional fundamental-data keys prevents this
+price-only operation from spending quota on unrelated financial statements.
 
 The current Tiingo bars use split-and-dividend-adjusted OHLCV
 (`split_dividend_adjusted`). This is appropriate for return and technical
