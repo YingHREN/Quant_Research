@@ -72,28 +72,45 @@ class RunPressureDownsideStudyTest(unittest.TestCase):
         self.assertEqual(general["predicted_event"].tolist(), [True, True])
 
     def test_report_states_path_label_scope_and_blocked_authority(self):
-        metrics = pd.DataFrame(
-            [
+        metric_rows = []
+        for specification, balanced_accuracy in (
+            ("pressure_downside_logistic_v1", 0.65),
+            ("ridge_down", 0.51),
+            ("general_logistic_down", 0.54),
+            ("negative_baseline", 0.50),
+        ):
+            metric_rows.append(
                 {
                     "scope": "all",
                     "horizon": 5,
                     "regime_scope": "all_pressure",
                     "sample_mode": "overlapping",
-                    "specification": "pressure_downside_logistic_v1",
+                    "specification": specification,
                     "sample_count": 100,
                     "event_rate": 0.2,
                     "precision": 0.3,
                     "recall": 0.6,
                     "specificity": 0.7,
-                    "balanced_accuracy": 0.65,
+                    "balanced_accuracy": balanced_accuracy,
                     "roc_auc": 0.68,
                     "pr_auc": 0.31,
                     "brier_score": 0.17,
                     "comparable_fold_count": 4,
                     "fold_win_rate_vs_ridge_down": 0.75,
                 }
-            ]
+            )
+        metric_rows.append(
+            {
+                **metric_rows[0],
+                "horizon": 20,
+                "regime_scope": "acute_selloff",
+                "sample_mode": "non_overlapping",
+                "sample_count": 50,
+                "event_rate": 0.94,
+                "comparable_fold_count": 1,
+            }
         )
+        metrics = pd.DataFrame(metric_rows)
         manifest = {
             "latest_date": "2026-07-24",
             "start_date": "2018-01-01",
@@ -123,6 +140,11 @@ class RunPressureDownsideStudyTest(unittest.TestCase):
         self.assertIn("次日开盘", report)
         self.assertIn("不具备线上否决权", report)
         self.assertIn("38 只", report)
+        self.assertIn("同池核心对照", report)
+        self.assertIn("ridge_down", report)
+        self.assertIn("证据不足分层", report)
+        self.assertIn("20 日", report)
+        self.assertIn("急跌", report)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,22 @@
+{
+  "study_version": "pressure_downside_logistic_v1",
+  "label_version": "next_open_mae_v1",
+  "latest_date": "2026-07-24",
+  "start_date": "2018-01-01",
+  "ticker_count": 240,
+  "row_count": 447875,
+  "folds": 5,
+  "minimum_samples": 1000,
+  "minimum_fold_samples": 30,
+  "feature_count": 36,
+  "logistic_regularization_c": 0.1,
+  "feature_input_abs_cap": 1000000000000.0,
+  "logit_abs_cap": 35.0,
+  "prediction_rows": 1187864,
+  "decision": {
+    "eligible": false,
+    "metric_gate_passed": true,
+    "reasons": [],
+    "production_block_reason": "survivorship_and_point_in_time_classification_history_missing"
+  }
+}

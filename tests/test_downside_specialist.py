@@ -1,4 +1,5 @@
 import unittest
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -214,6 +215,29 @@ class DownsideSpecialistTest(unittest.TestCase):
                 selected["training_label_end_max"].nunique(),
                 1,
             )
+
+    def test_walk_forward_extreme_finite_features_emit_no_runtime_warning(self):
+        frame = specialist_frame()
+        signs = np.where(np.arange(len(frame)) % 2, -1.0, 1.0)
+        frame["feature"] = signs * (np.finfo(float).max / 4.0)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            predictions = walk_forward_downside_predictions(
+                frame,
+                horizon=5,
+                feature_columns=("feature",),
+                n_folds=4,
+                minimum_samples=30,
+            )
+
+        runtime = [
+            warning
+            for warning in caught
+            if issubclass(warning.category, RuntimeWarning)
+        ]
+        self.assertFalse(predictions.empty)
+        self.assertEqual(runtime, [])
 
     def test_walk_forward_rejects_uptrend_only_training_data(self):
         frame = specialist_frame()

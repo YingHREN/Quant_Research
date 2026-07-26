@@ -14,6 +14,9 @@ from research.market_direction_model import _training_only_design
 
 DOWNSIDE_THRESHOLDS = {5: -0.05, 20: -0.10}
 INDEX_NAMES = ("ticker", "observation_date")
+FEATURE_INPUT_ABS_CAP = 1.0e12
+LOGISTIC_REGULARIZATION_C = 0.1
+LOGIT_ABS_CAP = 35.0
 PRESSURE_REGIMES = frozenset(
     ("under_pressure", "correction", "acute_selloff")
 )
@@ -157,16 +160,16 @@ def walk_forward_downside_predictions(
         target = train[target_name].astype(int).to_numpy()
         if set(np.unique(target)) != {0, 1}:
             continue
-        x_train, x_test = _training_only_design(train, test, columns)
+        x_train, x_test = _specialist_design(train, test, columns)
         model = LogisticRegression(
+            C=LOGISTIC_REGULARIZATION_C,
             class_weight="balanced",
             max_iter=1_000,
             random_state=0,
             solver="liblinear",
         )
         model.fit(x_train, target)
-        positive_index = int(np.flatnonzero(model.classes_ == 1)[0])
-        score = model.predict_proba(x_test)[:, positive_index]
+        score = _stable_positive_probability(model, x_test)
         output.append(
             pd.DataFrame(
                 {
@@ -195,6 +198,51 @@ def walk_forward_downside_predictions(
     if not output:
         return _empty_prediction_frame()
     return pd.concat(output, ignore_index=True, sort=False)
+
+
+def _specialist_design(train, test, columns):
+    """Bound finite source values before the shared training-only transform."""
+    train_safe = train.copy(deep=False)
+    test_safe = test.copy(deep=False)
+    train_safe = train_safe.assign(
+        **{
+            column: pd.to_numeric(train[column], errors="coerce").clip(
+                -FEATURE_INPUT_ABS_CAP,
+                FEATURE_INPUT_ABS_CAP,
+            )
+            for column in columns
+        }
+    )
+    test_safe = test_safe.assign(
+        **{
+            column: pd.to_numeric(test[column], errors="coerce").clip(
+                -FEATURE_INPUT_ABS_CAP,
+                FEATURE_INPUT_ABS_CAP,
+            )
+            for column in columns
+        }
+    )
+    return _training_only_design(train_safe, test_safe, columns)
+
+
+def _stable_positive_probability(model, design):
+    """Return binary probabilities without allowing an unstable dot product."""
+    coefficients = np.asarray(model.coef_, dtype=float)
+    intercept = np.asarray(model.intercept_, dtype=float)
+    if (
+        coefficients.shape[0] != 1
+        or not np.isfinite(coefficients).all()
+        or not np.isfinite(intercept).all()
+    ):
+        raise RuntimeError("specialist Logistic produced invalid coefficients")
+    decision = np.sum(
+        np.asarray(design, dtype=float) * coefficients[0],
+        axis=1,
+    ) + intercept[0]
+    if not np.isfinite(decision).all():
+        raise RuntimeError("specialist Logistic produced invalid scores")
+    decision = np.clip(decision, -LOGIT_ABS_CAP, LOGIT_ABS_CAP)
+    return 1.0 / (1.0 + np.exp(-decision))
 
 
 def evaluate_downside_predictions(

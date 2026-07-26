@@ -10,6 +10,9 @@ import numpy as np
 import pandas as pd
 
 from research.downside_specialist import (
+    FEATURE_INPUT_ABS_CAP,
+    LOGISTIC_REGULARIZATION_C,
+    LOGIT_ABS_CAP,
     attach_next_open_mae_targets,
     downside_promotion_decision,
     evaluate_downside_predictions,
@@ -119,6 +122,25 @@ def render_pressure_downside_report(metrics, manifest, rule_reference=None):
     specialist = metrics.loc[
         metrics["specification"] == "pressure_downside_logistic_v1"
     ].copy()
+    comparison = metrics.loc[
+        (metrics["scope"] == "all")
+        & (metrics["regime_scope"] == "all_pressure")
+        & metrics["horizon"].isin((5, 20))
+    ].copy()
+    comparison_columns = (
+        "horizon",
+        "sample_mode",
+        "specification",
+        "sample_count",
+        "precision",
+        "recall",
+        "specificity",
+        "balanced_accuracy",
+    )
+    comparison = comparison.loc[
+        :,
+        [column for column in comparison_columns if column in comparison],
+    ]
     columns = (
         "scope",
         "horizon",
@@ -151,6 +173,27 @@ def render_pressure_downside_report(metrics, manifest, rule_reference=None):
         if not reasons
         else [f"- `{reason}`" for reason in reasons]
     )
+    sparse = specialist.loc[
+        (specialist["comparable_fold_count"] < 2)
+        | (specialist["event_rate"] < 0.10)
+        | (specialist["event_rate"] > 0.90)
+        | (specialist["sample_count"] < 200)
+    ]
+    sparse_lines = (
+        ["- 无。"]
+        if sparse.empty
+        else [
+            "- "
+            f"{_scope_label(row.scope)} / "
+            f"{int(row.horizon)} 日 / "
+            f"{_regime_label(row.regime_scope)} / "
+            f"{_sample_mode_label(row.sample_mode)}："
+            f"{int(row.sample_count)} 个样本、"
+            f"{int(row.comparable_fold_count)} 个可比较折、"
+            f"事件率 {row.event_rate:.1%}；不据此单独下结论。"
+            for row in sparse.itertuples()
+        ]
+    )
     return "\n".join(
         (
             "# 市场压力阶段向下风险专家",
@@ -172,6 +215,17 @@ def render_pressure_downside_report(metrics, manifest, rule_reference=None):
             "",
             *reason_lines,
             "",
+            "## 同池核心对照",
+            "",
+            "以下模型使用完全相同的测试行；Ridge/通用 Logistic 的二元输出"
+            "仅作为方向基线。",
+            "",
+            _markdown_table(comparison),
+            "",
+            "## 证据不足分层",
+            "",
+            *sparse_lines,
+            "",
             "## 专家分层指标",
             "",
             _markdown_table(specialist),
@@ -185,6 +239,31 @@ def render_pressure_downside_report(metrics, manifest, rule_reference=None):
             "",
         )
     )
+
+
+def _regime_label(value):
+    return {
+        "all_pressure": "全部压力阶段",
+        "under_pressure": "承压",
+        "correction": "修正",
+        "acute_selloff": "急跌",
+    }.get(str(value), str(value))
+
+
+def _scope_label(value):
+    return {
+        "all": "全部股票",
+        "semiconductor": "半导体",
+        "software": "软件",
+        "other": "其他",
+    }.get(str(value), str(value))
+
+
+def _sample_mode_label(value):
+    return {
+        "overlapping": "重叠样本",
+        "non_overlapping": "非重叠样本",
+    }.get(str(value), str(value))
 
 
 def _markdown_table(frame):
@@ -318,6 +397,9 @@ def main(argv=None):
         "minimum_samples": args.minimum_samples,
         "minimum_fold_samples": args.minimum_fold_samples,
         "feature_count": len(SPECIALIST_FEATURE_COLUMNS),
+        "logistic_regularization_c": LOGISTIC_REGULARIZATION_C,
+        "feature_input_abs_cap": FEATURE_INPUT_ABS_CAP,
+        "logit_abs_cap": LOGIT_ABS_CAP,
         "prediction_rows": len(predictions),
         "decision": decision,
     }
