@@ -475,7 +475,14 @@ class BuiltinFactorTest(unittest.TestCase):
         strict_vcp = registry.evaluate_one(by_key["strict_vcp"], ctx)
         platform = registry.evaluate_one(by_key["tight_platform"], ctx)
 
-        self.assertEqual(strict_vcp.raw_value["reject_reason"], "历史不足")
+        self.assertEqual(
+            strict_vcp.raw_value["reject_reason"],
+            "insufficient_history",
+        )
+        self.assertEqual(
+            strict_vcp.raw_value["rejection_reason_code"],
+            "insufficient_history",
+        )
         self.assertEqual(platform.raw_value["reason"], "历史不足")
         early = registry.evaluate_one(by_key["early_reversal_score"], ctx)
         self.assertEqual(early.raw_value, build_chart_rows(ctx)[-1]["early_reversal_score"])
@@ -539,8 +546,11 @@ class BuiltinFactorTest(unittest.TestCase):
         factors = {factor.key: factor for factor in registry.factors}
         ctx = context_from_history(price_history())
 
-        original = __import__("factors.compute", fromlist=["vcp_analysis"]).vcp_analysis
-        with patch("web.factors.builtin.vcp_analysis", wraps=original) as calculate:
+        original = __import__(
+            "research.vcp",
+            fromlist=["detect_vcp"],
+        ).detect_vcp
+        with patch("web.factors.builtin.detect_vcp", wraps=original) as calculate:
             registry.evaluate_one(factors["strict_vcp"], ctx)
             registry.evaluate_one(factors["legacy_score"], ctx)
 

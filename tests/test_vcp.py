@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.vcp import detect_vcp
+from research.vcp import detect_vcp, pattern_evidence
 from tests.helpers import make_ohlcv
 
 
@@ -44,6 +44,35 @@ def unconfirmed_tail_fixture():
 
 
 class VCPDetectorTest(unittest.TestCase):
+    def test_pattern_evidence_exposes_dated_factor_compatible_values(self):
+        evidence = pattern_evidence(detect_vcp(textbook_vcp_fixture()))
+
+        self.assertTrue(evidence["accepted"])
+        self.assertEqual(evidence["vcp_pivot"], evidence["pivot"])
+        self.assertIsNotNone(evidence["pivot_date"])
+        self.assertIsNotNone(evidence["base_start"])
+        self.assertGreaterEqual(evidence["n_contractions"], 2)
+        self.assertEqual(
+            len(evidence["contraction_legs"]),
+            evidence["n_contractions"],
+        )
+        self.assertLess(
+            evidence["contraction_legs"][0]["peak_date"],
+            evidence["contraction_legs"][0]["trough_date"],
+        )
+        self.assertIsNone(evidence["reject_reason"])
+
+    def test_pattern_evidence_preserves_typed_rejection_reason(self):
+        evidence = pattern_evidence(detect_vcp(monotonic_rally_fixture()))
+
+        self.assertFalse(evidence["accepted"])
+        self.assertIn(
+            evidence["reject_reason"],
+            {"monotonic_rally", "insufficient_swings"},
+        )
+        self.assertEqual(evidence["contractions"], [])
+        self.assertEqual(evidence["n_contractions"], 0)
+
     def test_decreasing_swings_return_dated_confirmed_legs(self):
         pattern = detect_vcp(textbook_vcp_fixture())
 

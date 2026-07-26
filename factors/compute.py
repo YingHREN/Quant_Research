@@ -108,20 +108,58 @@ def volume_stats(hist: pd.DataFrame) -> dict:
     }
 
 
+def pocket_pivot_evidence(hist: pd.DataFrame, lookback: int = 10) -> dict:
+    """Return causal Pocket Pivot evidence for the last session."""
+    empty = {
+        "available": False,
+        "active": False,
+        "lookback": lookback,
+        "current_volume": None,
+        "prior_down_volume": None,
+        "down_day_count": 0,
+        "reject_reason": "insufficient_history",
+    }
+    if lookback <= 0:
+        raise ValueError("lookback must be positive")
+    if len(hist) < lookback + 2:
+        return empty
+
+    close = hist["Close"].astype(float)
+    volume = hist["Volume"].astype(float)
+    current_volume = float(volume.iloc[-1])
+    comparison = hist.iloc[-(lookback + 1):-1]
+    previous_close = close.shift(1).loc[comparison.index]
+    down_days = comparison.loc[
+        comparison["Close"].astype(float) < previous_close
+    ]
+    down_count = int(len(down_days))
+    prior_down_volume = (
+        None
+        if down_days.empty
+        else float(down_days["Volume"].astype(float).max())
+    )
+    if float(close.iloc[-1]) <= float(close.iloc[-2]):
+        reason = "not_up_day"
+    elif down_days.empty:
+        reason = "no_down_days_in_window"
+    elif current_volume <= prior_down_volume:
+        reason = "volume_not_above_prior_down_days"
+    else:
+        reason = None
+    return {
+        "available": True,
+        "active": reason is None,
+        "lookback": lookback,
+        "current_volume": current_volume,
+        "prior_down_volume": prior_down_volume,
+        "down_day_count": down_count,
+        "reject_reason": reason,
+    }
+
+
 def pocket_pivot(hist: pd.DataFrame, lookback: int = 10) -> bool:
-    """当日上涨，且成交量 > 过去 lookback 日内所有下跌日的最大成交量。"""
-    if len(hist) < lookback + 1:
-        return False
-    c = hist["Close"]
-    v = hist["Volume"]
-    up_today = c.iloc[-1] > c.iloc[-2]
-    if not up_today:
-        return False
-    window = hist.iloc[-(lookback + 1):-1]
-    down_days = window[window["Close"] < window["Close"].shift(1)]
-    if down_days.empty:
-        return v.iloc[-1] > 0
-    return v.iloc[-1] > down_days["Volume"].max()
+    """Whether the last session satisfies the causal Pocket Pivot rule."""
+    return bool(pocket_pivot_evidence(hist, lookback)["active"])
 
 
 def _zigzag_pivots(prices: np.ndarray, pct: float = 5.0):

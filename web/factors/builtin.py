@@ -18,13 +18,13 @@ from factors.compute import (
     pocket_pivot,
     rs_rating,
     tight_platform,
-    vcp_analysis,
     volume_stats,
 )
 from research.momentum import momentum_features
 from research.early_reversal import build_early_reversal_rows
 from research.resistance import build_near_resistance_rows
 from research.reversal import build_reversal_rows
+from research.vcp import detect_vcp, pattern_evidence
 from run import market_uptrend
 from scoring.engine import evaluate
 from web.contracts import iso_date
@@ -67,7 +67,9 @@ def _vcp(context):
     return _cached(
         context,
         "strict_vcp",
-        lambda: _with_rejection_reason_code(vcp_analysis(context.history_asof())),
+        lambda: _with_rejection_reason_code(
+            pattern_evidence(detect_vcp(context.history_asof()))
+        ),
     )
 
 
@@ -167,6 +169,15 @@ _LEGACY_REJECTION_REASON_CODES = {
     "非横盘(净涨幅或效率比过高)": "not_sideways",
 }
 
+_CANONICAL_REJECTION_REASON_CODES = {
+    "insufficient_history",
+    "below_ma50",
+    "long_trend_not_rising",
+    "contractions_not_decreasing",
+    "monotonic_rally",
+    "insufficient_swings",
+}
+
 
 def _rejection_reason_code(reason):
     if reason in (None, ""):
@@ -174,6 +185,8 @@ def _rejection_reason_code(reason):
     exact = _LEGACY_REJECTION_REASON_CODES.get(str(reason))
     if exact:
         return exact
+    if str(reason) in _CANONICAL_REJECTION_REASON_CODES:
+        return str(reason)
     if str(reason).startswith("收缩腿未严格递减"):
         return "contractions_not_decreasing"
     if str(reason).startswith("区间宽度"):

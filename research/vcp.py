@@ -33,6 +33,83 @@ class VCPPattern:
     metrics: dict[str, float]
 
 
+def pattern_evidence(pattern: VCPPattern) -> dict:
+    """Return one JSON-ready, factor-compatible view of a VCP pattern."""
+
+    def date_text(value):
+        return None if value is None else pd.Timestamp(value).date().isoformat()
+
+    def leg_evidence(leg):
+        return {
+            "peak_date": date_text(leg.peak_date),
+            "trough_date": date_text(leg.trough_date),
+            "peak": float(leg.peak),
+            "trough": float(leg.trough),
+            "depth_pct": float(leg.depth_pct),
+            "mean_volume": float(leg.mean_volume),
+            "confirmed": bool(leg.confirmed),
+        }
+
+    legs = [leg_evidence(leg) for leg in pattern.legs]
+    pending = (
+        None
+        if pattern.pending_leg is None
+        else leg_evidence(pattern.pending_leg)
+    )
+    depths = [leg["depth_pct"] for leg in legs]
+    leg_volumes = [leg["mean_volume"] for leg in legs]
+    volume_ratio = pattern.metrics.get("volume_dryup_ratio")
+    terminal_range = pattern.metrics.get("terminal_range_pct")
+    base_depth = pattern.metrics.get("base_depth_pct")
+    distance = pattern.distance_to_pivot_pct
+    return {
+        "accepted": bool(pattern.accepted),
+        "stage": pattern.stage,
+        "asof_date": date_text(pattern.asof_date),
+        "base_start": date_text(pattern.base_start),
+        "base_end": date_text(pattern.base_end),
+        "pivot": (
+            None if pattern.pivot is None else float(pattern.pivot)
+        ),
+        "vcp_pivot": (
+            None if pattern.pivot is None else float(pattern.pivot)
+        ),
+        "pivot_date": date_text(pattern.pivot_date),
+        "distance_to_pivot_pct": (
+            None if distance is None else float(distance)
+        ),
+        "contractions": depths,
+        "contraction_legs": legs,
+        "n_contractions": len(legs),
+        "pending_leg": pending,
+        "is_decreasing": bool(pattern.accepted and len(legs) >= 2),
+        "vol_dryup": (
+            None if volume_ratio is None else float(volume_ratio) < 1.0
+        ),
+        "vola_contract": (
+            False
+            if terminal_range is None or base_depth is None
+            else float(terminal_range) < float(base_depth)
+        ),
+        "tightness": (
+            None if terminal_range is None else float(terminal_range)
+        ),
+        "leg_vols_decreasing": (
+            len(leg_volumes) >= 2
+            and all(
+                current >= following
+                for current, following in zip(
+                    leg_volumes[:-1],
+                    leg_volumes[1:],
+                )
+            )
+        ),
+        "is_extended": bool(distance is not None and distance > 5.0),
+        "reject_reason": pattern.reject_reason,
+        **{key: float(value) for key, value in pattern.metrics.items()},
+    }
+
+
 def _rejected(history: pd.DataFrame, reason: str) -> VCPPattern:
     asof = pd.Timestamp(history.index[-1])
     return VCPPattern(

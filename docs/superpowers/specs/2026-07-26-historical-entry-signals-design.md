@@ -83,8 +83,9 @@ exceed the maximum volume among down days in the previous 10 complete
 sessions. A down day is a session whose close is below its preceding
 session’s close.
 
-The signal is unavailable with fewer than 11 complete sessions. If the prior
-10-session window contains no down day, it is inactive with
+The signal is unavailable with fewer than 12 indexed sessions because the
+first of the 10 comparison sessions also needs its preceding close. If the
+prior 10-session window contains no down day, it is inactive with
 `no_down_days_in_window`; an arbitrary up day must never become a Pocket
 Pivot merely because the comparison set is empty.
 
