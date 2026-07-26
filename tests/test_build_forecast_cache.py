@@ -82,11 +82,11 @@ class BuildForecastCacheTest(unittest.TestCase):
                 ("list_summaries",),
                 (
                     "load_universe_histories",
-                    pd.Timestamp("2026-07-24"),
+                    pd.Timestamp("2026-07-23"),
                 ),
                 (
                     "load_universe_histories",
-                    pd.Timestamp("2026-07-23"),
+                    pd.Timestamp("2026-07-24"),
                 ),
             ],
         )
@@ -94,16 +94,16 @@ class BuildForecastCacheTest(unittest.TestCase):
         self.assertEqual(
             service.prewarm.call_args_list,
             [
-                mock.call({"AAA-2026-07-24": history}),
                 mock.call({"AAA-2026-07-23": history}),
+                mock.call({"AAA-2026-07-24": history}),
             ],
         )
         payload = json.loads(output.getvalue())
         self.assertEqual(payload["asof"], "2026-07-24")
         self.assertEqual(payload["row_count"], 123)
         self.assertEqual(payload["cache_path"], str(cache))
-        self.assertEqual(payload["cohorts"][0]["asof"], "2026-07-24")
-        self.assertEqual(payload["cohorts"][1]["asof"], "2026-07-23")
+        self.assertEqual(payload["cohorts"][0]["asof"], "2026-07-23")
+        self.assertEqual(payload["cohorts"][1]["asof"], "2026-07-24")
         self.assertGreaterEqual(payload["elapsed_seconds"], 0)
 
     def test_main_returns_nonzero_with_safe_error(self):
