@@ -109,7 +109,7 @@ rangeButton.dataset.i18n = "chart.range.1y";
 const markerLayerKeys = [
   "strict_vcp", "vcp_breakout", "pocket_pivot", "tight_platform",
   "structure_reversal", "early_reversal", "prior_high_breakout",
-  "trendline_breakout", "higher_low",
+  "trendline_breakout", "higher_low", "top_risk",
 ];
 const markerLayerControls = markerLayerKeys.map((key) => {
   const control = new Element("input");
@@ -286,7 +286,13 @@ const stock = {
       rejection_reason_code: "insufficient_history",
     },
     key_levels: { strict_vcp_pivot: 103 },
-    annotations: [{ time: row.time, type: "strict_vcp", label: "Strict VCP" }],
+    annotations: [
+      { time: row.time, type: "strict_vcp", label: "Strict VCP" },
+      { time: row.time, type: "top_risk_watch", label: "Top downside risk watch" },
+      { time: row.time, type: "top_risk_high", label: "Top downside risk high" },
+      { time: row.time, type: "top_risk_confirmed", label: "Top downside risk confirmed" },
+      { time: row.time, type: "top_risk_recovery", label: "Top downside risk cleared" },
+    ],
   },
   factors: [{
     key: "close_vs_ema20_pct", label: "Close vs EMA20", group: "trend", overview: true,
@@ -515,12 +521,33 @@ if (mode === "success") {
     JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
     ["pocket_pivot"],
   );
+  pocketControl.checked = false;
+  pocketControl.dispatch("change");
+  const topRiskControl = markerLayerControls.find(
+    (control) => control.dataset.markerLayer === "top_risk",
+  );
+  topRiskControl.checked = true;
+  topRiskControl.dispatch("change");
+  assert.deepEqual(markerTexts(), [
+    "顶部向下风险观察",
+    "顶部向下高风险",
+    "顶部向下风险确认",
+    "顶部向下风险解除",
+    "预测起点 · 下跌",
+  ]);
   enButton.dispatch("click");
   assert.deepEqual(
     JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
-    ["pocket_pivot"],
+    ["top_risk"],
   );
-  assert.equal(elements.get("marker-layer-count").textContent, "1/9 model layers shown");
+  assert.deepEqual(markerTexts(), [
+    "Top downside risk watch",
+    "Top downside high risk",
+    "Top downside risk confirmed",
+    "Top downside risk cleared",
+    "Forecast start · Down",
+  ]);
+  assert.equal(elements.get("marker-layer-count").textContent, "1/10 model layers shown");
   console.log(JSON.stringify({
     stored: JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
     markerCount: elements.get("marker-layer-count").textContent,

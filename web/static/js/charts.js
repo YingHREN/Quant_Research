@@ -38,6 +38,8 @@ const COLORS = Object.freeze({
   platformPivot: "#f472b6",
   trendline: "#ff8ccf",
   reversal: "#f7d154",
+  warning: "#f7d154",
+  topRiskHigh: "#fb923c",
   forecast: "#7dd3fc",
   volumeMa20: "#5cc8ff",
   volumeRatio: "#f2bd5d",
@@ -59,6 +61,18 @@ const ENTRY_MARKER_STYLES = Object.freeze({
   tight_platform: Object.freeze({
     position: "belowBar", shape: "arrowUp", color: COLORS.platformPivot,
   }),
+  top_risk_watch: Object.freeze({
+    position: "aboveBar", shape: "circle", color: COLORS.warning,
+  }),
+  top_risk_high: Object.freeze({
+    position: "aboveBar", shape: "arrowDown", color: COLORS.topRiskHigh,
+  }),
+  top_risk_confirmed: Object.freeze({
+    position: "aboveBar", shape: "arrowDown", color: COLORS.down,
+  }),
+  top_risk_recovery: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.up,
+  }),
 });
 
 const ENTRY_MARKER_LAYERS = Object.freeze({
@@ -67,6 +81,10 @@ const ENTRY_MARKER_LAYERS = Object.freeze({
   vcp_breakout_confirmed: "vcp_breakout",
   pocket_pivot: "pocket_pivot",
   tight_platform: "tight_platform",
+  top_risk_watch: "top_risk",
+  top_risk_high: "top_risk",
+  top_risk_confirmed: "top_risk",
+  top_risk_recovery: "top_risk",
 });
 
 function finite(value) {

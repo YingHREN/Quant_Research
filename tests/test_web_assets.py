@@ -67,7 +67,8 @@ class WebAssetTest(unittest.TestCase):
             actual["core"],
             ["strict_vcp", "vcp_breakout", "pocket_pivot"],
         )
-        self.assertEqual(len(actual["all"]), 9)
+        self.assertEqual(len(actual["all"]), 10)
+        self.assertIn("top_risk", actual["all"])
         self.assertEqual(actual["persisted"], ["pocket_pivot"])
 
     def test_page_has_workstation_regions_and_research_copy(self):
@@ -110,6 +111,7 @@ class WebAssetTest(unittest.TestCase):
             "prior_high_breakout",
             "trendline_breakout",
             "higher_low",
+            "top_risk",
         ):
             self.assertIn(f'data-marker-layer="{key}"', html)
         for preset in ("core", "all", "none"):
@@ -117,8 +119,8 @@ class WebAssetTest(unittest.TestCase):
 
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
-        self.assertEqual(actual["stored"], ["pocket_pivot"])
-        self.assertEqual(actual["markerCount"], "1/9 model layers shown")
+        self.assertEqual(actual["stored"], ["top_risk"])
+        self.assertEqual(actual["markerCount"], "1/10 model layers shown")
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
