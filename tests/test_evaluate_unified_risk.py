@@ -7,6 +7,8 @@ from pandas.testing import assert_frame_equal
 from research.evaluate_unified_risk import (
     binary_metrics,
     build_evaluation_frame,
+    evaluation_rows,
+    evaluation_rows_by_scope,
 )
 
 
@@ -73,6 +75,85 @@ class UnifiedRiskEvaluationTest(unittest.TestCase):
             after.loc[before.index, score_columns],
             before.loc[:, score_columns],
         )
+
+    def test_outcomes_use_next_session_open_as_executable_entry(self):
+        dates = pd.bdate_range("2026-01-02", periods=8)
+        close = np.arange(100.0, 108.0)
+        source = pd.DataFrame(
+            {
+                "Open": close + 10.0,
+                "High": close + 12.0,
+                "Low": close + 8.0,
+                "Close": close,
+                "Volume": 1_000_000.0,
+            },
+            index=dates,
+        )
+        index = pd.MultiIndex.from_product(
+            (("MU",), dates),
+            names=("ticker", "observation_date"),
+        )
+        context = pd.DataFrame(
+            {
+                "individual_risk_score": 0.0,
+                "group_risk_score": 0.0,
+                "slow_decline_risk_score": 0.0,
+            },
+            index=index,
+        )
+
+        result = build_evaluation_frame(
+            {"MU": source},
+            context=context,
+            horizon=5,
+        )
+
+        first = result.iloc[0]
+        self.assertAlmostEqual(first["future_return"], 105.0 / 111.0 - 1.0)
+        self.assertAlmostEqual(first["future_mae"], 109.0 / 111.0 - 1.0)
+
+    def test_stratified_metrics_separate_semiconductor_and_software(self):
+        index = pd.MultiIndex.from_tuples(
+            (("MU", pd.Timestamp("2026-01-02")),
+             ("ADBE", pd.Timestamp("2026-01-02"))),
+            names=("ticker", "observation_date"),
+        )
+        frame = pd.DataFrame(
+            {
+                "individual_risk_score": [40.0, 10.0],
+                "group_risk_score": [70.0, 20.0],
+                "slow_decline_risk_score": [20.0, 80.0],
+                "policy_high": [True, True],
+                "future_return": [-0.10, -0.08],
+                "future_mae": [-0.12, -0.11],
+            },
+            index=index,
+        )
+
+        metrics = evaluation_rows_by_scope(frame, adverse_threshold=-0.05)
+
+        self.assertEqual(
+            set(metrics["scope"]),
+            {"all", "semiconductor", "software"},
+        )
+
+    def test_missing_source_score_is_excluded_not_counted_as_low_risk(self):
+        frame = pd.DataFrame(
+            {
+                "individual_risk_score": [40.0, np.nan],
+                "group_risk_score": [np.nan, np.nan],
+                "slow_decline_risk_score": [np.nan, np.nan],
+                "policy_high": [True, False],
+                "future_return": [-0.10, -0.10],
+                "future_mae": [-0.12, -0.12],
+            }
+        )
+
+        metrics = evaluation_rows(frame)
+
+        self.assertEqual(metrics.loc["individual", "sample_count"], 1)
+        self.assertEqual(metrics.loc["individual", "coverage"], 0.5)
+        self.assertEqual(metrics.loc["group", "sample_count"], 0)
 
 
 if __name__ == "__main__":

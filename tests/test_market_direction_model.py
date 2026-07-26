@@ -150,9 +150,13 @@ class MarketDirectionModelTest(unittest.TestCase):
             feature_columns=("stock", "market", "sector"),
             n_folds=4,
             minimum_samples=30,
+            specification="ridge_decay_market",
         )
 
-        self.assertEqual(set(predictions["specification"]), {"ridge_baseline"})
+        self.assertEqual(
+            set(predictions["specification"]),
+            {"ridge_decay_market"},
+        )
         self.assertTrue(predictions["predicted_direction"].notna().all())
         self.assertTrue(
             (

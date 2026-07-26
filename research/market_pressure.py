@@ -109,14 +109,20 @@ def _history(source: pd.DataFrame) -> pd.DataFrame:
     values = result.to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("history values must be finite")
-    if (
-        result["High"]
-        < result[["Open", "Close", "Low"]].max(axis=1)
-    ).any():
+    expected_high = result[["Open", "Close", "Low"]].max(axis=1)
+    expected_low = result[["Open", "Close", "High"]].min(axis=1)
+    scale = result[["Open", "High", "Low", "Close"]].abs().max(axis=1)
+    tolerance = scale.clip(lower=1.0) * 1e-12
+    if (result["High"] < expected_high - tolerance).any():
         raise ValueError("history high is inconsistent")
-    if (
-        result["Low"]
-        > result[["Open", "Close", "High"]].min(axis=1)
-    ).any():
+    if (result["Low"] > expected_low + tolerance).any():
         raise ValueError("history low is inconsistent")
+    result["High"] = result["High"].where(
+        result["High"] >= expected_high,
+        expected_high,
+    )
+    result["Low"] = result["Low"].where(
+        result["Low"] <= expected_low,
+        expected_low,
+    )
     return result.astype(float)
