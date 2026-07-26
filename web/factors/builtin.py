@@ -406,7 +406,7 @@ def build_default_registry():
                       percentile_eligible=False),
         BuiltinFactor("volume_ratio", "Volume ratio", "volume", "higher",
                       "Current volume divided by its point-in-time 20-session average.",
-                      _chart_value("volume_ratio"), _ratio,
+                      _volume_ratio, _ratio,
                       methodology="Session volume divided by the trailing 20-session simple average volume."),
         BuiltinFactor("atr20_pct", "ATR20", "risk", "lower",
                       "Twenty-session average true range as a percentage of close.",
@@ -449,11 +449,33 @@ def build_default_registry():
 
 
 def _distance_from(context, average_key):
-    rows = build_chart_rows(context)
-    if not rows:
+    history = context.history_asof()
+    if history.empty:
         return None
-    close, average = rows[-1]["close"], rows[-1][average_key]
-    return None if average in (None, 0) else (close / average - 1) * 100
+    close = history["Close"].astype(float)
+    if average_key == "ema20":
+        average = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    elif average_key == "sma50":
+        average = close.rolling(50).mean().iloc[-1]
+    elif average_key == "sma200":
+        average = close.rolling(200).mean().iloc[-1]
+    else:
+        raise ValueError(f"Unsupported moving average: {average_key}")
+    average = _optional_float(average)
+    return (
+        None
+        if average in (None, 0)
+        else (float(close.iloc[-1]) / average - 1) * 100
+    )
+
+
+def _volume_ratio(context):
+    history = context.history_asof()
+    if history.empty:
+        return None
+    volume = history["Volume"].astype(float)
+    average = _optional_float(volume.rolling(20).mean().iloc[-1])
+    return None if average in (None, 0) else float(volume.iloc[-1]) / average
 
 
 def _atr_percent(context):

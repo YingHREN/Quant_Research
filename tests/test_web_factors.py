@@ -371,6 +371,48 @@ class BuiltinFactorTest(unittest.TestCase):
                 key,
             )
 
+    def test_directional_peer_factors_do_not_build_chart_rows(self):
+        registry = build_default_registry()
+        factors = {factor.key: factor for factor in registry.factors}
+        history = price_history(260)
+        ctx = context_from_history(history)
+        asof = history.loc[history.index <= ctx.observation_date]
+        close = asof["Close"].astype(float)
+        volume = asof["Volume"].astype(float)
+        expected = {
+            "close_vs_ema20_pct": (
+                close.iloc[-1]
+                / close.ewm(span=20, adjust=False).mean().iloc[-1]
+                - 1
+            )
+            * 100,
+            "close_vs_sma50_pct": (
+                close.iloc[-1] / close.rolling(50).mean().iloc[-1] - 1
+            )
+            * 100,
+            "close_vs_sma200_pct": (
+                close.iloc[-1] / close.rolling(200).mean().iloc[-1] - 1
+            )
+            * 100,
+            "volume_ratio": (
+                volume.iloc[-1] / volume.rolling(20).mean().iloc[-1]
+            ),
+        }
+
+        with patch(
+            "web.factors.builtin.build_chart_rows",
+            side_effect=AssertionError("directional peer factor rebuilt the chart"),
+        ):
+            actual = {
+                key: registry.evaluate_one(factors[key], ctx)
+                for key in expected
+            }
+
+        for key, expected_value in expected.items():
+            with self.subTest(factor=key):
+                self.assertFalse(actual[key].missing)
+                self.assertAlmostEqual(actual[key].raw_value, expected_value)
+
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()
         self.assertEqual(
