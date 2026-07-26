@@ -5,13 +5,15 @@ import hashlib
 
 import pandas as pd
 
+from research.entry_signals import (
+    BREAKOUT_VOLUME_RATIO,
+    MAX_EVENT_LIFETIME,
+)
 from research.vcp import VCPPattern, detect_vcp
 
 
 NEAR_PIVOT_PCT = 5.0
-BREAKOUT_VOLUME_RATIO = 1.4
 INVALIDATION_ATR = 1.0
-MAX_EVENT_LIFETIME = 60
 
 
 @dataclass(frozen=True)
