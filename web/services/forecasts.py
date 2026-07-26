@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from copy import deepcopy
 from hashlib import blake2b
+import json
 import threading
 
 import pandas as pd
@@ -22,10 +23,16 @@ from web.forecasts.decision import (
     build_forecast_risk_context,
 )
 from web.forecasts.ridge import MODEL_KEY, MODEL_VERSION, RidgeForecastProvider
+from web.services.forecast_artifacts import (
+    ForecastArtifact,
+    ForecastArtifactIdentity,
+)
 
 
 DEFAULT_CACHE_SIZE = 16
 DEFAULT_MAX_FORECAST_DATES = 1
+FORECAST_FEATURE_VERSION = "ridge-features-v1"
+FORECAST_RISK_CONTEXT_VERSION = "forecast-risk-context-v1"
 
 
 class ForecastRevisionChanged(RuntimeError):
@@ -58,6 +65,7 @@ class ForecastService:
         decision_policy=None,
         max_cache_size=DEFAULT_CACHE_SIZE,
         max_forecast_dates=DEFAULT_MAX_FORECAST_DATES,
+        artifact_store=None,
     ):
         if isinstance(max_cache_size, bool) or not isinstance(max_cache_size, int):
             raise TypeError("max_cache_size must be an integer")
@@ -93,6 +101,12 @@ class ForecastService:
         self._decision_policy = policy
         self._max_cache_size = max_cache_size
         self._max_forecast_dates = max_forecast_dates
+        if artifact_store is not None and (
+            not callable(getattr(artifact_store, "load", None))
+            or not callable(getattr(artifact_store, "save", None))
+        ):
+            raise TypeError("artifact_store must expose load() and save()")
+        self._artifact_store = artifact_store
         self._cache = OrderedDict()
         self._database_revision = 0
         self._artifact_revision = None
@@ -125,13 +139,7 @@ class ForecastService:
         last_date = dates[-1] if dates else None
         coverage, fingerprints = _history_snapshot_metadata(histories)
         with self._lock:
-            if (
-                expected_revision is not None
-                and expected_revision != self._database_revision
-            ):
-                raise ForecastRevisionChanged(
-                    "forecast revision changed after the market-data snapshot"
-                )
+            self._check_expected_revision(expected_revision)
             _frame, provider, evaluations, risk_context = self._revision_artifacts(
                 histories,
                 coverage,
@@ -161,6 +169,28 @@ class ForecastService:
             while len(self._cache) > self._max_cache_size:
                 self._cache.popitem(last=False)
             return deepcopy(bundle)
+
+    def prewarm(self, histories, *, expected_revision=None):
+        """Build or restore revision-wide artifacts without forecasting a ticker."""
+        if not isinstance(histories, dict):
+            try:
+                histories = dict(histories)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("histories must be a mapping") from exc
+        coverage, fingerprints = _history_snapshot_metadata(histories)
+        with self._lock:
+            self._check_expected_revision(expected_revision)
+            frame, _provider, evaluations, risk_context = self._revision_artifacts(
+                histories,
+                coverage,
+                fingerprints,
+            )
+            return {
+                "database_revision": self._database_revision,
+                "row_count": len(frame),
+                "risk_row_count": len(risk_context),
+                "evaluation_horizons": sorted(evaluations),
+            }
 
     def invalidate(self):
         """Advance the database revision and discard only completed bundles."""
@@ -247,6 +277,26 @@ class ForecastService:
             )
         if richer_snapshot or corrected_snapshot:
             self._cache.clear()
+        identity = self._artifact_identity()
+        market_signature = _market_signature(coverage, fingerprints)
+        artifact = self._load_persistent_artifact(identity, market_signature)
+        if artifact is not None:
+            provider = self._provider_factory(artifact.frame)
+            _validate_provider_identity(provider, self.model_key, self.model_version)
+            self._publish_artifacts(
+                artifact.frame,
+                provider,
+                artifact.evaluations,
+                artifact.risk_context,
+                coverage,
+                fingerprints,
+            )
+            return (
+                artifact.frame,
+                provider,
+                artifact.evaluations,
+                artifact.risk_context,
+            )
         frame = attach_forward_targets(build_feature_frame(histories))
         provider = self._provider_factory(frame)
         risk_context = build_forecast_risk_context(histories)
@@ -262,6 +312,72 @@ class ForecastService:
                 str(horizon): self._evaluator(frame, horizon, provider).to_dict()
                 for horizon in SUPPORTED_HORIZONS
             }
+        self._publish_artifacts(
+            frame,
+            provider,
+            evaluations,
+            risk_context,
+            coverage,
+            fingerprints,
+        )
+        self._save_persistent_artifact(
+            identity,
+            market_signature,
+            ForecastArtifact(
+                frame=frame,
+                risk_context=risk_context,
+                evaluations=evaluations,
+                coverage=coverage,
+                fingerprints=fingerprints,
+            ),
+        )
+        return frame, provider, evaluations, risk_context
+
+    def _check_expected_revision(self, expected_revision):
+        if (
+            expected_revision is not None
+            and expected_revision != self._database_revision
+        ):
+            raise ForecastRevisionChanged(
+                "forecast revision changed after the market-data snapshot"
+            )
+
+    def _artifact_identity(self):
+        return ForecastArtifactIdentity(
+            model_key=self.model_key,
+            model_version=self.model_version,
+            feature_version=FORECAST_FEATURE_VERSION,
+            risk_context_version=FORECAST_RISK_CONTEXT_VERSION,
+        )
+
+    def _load_persistent_artifact(self, identity, market_signature):
+        if self._artifact_store is None:
+            return None
+        try:
+            artifact = self._artifact_store.load(identity, market_signature)
+        except Exception:
+            return None
+        return artifact
+
+    def _save_persistent_artifact(self, identity, market_signature, artifact):
+        if self._artifact_store is None:
+            return False
+        try:
+            return bool(
+                self._artifact_store.save(identity, market_signature, artifact)
+            )
+        except Exception:
+            return False
+
+    def _publish_artifacts(
+        self,
+        frame,
+        provider,
+        evaluations,
+        risk_context,
+        coverage,
+        fingerprints,
+    ):
         self._artifact_revision = self._database_revision
         self._artifact_frame = frame
         self._artifact_provider = provider
@@ -269,7 +385,6 @@ class ForecastService:
         self._artifact_risk_context = risk_context
         self._artifact_coverage = coverage
         self._artifact_fingerprints = fingerprints
-        return frame, provider, evaluations, risk_context
 
 
 def _point_in_time_risk_row(risk_context, ticker, asof_date):
@@ -371,6 +486,32 @@ def _history_snapshot_metadata(histories):
         )
         fingerprints[ticker_key] = digest.digest()
     return coverage, fingerprints
+
+
+def _market_signature(coverage, fingerprints):
+    canonical = [
+        (
+            ticker,
+            int(coverage[ticker][0]),
+            (
+                None
+                if coverage[ticker][1] is None
+                else pd.Timestamp(coverage[ticker][1]).isoformat()
+            ),
+            (
+                None
+                if fingerprints.get(ticker) is None
+                else bytes(fingerprints[ticker]).hex()
+            ),
+        )
+        for ticker in sorted(coverage)
+    ]
+    payload = json.dumps(
+        canonical,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return blake2b(payload, digest_size=32).hexdigest()
 
 
 def _coverage_extends(incoming, cached):

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
@@ -17,6 +18,7 @@ from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
 from web.forecasts.dataset import build_feature_frame
 from web.services.forecasts import ForecastRevisionChanged, ForecastService
+from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.market_data import (
     InvalidTicker,
     MarketDataUnavailable,
@@ -1597,6 +1599,126 @@ class ForecastServiceTest(unittest.TestCase):
 
         self.assertEqual(builder.call_count, 2)
         self.assertEqual(len(factory.providers), 2)
+
+    def test_new_service_restores_persistent_revision_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            first_service = ForecastService(artifact_store=store)
+            second_service = ForecastService(artifact_store=store)
+
+            with mock.patch(
+                "web.services.forecasts.build_feature_frame",
+                wraps=build_feature_frame,
+            ) as feature_builder, mock.patch(
+                "web.services.forecasts.build_forecast_risk_context",
+                wraps=__import__(
+                    "web.forecasts.decision",
+                    fromlist=["build_forecast_risk_context"],
+                ).build_forecast_risk_context,
+            ) as risk_builder:
+                first = first_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                )
+                second = second_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                )
+
+            self.assertEqual(first, second)
+            self.assertEqual(feature_builder.call_count, 1)
+            self.assertEqual(risk_builder.call_count, 1)
+            self.assertEqual(store.entry_count(), 1)
+            self.assertIsNot(
+                first_service._artifact_provider,
+                second_service._artifact_provider,
+            )
+
+    def test_persistent_artifact_misses_for_history_and_version_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db",
+                max_entries=8,
+            )
+            corrected = {
+                ticker: history.copy(deep=True)
+                for ticker, history in self.histories.items()
+            }
+            corrected["AAA"].iloc[
+                -5,
+                corrected["AAA"].columns.get_loc("Close"),
+            ] += 0.25
+
+            with mock.patch(
+                "web.services.forecasts.build_feature_frame",
+                wraps=build_feature_frame,
+            ) as builder:
+                ForecastService(artifact_store=store).build(
+                    "AAA", self.chart_dates, self.histories
+                )
+                ForecastService(artifact_store=store).build(
+                    "AAA", self.chart_dates, corrected
+                )
+                with mock.patch(
+                    "web.services.forecasts.FORECAST_FEATURE_VERSION",
+                    "ridge-features-v2",
+                ):
+                    ForecastService(artifact_store=store).build(
+                        "AAA", self.chart_dates, self.histories
+                    )
+                with mock.patch(
+                    "web.services.forecasts.FORECAST_RISK_CONTEXT_VERSION",
+                    "forecast-risk-context-v2",
+                ):
+                    ForecastService(artifact_store=store).build(
+                        "AAA", self.chart_dates, self.histories
+                    )
+
+            self.assertEqual(builder.call_count, 4)
+
+    def test_prewarm_persists_without_forecasting_and_store_failures_are_safe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            service = ForecastService(artifact_store=store)
+
+            summary = service.prewarm(self.histories)
+
+            self.assertGreater(summary["row_count"], 0)
+            self.assertEqual(summary["database_revision"], 0)
+            self.assertEqual(store.entry_count(), 1)
+            with mock.patch(
+                "web.services.forecasts.build_feature_frame",
+                side_effect=AssertionError("persistent hit rebuilt features"),
+            ), mock.patch(
+                "web.services.forecasts.build_forecast_risk_context",
+                side_effect=AssertionError("persistent hit rebuilt risk"),
+            ):
+                payload = ForecastService(artifact_store=store).build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                )
+            self.assertEqual(payload["forecasts"]["model"]["status"], "available")
+
+        class FailingStore:
+            def load(self, identity, market_signature):
+                return None
+
+            def save(self, identity, market_signature, artifact):
+                return False
+
+        payload = ForecastService(artifact_store=FailingStore()).build(
+            "AAA",
+            self.chart_dates,
+            self.histories,
+        )
+        self.assertEqual(payload["forecasts"]["model"]["status"], "available")
 
     def test_applies_point_in_time_risk_context_to_every_available_forecast(self):
         factory = FakeForecastFactory()
