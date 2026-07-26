@@ -93,7 +93,10 @@ const ids = [
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
   "marker-layer-count",
 ];
-const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+const activeIds = mode === "missing-top-risk-element"
+  ? ids.filter((id) => id !== "top-risk-state")
+  : ids;
+const elements = new Map(activeIds.map((id) => [id, new Element("div", id)]));
 elements.get("price-chart").clientHeight = 400;
 elements.get("volume-chart").clientHeight = 180;
 const body = new Element("body");
@@ -503,6 +506,14 @@ if (mode === "success") {
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
     modelZh, lockedModelZh, popoverZh, factorEn, tableEn, scenarioEn, structureEn,
     chartEn, modelEn, popoverEn, topRiskZh, topRiskEn }));
+} else if (mode === "missing-top-risk-element") {
+  assert.equal(elements.get("universe-count").textContent, "1/1");
+  assert.match(elements.get("research-status").textContent, /2026-07-22/);
+  assert.equal(elements.get("selected-ticker").textContent, "AAA");
+  console.log(JSON.stringify({
+    count: elements.get("universe-count").textContent,
+    ticker: elements.get("selected-ticker").textContent,
+  }));
 } else if (mode === "top-risk-fading" || mode === "top-risk-unavailable") {
   const zh = {
     text: elements.get("top-risk-state").textContent,

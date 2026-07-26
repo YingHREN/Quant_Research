@@ -486,6 +486,10 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(unavailable["zh"]["tone"], "unavailable")
         self.assertEqual(unavailable["en"]["text"], "Top risk unavailable")
 
+    def test_current_script_survives_template_without_optional_top_risk_badge(self):
+        actual = self.run_dashboard_runtime("missing-top-risk-element")
+        self.assertEqual(actual, {"count": "1/1", "ticker": "AAA"})
+
     def test_actual_dashboard_locale_switch_preserves_safe_error_states(self):
         universe = self.run_dashboard_runtime("universe-error")
         self.assertEqual(universe["zh"]["universeTone"], "error")

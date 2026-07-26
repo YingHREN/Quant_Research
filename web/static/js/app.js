@@ -148,6 +148,7 @@ function renderWarnings(warnings) {
 }
 
 function renderTopRiskBadge(topRisk, element, locale) {
+  if (!element) return;
   const latest = topRisk?.status === "available" ? topRisk.latest : null;
   if (!latest || !Number.isFinite(latest.score)) {
     setText(element, t("topRisk.badge.unavailable", {}, locale));
