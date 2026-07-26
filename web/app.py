@@ -66,9 +66,6 @@ from marketdata.storage import IntradayStore
 
 DEFAULT_DATABASE = DEFAULT_MARKET_DATA_DATABASE
 UNIVERSE_FACTOR_KEYS = (
-    "strict_vcp",
-    "tight_platform",
-    "pivot_distance_pct",
     "mom_12_1",
     "realized_vol_63",
 )
@@ -555,17 +552,19 @@ def _universe_rows(summaries, histories, asof, registry):
 
 def _strict_vcp_present(result):
     if result is None or result.missing or not isinstance(result.raw_value, dict):
-        return False
+        return None
     return result.raw_value.get("reject_reason") is None
 
 
 def _tight_platform_present(result):
     if result is None or result.missing or not isinstance(result.raw_value, dict):
-        return False
+        return None
     return bool(result.raw_value.get("is_platform"))
 
 
 def _near_pivot(result):
+    if result is None or result.missing:
+        return None
     value = None if result is None or result.missing else result.raw_value
     return _finite_number(value) and abs(float(value)) <= NEAR_PIVOT_ABS_PCT
 
@@ -659,6 +658,8 @@ def _attach_market_bearish_risk(chart, ticker, histories):
 
 
 def _shape_state(strict_vcp, tight_platform, near_pivot):
+    if strict_vcp is None and tight_platform is None and near_pivot is None:
+        return "unavailable"
     if strict_vcp:
         return "strict_vcp"
     if tight_platform:

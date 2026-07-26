@@ -68,6 +68,7 @@ function describeShape(row, locale) {
     tight_platform: "universe.shape.tightPlatform",
     near_pivot: "universe.shape.nearPivot",
     none: "universe.shape.none",
+    unavailable: "universe.shape.unavailable",
   };
   const state = row.shape_state || row.shapeState;
   if (state) return keys[state] ? t(keys[state], {}, locale) : String(state);

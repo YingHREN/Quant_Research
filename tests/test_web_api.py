@@ -529,6 +529,56 @@ class WebApiTest(unittest.TestCase):
             any(call[0] == "load_history" for call in self.repository.calls)
         )
 
+    def test_universe_never_computes_heavy_structures(self):
+        class RaisingStructuralFactor(MappedFactor):
+            def compute(self, context):
+                raise AssertionError(f"heavy structure ran for {context.ticker}")
+
+        current = ("AAA", "BBB", "CCC", "DDD", "EEE", "SPY")
+        registry = FactorRegistry(
+            [
+                RaisingStructuralFactor(
+                    "strict_vcp", "structure", "neutral", {}
+                ),
+                RaisingStructuralFactor(
+                    "tight_platform", "structure", "neutral", {}
+                ),
+                RaisingStructuralFactor(
+                    "pivot_distance_pct", "structure", "neutral", {}
+                ),
+                MappedFactor(
+                    "mom_12_1",
+                    "momentum",
+                    "higher",
+                    {ticker: value for ticker, value in zip(current, range(6))},
+                ),
+                MappedFactor(
+                    "realized_vol_63",
+                    "risk",
+                    "lower",
+                    {ticker: 0.1 + index / 100 for index, ticker in enumerate(current)},
+                ),
+            ]
+        )
+        app = create_app(
+            test_config(FACTOR_REGISTRY=registry),
+            UniverseCohortRepository(),
+            FakeManager(),
+        )
+
+        response = app.test_client().get("/api/universe")
+
+        self.assertEqual(response.status_code, 200)
+        current_row = next(
+            row for row in response.json["tickers"] if row["ticker"] == "AAA"
+        )
+        self.assertIsNotNone(current_row["momentum_percentile"])
+        self.assertIsNotNone(current_row["volatility"])
+        self.assertIsNone(current_row["strict_vcp"])
+        self.assertIsNone(current_row["tight_platform"])
+        self.assertIsNone(current_row["near_pivot"])
+        self.assertEqual(current_row["shape_state"], "unavailable")
+
     def test_universe_diagnostics_feed_real_filter_and_sort_pipeline(self):
         repository = UniverseCohortRepository()
         app = create_app(
@@ -541,11 +591,18 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         by_ticker = {row["ticker"]: row for row in response.json["tickers"]}
-        self.assertEqual(by_ticker["AAA"]["shape_state"], "strict_vcp")
-        self.assertEqual(by_ticker["BBB"]["shape_state"], "tight_platform")
-        self.assertEqual(by_ticker["CCC"]["shape_state"], "near_pivot")
-        self.assertEqual(by_ticker["DDD"]["shape_state"], "none")
-        self.assertEqual(by_ticker["OLD"]["shape_state"], "none")
+        self.assertTrue(
+            all(row["shape_state"] == "unavailable" for row in by_ticker.values())
+        )
+        self.assertTrue(
+            all(row["strict_vcp"] is None for row in by_ticker.values())
+        )
+        self.assertTrue(
+            all(row["tight_platform"] is None for row in by_ticker.values())
+        )
+        self.assertTrue(
+            all(row["near_pivot"] is None for row in by_ticker.values())
+        )
         self.assertTrue(by_ticker["OLD"]["inactive"])
         self.assertFalse(by_ticker["OLD"]["stale"])
         self.assertEqual(by_ticker["OLD"]["data_status"], "inactive")
@@ -563,7 +620,7 @@ class WebApiTest(unittest.TestCase):
         self.assertTrue(by_ticker["STALE"]["stale"])
         self.assertFalse(by_ticker["STALE"]["inactive"])
         self.assertEqual(by_ticker["STALE"]["data_status"], "stale")
-        self.assertEqual(by_ticker["STALE"]["shape_state"], "strict_vcp")
+        self.assertEqual(by_ticker["STALE"]["shape_state"], "unavailable")
         self.assertEqual(by_ticker["STALE"]["volatility"], 25.0)
 
         module_uri = (
@@ -588,9 +645,9 @@ class WebApiTest(unittest.TestCase):
             text=True,
         )
         actual = json.loads(result.stdout)
-        self.assertEqual(actual["strict"], ["AAA", "STALE"])
-        self.assertEqual(actual["tight"], ["BBB"])
-        self.assertEqual(actual["near"], ["CCC", "STALE"])
+        self.assertEqual(actual["strict"], [])
+        self.assertEqual(actual["tight"], [])
+        self.assertEqual(actual["near"], [])
         self.assertEqual(actual["momentum"][:3], ["AAA", "BBB", "CCC"])
         self.assertEqual(actual["volatility"][:3], ["AAA", "BBB", "STALE"])
 
