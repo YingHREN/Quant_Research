@@ -214,6 +214,16 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('id="cache-status-details"', html)
         self.assertIn('id="cache-status-refresh"', html)
 
+    def test_page_has_cross_sectional_rs_controls_and_badge(self):
+        html = HTML.read_text()
+        self.assertIn('value="rs_rating"', html)
+        self.assertIn('data-filter="rs80"', html)
+        self.assertIn('data-filter="rs90"', html)
+        self.assertIn('id="security-rs-state"', html)
+        i18n = (STATIC / "js/i18n.js").read_text()
+        self.assertGreaterEqual(i18n.count('"universe.rs.label"'), 2)
+        self.assertGreaterEqual(i18n.count('"universe.rs.disclaimer"'), 2)
+
     def test_cache_status_formatter_is_bilingual_and_explicit(self):
         module_uri = (STATIC / "js/cache_status.js").as_uri()
         script = f"""
@@ -343,19 +353,19 @@ class WebAssetTest(unittest.TestCase):
             const rows = [
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, stale: false, strict_vcp: true, tight_platform: false,
-                near_pivot: true, momentum_percentile: 92, volatility: 18,
+                near_pivot: true, momentum_percentile: 92, volatility: 18, rs_rating: 95,
                 sector_classification: {{state: 'agree',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'technology'}}}}}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, stale: true, strict_vcp: false, tight_platform: true,
-                near_pivot: false, momentum_percentile: 71, volatility: 24,
+                near_pivot: false, momentum_percentile: 71, volatility: 24, rs_rating: 84,
                 sector_classification: {{state: 'conflict',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'financials'}}}}}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
-                near_pivot: true, momentum_percentile: null, volatility: null,
+                near_pivot: true, momentum_percentile: null, volatility: null, rs_rating: null,
                 sector_classification: {{state: 'unclassified',
                   sec: null, market_behavior: null}}}}
             ];
@@ -367,6 +377,12 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             const sorted = sortTickers(rows, 'momentum_percentile', 'desc')
               .map(row => row.ticker);
+            const rsSorted = sortTickers(rows, 'rs_rating', 'desc')
+              .map(row => row.ticker);
+            const rs80 = filterTickers(rows, '', {{rs80: true}})
+              .map(row => row.ticker);
+            const rs90 = filterTickers(rows, '', {{rs80: true, rs90: true}})
+              .map(row => row.ticker);
             const secTechnology = filterTickers(rows, '', {{
               sectorTaxonomy: 'sec', sectorKey: 'technology'
             }}).map(row => row.ticker);
@@ -377,7 +393,7 @@ class WebAssetTest(unittest.TestCase):
               sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
             }}).map(row => row.ticker);
             console.log(JSON.stringify({{
-              searched, filtered, inactive, sorted, secTechnology,
+              searched, filtered, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
               behaviorFinancials, behaviorUnclassified,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
@@ -397,6 +413,9 @@ class WebAssetTest(unittest.TestCase):
                 "filtered": ["MSFT"],
                 "inactive": ["AAPL", "OLD"],
                 "sorted": ["MSFT", "AAPL", "OLD"],
+                "rsSorted": ["MSFT", "AAPL", "OLD"],
+                "rs80": ["MSFT", "AAPL"],
+                "rs90": ["MSFT"],
                 "secTechnology": ["MSFT", "AAPL"],
                 "behaviorFinancials": ["AAPL"],
                 "behaviorUnclassified": ["OLD"],

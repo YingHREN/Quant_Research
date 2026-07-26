@@ -100,6 +100,7 @@
             <option value="ticker" data-i18n="universe.sort.ticker">Ticker</option>
             <option value="latest_date" data-i18n="universe.sort.freshness">Data freshness</option>
             <option value="momentum_percentile" data-i18n="universe.sort.momentum">Momentum percentile</option>
+            <option value="rs_rating" data-i18n="universe.sort.rs">横截面 RS</option>
             <option value="shape_state" data-i18n="universe.sort.shape">Shape state</option>
             <option value="volatility" data-i18n="universe.sort.volatility">Volatility</option>
           </select>
@@ -115,9 +116,14 @@
         <label><input type="checkbox" data-filter="strictVcp"> <span data-i18n="universe.filters.strictVcp">Bullish breakout setup (Strict VCP)</span></label>
         <label><input type="checkbox" data-filter="tightPlatform"> <span data-i18n="universe.filters.tightPlatform">Bullish breakout setup (tight platform)</span></label>
         <label><input type="checkbox" data-filter="nearPivot"> <span data-i18n="universe.filters.nearPivot">Near pivot</span></label>
+        <label><input type="checkbox" data-filter="rs80"> <span data-i18n="universe.filters.rs80">横截面 RS ≥ 80</span></label>
+        <label><input type="checkbox" data-filter="rs90"> <span data-i18n="universe.filters.rs90">横截面 RS ≥ 90</span></label>
         <label><input type="checkbox" data-filter="fresh"> <span data-i18n="universe.filters.fresh">Fresh data</span></label>
         <label><input type="checkbox" data-filter="inactive"> <span data-i18n="universe.filters.inactive">Inactive / stale only</span></label>
       </fieldset>
+      <p class="filter-note" data-i18n="universe.rs.disclaimer">
+        横截面 RS 为本站公开公式排名，不是 IBD 专有 RS Rating。
+      </p>
 
       <p id="universe-status" class="inline-status" role="status" aria-live="polite" data-i18n="universe.loading">
         Loading local universe…
@@ -137,6 +143,8 @@
             <h2 id="selected-ticker" data-i18n="security.selectTicker">Select a ticker</h2>
             <div class="security-state-group">
               <span id="security-state" class="state-badge" data-i18n="security.state.waiting">Waiting</span>
+              <span id="security-rs-state" class="state-badge" data-tone="unavailable"
+                    data-i18n="universe.rs.unavailable">RS 不可用</span>
               <span id="top-risk-state" class="state-badge top-risk-badge" data-tone="unavailable"
                     data-i18n="topRisk.badge.unavailable">Top risk unavailable</span>
             </div>

@@ -18,7 +18,7 @@ from web.services.analysis import AnalysisContext
 UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-UNIVERSE_ALGORITHM_VERSION = "universe_summary_v2"
+UNIVERSE_ALGORITHM_VERSION = "universe_summary_v3"
 
 
 class UniverseSnapshotService:
@@ -29,6 +29,7 @@ class UniverseSnapshotService:
         repository,
         factor_registry,
         classification_service=None,
+        relative_strength_service=None,
         revision_getter=lambda: 0,
         max_cache_size=4,
     ):
@@ -41,6 +42,7 @@ class UniverseSnapshotService:
         self._repository = repository
         self._factor_registry = factor_registry
         self._classification_service = classification_service
+        self._relative_strength_service = relative_strength_service
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
         self._cache = OrderedDict()
@@ -76,6 +78,10 @@ class UniverseSnapshotService:
                 [row["ticker"] for row in rows]
             )
             merge_sector_classifications(rows, classifications)
+            relative_strength = self._build_relative_strength(
+                [row["ticker"] for row in rows]
+            )
+            merge_relative_strength(rows, relative_strength)
             payload = {
                 "asof": asof,
                 "freshness": freshness,
@@ -84,6 +90,11 @@ class UniverseSnapshotService:
                 "classification_summary": {
                     key: deepcopy(value)
                     for key, value in classifications.items()
+                    if key != "by_ticker"
+                },
+                "relative_strength_summary": {
+                    key: deepcopy(value)
+                    for key, value in relative_strength.items()
                     if key != "by_ticker"
                 },
             }
@@ -100,6 +111,14 @@ class UniverseSnapshotService:
             return self._classification_service.build(tickers)
         except (OSError, RuntimeError, TypeError, ValueError):
             return _unavailable_classifications(tickers)
+
+    def _build_relative_strength(self, tickers):
+        if self._relative_strength_service is None:
+            return _unavailable_relative_strength(tickers)
+        try:
+            return self._relative_strength_service.build(tickers)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return _unavailable_relative_strength(tickers)
 
 
 def build_universe_rows(summaries, histories, registry):
@@ -173,6 +192,21 @@ def merge_sector_classifications(rows, payload):
     return rows
 
 
+def merge_relative_strength(rows, payload):
+    by_ticker = payload.get("by_ticker", {})
+    for row in rows:
+        rating = by_ticker.get(row["ticker"], {})
+        row.update(
+            {
+                "rs_rating": rating.get("rs_rating"),
+                "rs_asof": rating.get("rs_asof"),
+                "rs_sample_count": rating.get("rs_sample_count"),
+                "rs_model_version": rating.get("rs_model_version"),
+            }
+        )
+    return rows
+
+
 def _unavailable_classifications(tickers):
     return {
         "status": "unavailable",
@@ -184,6 +218,24 @@ def _unavailable_classifications(tickers):
                 "state": "unclassified",
                 "sec": None,
                 "market_behavior": None,
+            }
+            for ticker in tickers
+        },
+    }
+
+
+def _unavailable_relative_strength(tickers):
+    return {
+        "status": "unavailable",
+        "asof": None,
+        "sample_count": 0,
+        "model_version": "cross_sectional_rs_v1",
+        "by_ticker": {
+            ticker: {
+                "rs_rating": None,
+                "rs_asof": None,
+                "rs_sample_count": None,
+                "rs_model_version": "cross_sectional_rs_v1",
             }
             for ticker in tickers
         },

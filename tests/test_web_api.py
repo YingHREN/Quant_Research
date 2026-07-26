@@ -558,12 +558,32 @@ class InjectedEntrySignalService:
         return rows
 
 
+class FakeRelativeStrengthService:
+    def build(self, tickers):
+        return {
+            "status": "available",
+            "asof": "2026-07-21",
+            "sample_count": 1000,
+            "model_version": "cross_sectional_rs_v1",
+            "by_ticker": {
+                ticker: {
+                    "rs_rating": 91 if ticker == "AAA" else 60,
+                    "rs_asof": "2026-07-21",
+                    "rs_sample_count": 1000,
+                    "rs_model_version": "cross_sectional_rs_v1",
+                }
+                for ticker in tickers
+            },
+        }
+
+
 def test_config(**overrides):
     config = {
         "TESTING": True,
         "FORECAST_SERVICE": InjectedForecastService(),
         "ENTRY_SIGNAL_SERVICE": InjectedEntrySignalService(),
         "RESEARCH_CLASSIFICATION_SERVICE": FakeResearchClassificationService(),
+        "RESEARCH_RELATIVE_STRENGTH_SERVICE": FakeRelativeStrengthService(),
     }
     config.update(overrides)
     return config
@@ -590,6 +610,7 @@ class WebApiTest(unittest.TestCase):
                 "tickers",
                 "factor_groups",
                 "classification_summary",
+                "relative_strength_summary",
             },
         )
         self.assertEqual(response.json["asof"], "2026-07-21")
@@ -623,7 +644,15 @@ class WebApiTest(unittest.TestCase):
                 "volatility_factor_key",
                 "volatility_unit",
                 "sector_classification",
+                "rs_rating",
+                "rs_asof",
+                "rs_sample_count",
+                "rs_model_version",
             },
+        )
+        self.assertEqual(
+            response.json["relative_strength_summary"]["model_version"],
+            "cross_sectional_rs_v1",
         )
         self.assertEqual(
             response.json["classification_summary"]["research_universe_count"],

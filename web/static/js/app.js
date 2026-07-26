@@ -290,6 +290,39 @@ export function renderSecurityClassification(
   container.dataset.state = classification.state || "unclassified";
 }
 
+export function renderSecurityRelativeStrength(
+  ticker = store.getState().selectedTicker,
+  locale = store.getState().locale,
+) {
+  const element = elements.securityRsState;
+  if (!element) return;
+  const row = store.getState().universe.find((item) => item.ticker === ticker);
+  const rating = row?.rs_rating;
+  setText(
+    element,
+    Number.isFinite(rating)
+      ? t("universe.rs.value", { rating }, locale)
+      : t("universe.rs.unavailable", {}, locale),
+  );
+  element.dataset.tone = Number.isFinite(rating)
+    ? rating >= 90 ? "current" : rating >= 80 ? "watch" : "neutral"
+    : "unavailable";
+  element.setAttribute(
+    "title",
+    Number.isFinite(rating)
+      ? t(
+        "universe.rs.detail",
+        {
+          date: row.rs_asof || "—",
+          sample: row.rs_sample_count ?? "—",
+          model: row.rs_model_version || "—",
+        },
+        locale,
+      )
+      : t("universe.rs.disclaimer", {}, locale),
+  );
+}
+
 function renderSectorControls(rows, state) {
   const taxonomy = state.filters.sectorTaxonomy || "sec";
   const selectedSector = state.filters.sectorKey || "all";
@@ -376,6 +409,7 @@ function paintUniverse() {
   });
   renderSectorControls(rows, state);
   renderSecurityClassification(state.selectedTicker, state.locale);
+  renderSecurityRelativeStrength(state.selectedTicker, state.locale);
   setText(elements.universeCount, `${rows.length}/${state.universe.length}`);
   setText(
     elements.universeStatus,
@@ -786,6 +820,7 @@ function captureElements() {
     selectedChange: byId("selected-change"),
     observationDate: byId("observation-date"),
     securityState: byId("security-state"),
+    securityRsState: byId("security-rs-state"),
     topRiskState: byId("top-risk-state"),
     securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),

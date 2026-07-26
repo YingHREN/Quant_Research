@@ -273,7 +273,15 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .universe-row[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .ticker-line, .ticker-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ticker-symbol { font-size: 0.95rem; letter-spacing: 0.035em; }
-.ticker-meta { margin-top: 4px; color: var(--muted); font-size: 0.71rem; font-weight: 500; }
+.ticker-meta {
+  flex-wrap: wrap;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.71rem;
+  font-weight: 500;
+}
+.ticker-rs { color: var(--accent); font-weight: 750; }
+.filter-note { margin: 8px 0 0; color: var(--muted); font-size: .68rem; line-height: 1.45; }
 .ticker-state[data-state="inactive"] { color: var(--warning); }
 .ticker-state[data-state="stale"] { color: var(--warning); }
 .ticker-shape { margin-left: auto; color: var(--muted); font-size: 0.69rem; }
