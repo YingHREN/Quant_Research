@@ -531,6 +531,43 @@ class WebApiTest(unittest.TestCase):
             any(call[0] == "load_history" for call in self.repository.calls)
         )
 
+    def test_default_forecast_artifact_store_respects_factory_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            explicit_path = Path(temporary) / "explicit-cache.db"
+            testing_app = create_app(
+                {
+                    "TESTING": True,
+                    "MARKET_DATA_DATABASE": "unused.db",
+                },
+                FakeRepository(),
+                FakeManager(),
+            )
+            explicit_app = create_app(
+                {
+                    "TESTING": True,
+                    "MARKET_DATA_DATABASE": "unused.db",
+                    "FORECAST_ARTIFACT_CACHE_PATH": explicit_path,
+                },
+                FakeRepository(),
+                FakeManager(),
+            )
+            disabled_app = create_app(
+                {
+                    "TESTING": False,
+                    "MARKET_DATA_DATABASE": "unused.db",
+                    "FORECAST_ARTIFACT_CACHE_ENABLED": False,
+                },
+                FakeRepository(),
+                FakeManager(),
+            )
+
+        testing_service = testing_app.extensions["dashboard_forecast_service"]
+        explicit_service = explicit_app.extensions["dashboard_forecast_service"]
+        disabled_service = disabled_app.extensions["dashboard_forecast_service"]
+        self.assertIsNone(testing_service._artifact_store)
+        self.assertEqual(explicit_service._artifact_store.path, explicit_path)
+        self.assertIsNone(disabled_service._artifact_store)
+
     def test_universe_never_computes_heavy_structures(self):
         class RaisingStructuralFactor(MappedFactor):
             def compute(self, context):

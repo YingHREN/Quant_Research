@@ -15,6 +15,7 @@ __pycache__/
 # Local market data, caches, and generated research artifacts
 data/cache/
 data/*.db
+data/analysis_cache.db-*
 output/
 
 # Local worktrees
