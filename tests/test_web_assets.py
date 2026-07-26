@@ -117,6 +117,10 @@ class WebAssetTest(unittest.TestCase):
         for preset in ("core", "all", "none"):
             self.assertIn(f'data-marker-preset="{preset}"', html)
 
+    def test_page_has_latest_top_risk_badge(self):
+        html = HTML.read_text()
+        self.assertIn('id="top-risk-state"', html)
+
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
         self.assertEqual(actual["stored"], ["top_risk"])
@@ -443,6 +447,18 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("最终方向 下跌", actual["modelZh"])
         self.assertIn("Final direction Down", actual["modelEn"])
         self.assertIn("2026-07-22", actual["lockedModelZh"])
+        self.assertEqual(actual["topRiskZh"], "顶部风险 72 · 已确认")
+        self.assertEqual(actual["topRiskEn"], "Top risk 72 · Confirmed")
+
+    def test_top_risk_badge_distinguishes_fading_and_unavailable(self):
+        fading = self.run_dashboard_runtime("top-risk-fading")
+        self.assertEqual(fading["zh"]["text"], "顶部风险 48 · 风险衰减中")
+        self.assertEqual(fading["zh"]["tone"], "fading")
+        self.assertEqual(fading["en"]["text"], "Top risk 48 · Risk fading")
+        unavailable = self.run_dashboard_runtime("top-risk-unavailable")
+        self.assertEqual(unavailable["zh"]["text"], "顶部风险不可用")
+        self.assertEqual(unavailable["zh"]["tone"], "unavailable")
+        self.assertEqual(unavailable["en"]["text"], "Top risk unavailable")
 
     def test_actual_dashboard_locale_switch_preserves_safe_error_states(self):
         universe = self.run_dashboard_runtime("universe-error")

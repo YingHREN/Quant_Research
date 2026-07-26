@@ -176,6 +176,24 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   font-size: 0.72rem;
   font-weight: 700;
 }
+.security-state-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.top-risk-badge {
+  min-width: 8.5rem;
+  text-align: center;
+  white-space: nowrap;
+}
+.top-risk-badge[data-tone="watch"] { border-color: #f7d154; color: #f7d154; }
+.top-risk-badge[data-tone="high"] { border-color: #fb923c; color: #fb923c; }
+.top-risk-badge[data-tone="confirmed"] { border-color: var(--danger); color: var(--danger); }
+.top-risk-badge[data-tone="fading"] { border-color: #f2bd5d; color: #f2bd5d; }
+.top-risk-badge[data-tone="inactive"],
+.top-risk-badge[data-tone="low"] { border-color: var(--accent); color: var(--accent); }
 
 .sort-controls {
   display: grid;

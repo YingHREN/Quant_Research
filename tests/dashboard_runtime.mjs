@@ -87,6 +87,7 @@ const ids = [
   "universe-list", "universe-count", "universe-status", "universe-search", "sort-key",
   "sort-direction", "market-date", "market-coverage", "selected-ticker", "selected-close",
   "selected-change", "observation-date", "security-state", "research-status", "data-warnings",
+  "top-risk-state",
   "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
   "factor-overview", "factor-table-body",
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
@@ -220,6 +221,17 @@ const row = {
 const stock = {
   ticker: "AAA", observation_date: "2026-07-22",
   summary: { close: 101, daily_return: 0.01, daily_return_unit: "fraction", stale: false, inactive: false },
+  top_risk: {
+    model_key: "high_level_distribution_risk_v1",
+    model_version: "v1",
+    status: "available",
+    unavailable_reason: null,
+    latest: {
+      time: "2026-07-22", score: 72, raw_score: 72,
+      state: "confirmed", raw_state: "confirmed", memory_age_sessions: 0,
+    },
+    events: [],
+  },
   warnings: [], chart: [row],
   forecasts: {
     model: { key: "ridge_direction_v1", version: "v3" },
@@ -330,6 +342,26 @@ const stock = {
     },
   },
 };
+if (mode === "top-risk-fading") {
+  stock.top_risk.latest = {
+    ...stock.top_risk.latest,
+    score: 48,
+    raw_score: 0,
+    state: "fading",
+    raw_state: "inactive",
+    memory_age_sessions: 3,
+  };
+}
+if (mode === "top-risk-unavailable") {
+  stock.top_risk = {
+    model_key: "high_level_distribution_risk_v1",
+    model_version: "v1",
+    status: "unavailable",
+    unavailable_reason: "not_available",
+    latest: null,
+    events: [],
+  };
+}
 
 function jsonResponse(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, async json() { return payload; } };
@@ -376,6 +408,8 @@ if (mode === "success") {
   const priceLinesZh = priceChart.priceLines.map((line) => line.title);
   const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersZh = markerControllers[0].markers.map((marker) => marker.text);
+  const topRiskZh = elements.get("top-risk-state").textContent;
+  const topRiskToneZh = elements.get("top-risk-state").dataset.tone;
   const meterZh = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
   const strictInfoZh = byClass(elements.get("factor-table-body"), "factor-info").at(-1);
   strictInfoZh.dispatch("pointerenter");
@@ -397,6 +431,8 @@ if (mode === "success") {
   const priceLinesEn = priceChart.priceLines.map((line) => line.title);
   const volumeTitlesEn = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersEn = markerControllers[0].markers.map((marker) => marker.text);
+  const topRiskEn = elements.get("top-risk-state").textContent;
+  const topRiskToneEn = elements.get("top-risk-state").dataset.tone;
   const datesEn = [priceChart, volumeChart].map((chart) => [
     chart.options.timeScale.tickMarkFormatter("2026-07-17"),
     chart.options.localization.timeFormatter("2026-07-17"),
@@ -426,6 +462,8 @@ if (mode === "success") {
   assert.deepEqual(seriesDataAfterLocale, seriesDataBeforeLocale);
   assert.deepEqual(priceLinesZh, ["向上突破准备形态（严格 VCP）枢轴点"]);
   assert.deepEqual(markersZh, ["向上突破准备形态（严格 VCP）", "预测起点 · 下跌"]);
+  assert.equal(topRiskZh, "顶部风险 72 · 已确认");
+  assert.equal(topRiskToneZh, "confirmed");
   assert.ok(volumeTitlesZh.includes("成交量 MA20"));
   assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
   assert.deepEqual(datesZh, [["07-17", "2026-07-17"], ["07-17", "2026-07-17"]]);
@@ -457,12 +495,25 @@ if (mode === "success") {
     markersEn,
     ["Bullish breakout setup (Strict VCP)", "Forecast start · Down"],
   );
+  assert.equal(topRiskEn, "Top risk 72 · Confirmed");
+  assert.equal(topRiskToneEn, "confirmed");
   assert.ok(volumeTitlesEn.includes("Volume MA20"));
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
   assert.deepEqual(datesEn, datesZh);
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
     modelZh, lockedModelZh, popoverZh, factorEn, tableEn, scenarioEn, structureEn,
-    chartEn, modelEn, popoverEn }));
+    chartEn, modelEn, popoverEn, topRiskZh, topRiskEn }));
+} else if (mode === "top-risk-fading" || mode === "top-risk-unavailable") {
+  const zh = {
+    text: elements.get("top-risk-state").textContent,
+    tone: elements.get("top-risk-state").dataset.tone,
+  };
+  enButton.dispatch("click");
+  const en = {
+    text: elements.get("top-risk-state").textContent,
+    tone: elements.get("top-risk-state").dataset.tone,
+  };
+  console.log(JSON.stringify({ zh, en }));
 } else if (mode === "universe-error") {
   const zh = {
     universe: elements.get("universe-status").textContent,

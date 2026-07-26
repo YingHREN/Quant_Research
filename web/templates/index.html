@@ -97,7 +97,11 @@
           <p class="eyebrow" data-i18n="security.eyebrow">Selected security</p>
           <div class="security-title-row">
             <h2 id="selected-ticker" data-i18n="security.selectTicker">Select a ticker</h2>
-            <span id="security-state" class="state-badge" data-i18n="security.state.waiting">Waiting</span>
+            <div class="security-state-group">
+              <span id="security-state" class="state-badge" data-i18n="security.state.waiting">Waiting</span>
+              <span id="top-risk-state" class="state-badge top-risk-badge" data-tone="unavailable"
+                    data-i18n="topRisk.badge.unavailable">Top risk unavailable</span>
+            </div>
           </div>
           <p id="company-label" class="secondary-copy" data-i18n="security.localHistory">Local price history</p>
         </div>

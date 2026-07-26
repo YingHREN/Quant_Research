@@ -147,6 +147,31 @@ function renderWarnings(warnings) {
   elements.dataWarnings.append(fragment);
 }
 
+function renderTopRiskBadge(topRisk, element, locale) {
+  const latest = topRisk?.status === "available" ? topRisk.latest : null;
+  if (!latest || !Number.isFinite(latest.score)) {
+    setText(element, t("topRisk.badge.unavailable", {}, locale));
+    element.dataset.tone = "unavailable";
+    return;
+  }
+  const stateKey = `topRisk.state.${latest.state}`;
+  const localizedState = t(stateKey, {}, locale);
+  setText(
+    element,
+    t(
+      "topRisk.badge.value",
+      {
+        score: Math.round(latest.score),
+        state: localizedState === stateKey
+          ? t("topRisk.state.unavailable", {}, locale)
+          : localizedState,
+      },
+      locale,
+    ),
+  );
+  element.dataset.tone = latest.state;
+}
+
 function renderStockHeader(payload) {
   const summary = payload.summary || {};
   const locale = store.getState().locale;
@@ -175,6 +200,7 @@ function renderStockHeader(payload) {
       locale,
     ),
   );
+  renderTopRiskBadge(payload.top_risk, elements.topRiskState, locale);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
 
@@ -208,6 +234,7 @@ async function selectTicker(ticker) {
   setText(elements.selectedTicker, ticker);
   const locale = store.getState().locale;
   setText(elements.securityState, t("security.state.loading", {}, locale));
+  renderTopRiskBadge(null, elements.topRiskState, locale);
   clearStockQuote(elements);
   setText(elements.researchStatus, t("security.loading", { ticker }, locale));
   elements.researchStatus.removeAttribute("data-tone");
@@ -232,6 +259,7 @@ async function selectTicker(ticker) {
     if (requestSequence !== stockRequestSequence) return;
     researchError = errorState(error);
     setText(elements.securityState, t("security.state.unavailable", {}, store.getState().locale));
+    renderTopRiskBadge(null, elements.topRiskState, store.getState().locale);
     setText(elements.researchStatus, errorText(researchError, store.getState().locale));
     elements.researchStatus.dataset.tone = "error";
   }
@@ -269,6 +297,7 @@ async function loadUniverse() {
       elements.securityState,
       t("security.state.unavailable", {}, store.getState().locale),
     );
+    renderTopRiskBadge(null, elements.topRiskState, store.getState().locale);
     setText(
       elements.researchStatus,
       t("security.unavailableUntilUniverse", {}, store.getState().locale),
@@ -400,13 +429,16 @@ function applyLocale(locale) {
     });
   } else if (universeError) {
     setText(elements.securityState, t("security.state.unavailable", {}, locale));
+    renderTopRiskBadge(null, elements.topRiskState, locale);
     setText(elements.researchStatus, t("security.unavailableUntilUniverse", {}, locale));
     elements.researchStatus.dataset.tone = "error";
   } else if (researchError) {
     setText(elements.securityState, t("security.state.unavailable", {}, locale));
+    renderTopRiskBadge(null, elements.topRiskState, locale);
     setText(elements.researchStatus, errorText(researchError, locale));
   } else if (state.selectedTicker) {
     setText(elements.securityState, t("security.state.loading", {}, locale));
+    renderTopRiskBadge(null, elements.topRiskState, locale);
     setText(elements.researchStatus, t("security.loading", { ticker: state.selectedTicker }, locale));
   }
 }
@@ -426,6 +458,7 @@ function captureElements() {
     selectedChange: byId("selected-change"),
     observationDate: byId("observation-date"),
     securityState: byId("security-state"),
+    topRiskState: byId("top-risk-state"),
     researchStatus: byId("research-status"),
     dataWarnings: byId("data-warnings"),
     priceChart: byId("price-chart"),
