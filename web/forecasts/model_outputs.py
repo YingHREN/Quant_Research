@@ -11,6 +11,8 @@ from web.forecasts.model_output_registry import (
     ModelOutputRegistry,
 )
 
+SUPPLY_DEMAND_ACTIVE_THRESHOLD = 50.0
+
 
 def build_model_outputs(forecast, chart_row, evaluation):
     """Group one point-in-time forecast into semantic model families."""
@@ -191,9 +193,21 @@ def _default_registry():
         ),
     )
     register(
-        "macro_risk",
+        "supply_pressure_v1",
         "downside",
         60,
+        "v1",
+        "rule_score",
+        "production",
+        "close_confirmed",
+        "advisory",
+        "model.supplyPressure",
+        lambda context: _supply_pressure(context["chart_row"]),
+    )
+    register(
+        "macro_risk",
+        "downside",
+        70,
         None,
         "remembered_state",
         "planned",
@@ -209,7 +223,7 @@ def _default_registry():
     register(
         "intraday_order_flow",
         "downside",
-        70,
+        80,
         None,
         "rule_score",
         "planned",
@@ -300,20 +314,16 @@ def _default_registry():
         lambda context: _pocket_pivot(context["chart_row"]),
     )
     register(
-        "demand_confirmation",
+        "demand_confirmation_v1",
         "bullish_structure",
         70,
-        None,
+        "v1",
         "rule_score",
-        "planned",
+        "production",
         "close_confirmed",
         "advisory",
         "model.demandConfirmation",
-        lambda context: _planned(
-            "demand_confirmation",
-            "rule_score",
-            "model.demandConfirmation",
-        ),
+        lambda context: _demand_confirmation(context["chart_row"]),
     )
     register(
         "forecast_decision_policy",
@@ -485,6 +495,113 @@ def _high_level_distribution_risk(decision):
         ),
         "unavailable_reason": (
             None if available else "insufficient_high_level_context"
+        ),
+    }
+
+
+def _supply_pressure(row):
+    return _supply_demand_score(
+        row,
+        key="supply_pressure_v1",
+        score_field="supply_pressure_score",
+        coverage_field="supply_pressure_coverage",
+        conditions_field="supply_pressure_conditions",
+        translation_prefix="model.supplyPressure",
+        metric_definitions=(
+            (
+                "modelOutput.metric.closeVolumeSupply",
+                "supply_close_volume_score",
+            ),
+            (
+                "modelOutput.metric.rejectionSupply",
+                "supply_rejection_score",
+            ),
+            (
+                "modelOutput.metric.structureContextSupply",
+                "supply_structure_context_score",
+            ),
+        ),
+    )
+
+
+def _demand_confirmation(row):
+    return _supply_demand_score(
+        row,
+        key="demand_confirmation_v1",
+        score_field="demand_confirmation_score",
+        coverage_field="demand_confirmation_coverage",
+        conditions_field="demand_confirmation_conditions",
+        translation_prefix="model.demandConfirmation",
+        metric_definitions=(
+            (
+                "modelOutput.metric.demandParticipation",
+                "demand_participation_score",
+            ),
+            (
+                "modelOutput.metric.demandAbsorption",
+                "demand_absorption_score",
+            ),
+            (
+                "modelOutput.metric.breakoutContextDemand",
+                "demand_breakout_context_score",
+            ),
+        ),
+    )
+
+
+def _supply_demand_score(
+    row,
+    *,
+    key,
+    score_field,
+    coverage_field,
+    conditions_field,
+    translation_prefix,
+    metric_definitions,
+):
+    score = row.get(score_field)
+    coverage = row.get(coverage_field)
+    available = score is not None and coverage is not None
+    return {
+        **_identity(
+            key,
+            "v1",
+            "rule_score",
+            "production",
+            (
+                "active"
+                if (
+                    available
+                    and float(score) >= SUPPLY_DEMAND_ACTIVE_THRESHOLD
+                )
+                else ("inactive" if available else "unavailable")
+            ),
+            "close_confirmed",
+            translation_prefix,
+        ),
+        "score": json_safe(score),
+        "maximum_score": 100,
+        "threshold": SUPPLY_DEMAND_ACTIVE_THRESHOLD,
+        "coverage": json_safe(coverage),
+        "supply_demand_state": row.get(
+            "supply_demand_state",
+            "unavailable",
+        ),
+        "conditions": list(row.get(conditions_field) or ()),
+        "unavailable_reason": (
+            None
+            if available
+            else next(
+                iter(row.get("unavailable_reasons") or ()),
+                "model_data_unavailable",
+            )
+        ),
+        "metrics": _metrics(
+            row,
+            tuple(
+                (label_key, field, "score")
+                for label_key, field in metric_definitions
+            ),
         ),
     }
 

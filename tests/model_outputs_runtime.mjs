@@ -85,7 +85,7 @@ const forecast = {
   },
   model_outputs: {
     registry: {
-      version: "model_output_registry_v1",
+      version: "model_output_registry_v2",
       groups: [
         {
           key: "primary",
@@ -158,6 +158,19 @@ const forecast = {
       risk_recovery: true,
       conditions: ["distribution_day", "failed_breakout", "below_ema20", "strong_reclaim"],
     }, {
+      ...identity("supply_pressure_v1", "model.supplyPressure.name", "rule_score"),
+      score: 62,
+      maximum_score: 100,
+      threshold: 50,
+      coverage: 0.92,
+      supply_demand_state: "two_way_contest",
+      conditions: ["distribution_day", "failed_breakout"],
+      metrics: [
+        {label_key: "modelOutput.metric.closeVolumeSupply", value: 30, format: "score"},
+        {label_key: "modelOutput.metric.rejectionSupply", value: 17, format: "score"},
+        {label_key: "modelOutput.metric.structureContextSupply", value: 15, format: "score"},
+      ],
+    }, {
       ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
       lifecycle: "planned",
       unavailable_reason: "not_implemented",
@@ -188,9 +201,18 @@ const forecast = {
         {label_key: "modelOutput.metric.currentVolume", value: 1250000, format: "volume"},
       ],
     }, {
-      ...identity("demand_confirmation", "model.demandConfirmation.name", "rule_score", "unavailable"),
-      lifecycle: "planned",
-      unavailable_reason: "not_implemented",
+      ...identity("demand_confirmation_v1", "model.demandConfirmation.name", "rule_score"),
+      score: 71,
+      maximum_score: 100,
+      threshold: 50,
+      coverage: 0.92,
+      supply_demand_state: "two_way_contest",
+      conditions: ["buyer_absorption", "breakout_acceptance"],
+      metrics: [
+        {label_key: "modelOutput.metric.demandParticipation", value: 27, format: "score"},
+        {label_key: "modelOutput.metric.demandAbsorption", value: 29, format: "score"},
+        {label_key: "modelOutput.metric.breakoutContextDemand", value: 15, format: "score"},
+      ],
     }],
     macro_context: [{
       ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
@@ -225,7 +247,7 @@ renderModelOutputs(container, {
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
 assert.equal(container.dataset.state, "available");
-assert.equal(cards.length, 11);
+assert.equal(cards.length, 12);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
 assert.match(zh, /最终方向/);
@@ -254,7 +276,13 @@ assert.match(zh, /Pocket Pivot 需求确认/);
 assert.match(zh, /历史数据不足/);
 assert.match(zh, /收缩幅度未递减/);
 assert.match(zh, /当前成交量 1\.25M/);
-assert.match(zh, /更广义需求确认/);
+assert.match(zh, /供给压力代理/);
+assert.match(zh, /需求确认代理/);
+assert.match(zh, /证据覆盖率 92/);
+assert.match(zh, /供需状态 多空争夺/);
+assert.match(zh, /供给压力代理[^]*阈值 50/);
+assert.match(zh, /收盘与成交量供给 30/);
+assert.match(zh, /需求参与度 27/);
 assert.match(zh, /宏观环境/);
 assert.match(zh, /决策权限/);
 assert.match(zh, /数据时点/);
@@ -283,7 +311,11 @@ assert.match(en, /Pocket Pivot demand confirmation/);
 assert.match(en, /Insufficient history/);
 assert.match(en, /Contraction depths did not decrease/);
 assert.match(en, /Current volume 1\.25M/);
-assert.match(en, /Broader demand confirmation/);
+assert.match(en, /Supply pressure proxy/);
+assert.match(en, /Demand confirmation proxy/);
+assert.match(en, /Evidence coverage 92/);
+assert.match(en, /Supply-demand state Two-way contest/);
+assert.match(en, /Supply pressure proxy[^]*Threshold 50/);
 assert.match(en, /Macro context/);
 assert.match(en, /Decision permission/);
 
@@ -316,7 +348,7 @@ renderModelOutputs(container, {
 });
 const legacyCards = descendants(container)
   .filter((node) => node.dataset.modelCard);
-assert.equal(legacyCards.length, 10);
+assert.equal(legacyCards.length, 11);
 assert.match(textTree(container), /最终决策/);
 
 const mismatchedForecast = structuredClone(forecast);
@@ -329,7 +361,7 @@ renderModelOutputs(container, {
 });
 const mismatchedCards = descendants(container)
   .filter((node) => node.dataset.modelCard);
-assert.equal(mismatchedCards.length, 10);
+assert.equal(mismatchedCards.length, 11);
 
 renderModelOutputs(container, {
   forecast: null,

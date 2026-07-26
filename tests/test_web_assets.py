@@ -261,13 +261,26 @@ class WebAssetTest(unittest.TestCase):
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
-        self.assertEqual(actual["cardCount"], 11)
+        self.assertEqual(actual["cardCount"], 12)
         self.assertIn("规则分数，不是概率", actual["zh"])
         self.assertIn("Rule score, not a probability", actual["en"])
+        self.assertIn("供给压力代理", actual["zh"])
+        self.assertIn("需求确认代理", actual["zh"])
+        self.assertIn("Supply-demand state", actual["en"])
         self.assertIn("向上突破确认（VCP）", actual["zh"])
         self.assertIn("Pocket Pivot demand confirmation", actual["en"])
         self.assertIn("宏观环境", actual["zh"])
         self.assertIn("Decision permission", actual["en"])
+        i18n_source = (STATIC / "js/i18n.js").read_text()
+        for key in (
+            "modelOutput.condition.volume_confirmed_ema20_break",
+            "modelOutput.condition.weak_rebound_below_ema20",
+            "modelOutput.reason.missing_qqq_context",
+            "modelOutput.reason.missing_sector_context",
+            "modelOutput.reason.insufficient_supply_coverage",
+            "modelOutput.reason.insufficient_demand_coverage",
+        ):
+            self.assertGreaterEqual(i18n_source.count(f'"{key}"'), 2)
 
     def test_page_has_no_buy_signal_or_probability_copy(self):
         text = HTML.read_text()

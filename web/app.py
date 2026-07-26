@@ -70,6 +70,7 @@ from web.services.research_classification import ResearchClassificationService
 from web.services.research_relative_strength import (
     ResearchRelativeStrengthService,
 )
+from web.services.supply_demand import attach_supply_demand_rows
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
@@ -352,6 +353,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             normalized_ticker,
             peer_histories,
         )
+        attach_supply_demand_rows(
+            chart,
+            normalized_ticker,
+            peer_histories,
+        )
 
         if selected_summary is not None and selected_summary.inactive:
             warnings.append("inactive_ticker")
@@ -492,6 +498,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             entry_signal_service.build(normalized_ticker, history),
         )
         _attach_market_bearish_risk(
+            chart,
+            normalized_ticker,
+            snapshot.histories,
+        )
+        attach_supply_demand_rows(
             chart,
             normalized_ticker,
             snapshot.histories,
