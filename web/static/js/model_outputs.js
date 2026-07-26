@@ -40,6 +40,44 @@ function number(value, locale) {
   return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(numeric);
 }
 
+function metricValue(metric, locale) {
+  const value = metric?.value;
+  switch (metric?.format) {
+    case "percent": {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? `${number(numeric, locale)}%` : "—";
+    }
+    case "ratio": {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? `${number(numeric, locale)}×` : "—";
+    }
+    case "volume": {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return "—";
+      const units = [
+        [1_000_000_000, "B"],
+        [1_000_000, "M"],
+        [1_000, "K"],
+      ];
+      const unit = units.find(([threshold]) => Math.abs(numeric) >= threshold);
+      return unit ? `${number(numeric / unit[0], locale)}${unit[1]}` : number(numeric, locale);
+    }
+    case "date":
+    case "text":
+      return value === null || value === undefined || value === "" ? "—" : String(value);
+    case "number":
+    default:
+      return number(value, locale);
+  }
+}
+
+function reasonLabel(reason, locale) {
+  if (!reason) return "—";
+  const key = `modelOutput.reason.${reason}`;
+  const value = t(key, {}, locale);
+  return value === key ? String(reason).replaceAll("_", " ") : value;
+}
+
 function scoreText(model, locale) {
   if (model.score === null || model.score === undefined) return "—";
   const maximum = model.maximum_score ?? 100;
@@ -239,6 +277,18 @@ function modelCard(model, locale, { open = false } = {}) {
       enumLabel("forecast.riskState", model.risk_state, locale),
     ));
   }
+  (model.metrics || []).forEach((metric) => {
+    values.append(labeledValue(
+      translated(metric.label_key, locale, String(metric.label_key || "—")),
+      metricValue(metric, locale),
+    ));
+  });
+  if (model.unavailable_reason) {
+    values.append(labeledValue(
+      t("modelOutput.field.reason", {}, locale),
+      reasonLabel(model.unavailable_reason, locale),
+    ));
+  }
   values.append(labeledValue(
     t("modelOutput.field.timing", {}, locale),
     enumLabel("modelOutput.timing", model.timing, locale),
@@ -261,7 +311,11 @@ function modelCard(model, locale, { open = false } = {}) {
     });
     card.append(list);
   }
-  if (model.kind === "rule_score" || model.kind === "remembered_state") {
+  if (
+    model.kind === "rule_score"
+    || model.kind === "remembered_state"
+    || model.kind === "rule_event"
+  ) {
     card.append(element(
       "p",
       "model-output-score-warning",

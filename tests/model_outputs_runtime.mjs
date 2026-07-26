@@ -121,6 +121,30 @@ const forecast = {
       score: 2,
       maximum_score: 3,
       conditions: ["prior_high_breakout", "higher_low_confirmed"],
+    }, {
+      ...identity("strict_vcp", "model.strictVcp.name", "shape_state", "inactive"),
+      unavailable_reason: "contractions_not_decreasing",
+      metrics: [
+        {label_key: "modelOutput.metric.pivot", value: 103.5, format: "number"},
+        {label_key: "modelOutput.metric.contractions", value: 2, format: "number"},
+      ],
+    }, {
+      ...identity("vcp_breakout_confirmed_v1", "model.vcpBreakout.name", "rule_event"),
+      metrics: [
+        {label_key: "modelOutput.metric.volumeRatio", value: 1.62, format: "ratio"},
+        {label_key: "modelOutput.metric.requiredVolumeRatio", value: 1.4, format: "ratio"},
+        {label_key: "modelOutput.metric.pctOverPivot", value: 2.1, format: "percent"},
+      ],
+    }, {
+      ...identity("pocket_pivot_v1", "model.pocketPivot.name", "rule_event", "unavailable"),
+      unavailable_reason: "insufficient_history",
+      metrics: [
+        {label_key: "modelOutput.metric.currentVolume", value: 1250000, format: "volume"},
+      ],
+    }, {
+      ...identity("demand_confirmation", "model.demandConfirmation.name", "rule_score", "unavailable"),
+      lifecycle: "planned",
+      unavailable_reason: "not_implemented",
     }],
     decision: {
       ...identity("forecast_decision_policy", "model.decisionPolicy.name", "decision_policy", "available"),
@@ -140,7 +164,7 @@ renderModelOutputs(container, {
 const zh = textTree(container);
 const cards = descendants(container).filter((node) => node.dataset.modelCard);
 assert.equal(container.dataset.state, "available");
-assert.equal(cards.length, 6);
+assert.equal(cards.length, 10);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
 assert.match(zh, /最终方向/);
@@ -161,6 +185,15 @@ assert.match(zh, /20日派发次数 5/);
 assert.match(zh, /10日 Churning 次数 2/);
 assert.match(zh, /末端加速分数 80/);
 assert.match(zh, /强势收复并解除顶部风险记忆/);
+assert.match(zh, /向上突破确认（VCP）/);
+assert.match(zh, /成交量比率 1\.62×/);
+assert.match(zh, /至少需要 1\.4×/);
+assert.match(zh, /高于枢轴 2\.1%/);
+assert.match(zh, /Pocket Pivot 需求确认/);
+assert.match(zh, /历史数据不足/);
+assert.match(zh, /收缩幅度未递减/);
+assert.match(zh, /当前成交量 1\.25M/);
+assert.match(zh, /更广义需求确认/);
 
 renderModelOutputs(container, {
   forecast,
@@ -173,6 +206,15 @@ assert.match(en, /Rule score, not a probability/);
 assert.match(en, /Planned/);
 assert.match(en, /High-level distribution and bearish top-turn risk/);
 assert.match(en, /Suspected distribution proxy, not verified institutional trading/);
+assert.match(en, /VCP breakout confirmation/);
+assert.match(en, /Volume ratio 1\.62×/);
+assert.match(en, /At least 1\.4×/);
+assert.match(en, /Above pivot 2\.1%/);
+assert.match(en, /Pocket Pivot demand confirmation/);
+assert.match(en, /Insufficient history/);
+assert.match(en, /Contraction depths did not decrease/);
+assert.match(en, /Current volume 1\.25M/);
+assert.match(en, /Broader demand confirmation/);
 
 const notPrecomputed = structuredClone(forecast);
 Object.assign(notPrecomputed.model_outputs.primary[0], {

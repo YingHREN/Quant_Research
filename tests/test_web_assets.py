@@ -71,9 +71,11 @@ class WebAssetTest(unittest.TestCase):
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
-        self.assertEqual(actual["cardCount"], 6)
+        self.assertEqual(actual["cardCount"], 10)
         self.assertIn("规则分数，不是概率", actual["zh"])
         self.assertIn("Rule score, not a probability", actual["en"])
+        self.assertIn("向上突破确认（VCP）", actual["zh"])
+        self.assertIn("Pocket Pivot demand confirmation", actual["en"])
 
     def test_page_has_no_buy_signal_or_probability_copy(self):
         text = HTML.read_text()

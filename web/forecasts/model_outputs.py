@@ -60,6 +60,8 @@ def build_model_outputs(forecast, chart_row, evaluation):
                 "tight_platform",
                 "model.tightPlatform",
             ),
+            _vcp_breakout(chart_row),
+            _pocket_pivot(chart_row),
             _planned(
                 "demand_confirmation",
                 "rule_score",
@@ -278,11 +280,26 @@ def _early_reversal(row):
 
 
 def _shape_state(row, field, key, translation_prefix):
-    if field not in row or row.get(field) is None:
+    active_field = f"{field}_active"
+    evidence = _mapping(row.get(f"{field}_evidence"))
+    reason = (
+        row.get(f"{field}_reject_reason")
+        or evidence.get("reject_reason")
+    )
+    available = (
+        evidence.get("available")
+        if evidence.get("available") is not None
+        else reason != "insufficient_history"
+    )
+    if active_field not in row or row.get(active_field) is None:
         status = "unavailable"
         state = None
+        reason = reason or "historical_shape_not_computed"
+    elif not available:
+        status = "unavailable"
+        state = False
     else:
-        state = bool(row.get(field))
+        state = bool(row.get(active_field))
         status = "active" if state else "inactive"
     return {
         **_identity(
@@ -295,10 +312,187 @@ def _shape_state(row, field, key, translation_prefix):
             translation_prefix,
         ),
         "state": state,
-        "unavailable_reason": (
-            "historical_shape_not_computed" if status == "unavailable" else None
+        "unavailable_reason": reason,
+        "metrics": _shape_metrics(field, evidence),
+    }
+
+
+def _shape_metrics(field, evidence):
+    if field == "strict_vcp":
+        definitions = (
+            ("modelOutput.metric.pivot", "vcp_pivot", "number"),
+            ("modelOutput.metric.contractions", "n_contractions", "number"),
+            (
+                "modelOutput.metric.distanceToPivot",
+                "distance_to_pivot_pct",
+                "percent",
+            ),
+        )
+    else:
+        definitions = (
+            ("modelOutput.metric.pivot", "platform_pivot", "number"),
+            ("modelOutput.metric.rangePct", "range_pct", "percent"),
+            (
+                "modelOutput.metric.volumeDryupPct",
+                "vol_dryup_pct",
+                "percent",
+            ),
+        )
+    return _metrics(evidence, definitions)
+
+
+def _vcp_breakout(row):
+    if "vcp_breakout_confirmed" not in row:
+        status = "unavailable"
+        reason = "historical_entry_signal_not_computed"
+    else:
+        status = (
+            "active"
+            if row.get("vcp_breakout_confirmed") is True
+            else "inactive"
+        )
+        reason = row.get("vcp_breakout_reject_reason")
+    values = {
+        "pivot": row.get("vcp_breakout_pivot"),
+        "volume_ratio": row.get("vcp_breakout_volume_ratio"),
+        "required_volume_ratio": 1.4,
+        "pct_over_pivot": row.get("vcp_breakout_pct_over_pivot"),
+        "buy_zone_limit": 5.0,
+    }
+    return {
+        **_identity(
+            "vcp_breakout_confirmed_v1",
+            "v1",
+            "rule_event",
+            "production",
+            status,
+            "close_confirmed",
+            "model.vcpBreakout",
+        ),
+        "conditions": [
+            key
+            for field, key in (
+                (
+                    "vcp_breakout_price_confirmed",
+                    "vcp_breakout_price_confirmed",
+                ),
+                (
+                    "vcp_breakout_volume_confirmed",
+                    "vcp_breakout_volume_confirmed",
+                ),
+                (
+                    "vcp_breakout_buy_zone_confirmed",
+                    "vcp_breakout_buy_zone_confirmed",
+                ),
+            )
+            if row.get(field) is True
+        ],
+        "unavailable_reason": reason,
+        "metrics": _metrics(
+            values,
+            (
+                ("modelOutput.metric.pivot", "pivot", "number"),
+                (
+                    "modelOutput.metric.volumeRatio",
+                    "volume_ratio",
+                    "ratio",
+                ),
+                (
+                    "modelOutput.metric.requiredVolumeRatio",
+                    "required_volume_ratio",
+                    "ratio",
+                ),
+                (
+                    "modelOutput.metric.pctOverPivot",
+                    "pct_over_pivot",
+                    "percent",
+                ),
+                (
+                    "modelOutput.metric.buyZoneLimit",
+                    "buy_zone_limit",
+                    "percent",
+                ),
+            ),
         ),
     }
+
+
+def _pocket_pivot(row):
+    evidence = _mapping(row.get("pocket_pivot_evidence"))
+    reason = row.get("pocket_pivot_reject_reason") or evidence.get(
+        "reject_reason"
+    )
+    if "pocket_pivot" not in row:
+        status = "unavailable"
+        reason = reason or "historical_entry_signal_not_computed"
+    elif evidence.get("available") is False:
+        status = "unavailable"
+    else:
+        status = "active" if row.get("pocket_pivot") is True else "inactive"
+    values = {
+        "current_volume": row.get(
+            "pocket_pivot_current_volume",
+            evidence.get("current_volume"),
+        ),
+        "prior_down_volume": row.get(
+            "pocket_pivot_prior_down_volume",
+            evidence.get("prior_down_volume"),
+        ),
+        "down_day_count": row.get(
+            "pocket_pivot_down_day_count",
+            evidence.get("down_day_count"),
+        ),
+        "lookback": evidence.get("lookback", 10),
+    }
+    return {
+        **_identity(
+            "pocket_pivot_v1",
+            "v1",
+            "rule_event",
+            "production",
+            status,
+            "close_confirmed",
+            "model.pocketPivot",
+        ),
+        "unavailable_reason": reason,
+        "metrics": _metrics(
+            values,
+            (
+                (
+                    "modelOutput.metric.currentVolume",
+                    "current_volume",
+                    "volume",
+                ),
+                (
+                    "modelOutput.metric.priorDownVolume",
+                    "prior_down_volume",
+                    "volume",
+                ),
+                (
+                    "modelOutput.metric.downDayCount",
+                    "down_day_count",
+                    "number",
+                ),
+                (
+                    "modelOutput.metric.lookbackSessions",
+                    "lookback",
+                    "number",
+                ),
+            ),
+        ),
+    }
+
+
+def _metrics(values, definitions):
+    return [
+        {
+            "label_key": label_key,
+            "value": json_safe(values.get(field)),
+            "format": format_name,
+        }
+        for label_key, field, format_name in definitions
+        if values.get(field) is not None
+    ]
 
 
 def _decision_output(decision):

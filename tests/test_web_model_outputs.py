@@ -85,8 +85,47 @@ def chart_row():
             "current_price_acceptance",
             "current_volume_support",
         ],
-        "strict_vcp": False,
-        "tight_platform": True,
+        "strict_vcp_active": False,
+        "strict_vcp_reject_reason": "contractions_not_decreasing",
+        "strict_vcp_evidence": {
+            "accepted": False,
+            "n_contractions": 2,
+            "vcp_pivot": 103.5,
+            "distance_to_pivot_pct": -1.2,
+            "reject_reason": "contractions_not_decreasing",
+        },
+        "tight_platform_active": True,
+        "tight_platform_reject_reason": None,
+        "tight_platform_evidence": {
+            "available": True,
+            "active": True,
+            "platform_pivot": 102.5,
+            "range_pct": 3.4,
+            "vol_dryup_pct": 28.0,
+            "reject_reason": None,
+        },
+        "vcp_breakout_confirmed": True,
+        "vcp_breakout_price_confirmed": True,
+        "vcp_breakout_volume_confirmed": True,
+        "vcp_breakout_buy_zone_confirmed": True,
+        "vcp_breakout_pivot": 103.5,
+        "vcp_breakout_volume_ratio": 1.62,
+        "vcp_breakout_pct_over_pivot": 2.1,
+        "vcp_breakout_reject_reason": None,
+        "pocket_pivot": False,
+        "pocket_pivot_current_volume": 1_250_000,
+        "pocket_pivot_prior_down_volume": 1_400_000,
+        "pocket_pivot_down_day_count": 4,
+        "pocket_pivot_reject_reason": "volume_not_above_prior_down_days",
+        "pocket_pivot_evidence": {
+            "available": True,
+            "active": False,
+            "lookback": 10,
+            "current_volume": 1_250_000,
+            "prior_down_volume": 1_400_000,
+            "down_day_count": 4,
+            "reject_reason": "volume_not_above_prior_down_days",
+        },
     }
 
 
@@ -152,6 +191,65 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(structural["key"], "bullish_structure_reversal_v1")
         self.assertEqual(structural["score"], 2)
         self.assertEqual(structural["status"], "active")
+        bullish = {
+            item["key"]: item for item in outputs["bullish_structure"]
+        }
+        self.assertEqual(bullish["strict_vcp"]["status"], "inactive")
+        self.assertEqual(bullish["tight_platform"]["status"], "active")
+        self.assertEqual(
+            bullish["strict_vcp"]["unavailable_reason"],
+            "contractions_not_decreasing",
+        )
+        self.assertEqual(
+            bullish["vcp_breakout_confirmed_v1"]["status"],
+            "active",
+        )
+        self.assertEqual(
+            bullish["pocket_pivot_v1"]["status"],
+            "inactive",
+        )
+        self.assertEqual(
+            bullish["pocket_pivot_v1"]["unavailable_reason"],
+            "volume_not_above_prior_down_days",
+        )
+        self.assertEqual(
+            bullish["vcp_breakout_confirmed_v1"]["metrics"],
+            [
+                {
+                    "label_key": "modelOutput.metric.pivot",
+                    "value": 103.5,
+                    "format": "number",
+                },
+                {
+                    "label_key": "modelOutput.metric.volumeRatio",
+                    "value": 1.62,
+                    "format": "ratio",
+                },
+                {
+                    "label_key": "modelOutput.metric.requiredVolumeRatio",
+                    "value": 1.4,
+                    "format": "ratio",
+                },
+                {
+                    "label_key": "modelOutput.metric.pctOverPivot",
+                    "value": 2.1,
+                    "format": "percent",
+                },
+                {
+                    "label_key": "modelOutput.metric.buyZoneLimit",
+                    "value": 5.0,
+                    "format": "percent",
+                },
+            ],
+        )
+        self.assertEqual(
+            bullish["pocket_pivot_v1"]["metrics"][0],
+            {
+                "label_key": "modelOutput.metric.currentVolume",
+                "value": 1_250_000,
+                "format": "volume",
+            },
+        )
         self.assertEqual(outputs["decision"]["kind"], "decision_policy")
         self.assertEqual(outputs["decision"]["final_direction"], "down")
         self.assertEqual((forecast, row, evaluation), original)
@@ -185,8 +283,47 @@ class ModelOutputContractTest(unittest.TestCase):
             outputs["decision"]["unavailable_reason"],
             "decision_context_unavailable",
         )
-        for item in outputs["bullish_structure"][:4]:
+        for item in outputs["bullish_structure"][:6]:
             self.assertEqual(item["status"], "unavailable")
+
+    def test_insufficient_shape_history_has_a_typed_reason(self):
+        row = chart_row()
+        row.update(
+            {
+                "strict_vcp_active": False,
+                "strict_vcp_reject_reason": "insufficient_history",
+                "strict_vcp_evidence": {
+                    "accepted": False,
+                    "reject_reason": "insufficient_history",
+                },
+                "tight_platform_active": False,
+                "tight_platform_reject_reason": "insufficient_history",
+                "tight_platform_evidence": {
+                    "available": False,
+                    "active": False,
+                    "reject_reason": "insufficient_history",
+                },
+                "pocket_pivot": False,
+                "pocket_pivot_reject_reason": "insufficient_history",
+                "pocket_pivot_evidence": {
+                    "available": False,
+                    "active": False,
+                    "reject_reason": "insufficient_history",
+                },
+            }
+        )
+
+        outputs = build_model_outputs(forecast_payload(), row, {})
+        bullish = {
+            item["key"]: item for item in outputs["bullish_structure"]
+        }
+
+        for key in ("strict_vcp", "tight_platform", "pocket_pivot_v1"):
+            self.assertEqual(bullish[key]["status"], "unavailable")
+            self.assertEqual(
+                bullish[key]["unavailable_reason"],
+                "insufficient_history",
+            )
 
 
 if __name__ == "__main__":
