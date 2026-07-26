@@ -1599,6 +1599,14 @@ class ForecastServiceTest(unittest.TestCase):
                 "distribution_pressure_score": None,
                 "structure_damage_score": None,
                 "high_level_distribution_conditions": [],
+                "distribution_count_5": None,
+                "distribution_count_10": None,
+                "distribution_count_20": None,
+                "churning_count_10": None,
+                "churning_cluster": None,
+                "climax_run_score": None,
+                "climax_run_candidate": None,
+                "climax_run_conditions": [],
             },
         )
 

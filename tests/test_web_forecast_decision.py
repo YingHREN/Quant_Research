@@ -60,6 +60,14 @@ def high_risk_decision(**changes):
         "distribution_pressure_score": 0.0,
         "structure_damage_score": 0.0,
         "high_level_distribution_conditions": (),
+        "distribution_count_5": 1,
+        "distribution_count_10": 2,
+        "distribution_count_20": 3,
+        "churning_count_10": 2,
+        "churning_cluster": True,
+        "climax_run_score": 80.0,
+        "climax_run_candidate": True,
+        "climax_run_conditions": ("climax_acceleration",),
     }
     values.update(changes)
     return ForecastDecision(**values)
@@ -119,6 +127,14 @@ class ForecastDecisionContractTest(unittest.TestCase):
                 "distribution_pressure_score": 0.0,
                 "structure_damage_score": 0.0,
                 "high_level_distribution_conditions": [],
+                "distribution_count_5": 1,
+                "distribution_count_10": 2,
+                "distribution_count_20": 3,
+                "churning_count_10": 2,
+                "churning_cluster": True,
+                "climax_run_score": 80.0,
+                "climax_run_candidate": True,
+                "climax_run_conditions": ["climax_acceleration"],
             },
         )
 
@@ -202,6 +218,14 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "distribution_pressure_score",
                 "structure_damage_score",
                 "high_level_distribution_conditions",
+                "distribution_count_5",
+                "distribution_count_10",
+                "distribution_count_20",
+                "churning_count_10",
+                "churning_cluster",
+                "climax_run_score",
+                "climax_run_candidate",
+                "climax_run_conditions",
             ],
         )
         self.assertIn("MU", context.index.get_level_values("ticker"))
@@ -347,6 +371,14 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "distribution_pressure_score": 0.0,
             "structure_damage_score": 0.0,
             "high_level_distribution_conditions": (),
+            "distribution_count_5": 0,
+            "distribution_count_10": 0,
+            "distribution_count_20": 0,
+            "churning_count_10": 0,
+            "churning_cluster": False,
+            "climax_run_score": 0.0,
+            "climax_run_candidate": False,
+            "climax_run_conditions": (),
         }
 
     def test_unavailable_context_retains_raw_forecast(self):

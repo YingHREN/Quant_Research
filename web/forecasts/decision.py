@@ -48,6 +48,14 @@ RISK_CONTEXT_COLUMNS = (
     "distribution_pressure_score",
     "structure_damage_score",
     "high_level_distribution_conditions",
+    "distribution_count_5",
+    "distribution_count_10",
+    "distribution_count_20",
+    "churning_count_10",
+    "churning_cluster",
+    "climax_run_score",
+    "climax_run_candidate",
+    "climax_run_conditions",
 )
 PERSISTENT_RISK_SOURCES = frozenset(("individual", "group", "slow_decline"))
 SOURCE_WATCH_THRESHOLDS = {
@@ -90,6 +98,14 @@ class ForecastDecision:
     distribution_pressure_score: float | None = None
     structure_damage_score: float | None = None
     high_level_distribution_conditions: tuple[str, ...] = ()
+    distribution_count_5: int | None = None
+    distribution_count_10: int | None = None
+    distribution_count_20: int | None = None
+    churning_count_10: int | None = None
+    churning_cluster: bool | None = None
+    climax_run_score: float | None = None
+    climax_run_candidate: bool | None = None
+    climax_run_conditions: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.final_direction not in FORECAST_DIRECTIONS - {"unavailable"}:
@@ -192,6 +208,33 @@ class ForecastDecision:
             raise ValueError(
                 "high_level_distribution_conditions must contain strings"
             )
+        distribution_counts = tuple(
+            _optional_count(value, name)
+            for value, name in (
+                (self.distribution_count_5, "distribution_count_5"),
+                (self.distribution_count_10, "distribution_count_10"),
+                (self.distribution_count_20, "distribution_count_20"),
+                (self.churning_count_10, "churning_count_10"),
+            )
+        )
+        churning_cluster = _optional_boolean(
+            self.churning_cluster,
+            "churning_cluster",
+        )
+        climax_score = _optional_score(
+            self.climax_run_score,
+            "climax_run_score",
+        )
+        climax_candidate = _optional_boolean(
+            self.climax_run_candidate,
+            "climax_run_candidate",
+        )
+        climax_conditions = tuple(self.climax_run_conditions)
+        if any(
+            not isinstance(condition, str) or not condition
+            for condition in climax_conditions
+        ):
+            raise ValueError("climax_run_conditions must contain strings")
         object.__setattr__(self, "reasons", reasons)
         object.__setattr__(self, "policy_key", policy_key)
         object.__setattr__(self, "policy_version", policy_version)
@@ -229,6 +272,28 @@ class ForecastDecision:
             self,
             "high_level_distribution_conditions",
             top_conditions,
+        )
+        for name, value in zip(
+            (
+                "distribution_count_5",
+                "distribution_count_10",
+                "distribution_count_20",
+                "churning_count_10",
+            ),
+            distribution_counts,
+        ):
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "churning_cluster", churning_cluster)
+        object.__setattr__(self, "climax_run_score", climax_score)
+        object.__setattr__(
+            self,
+            "climax_run_candidate",
+            climax_candidate,
+        )
+        object.__setattr__(
+            self,
+            "climax_run_conditions",
+            climax_conditions,
         )
 
     def to_dict(self):
@@ -279,6 +344,14 @@ class ForecastDecision:
             "high_level_distribution_conditions": list(
                 self.high_level_distribution_conditions
             ),
+            "distribution_count_5": self.distribution_count_5,
+            "distribution_count_10": self.distribution_count_10,
+            "distribution_count_20": self.distribution_count_20,
+            "churning_count_10": self.churning_count_10,
+            "churning_cluster": self.churning_cluster,
+            "climax_run_score": json_safe(self.climax_run_score),
+            "climax_run_candidate": self.climax_run_candidate,
+            "climax_run_conditions": list(self.climax_run_conditions),
         }
 
 
@@ -498,6 +571,30 @@ class ForecastDecisionPolicy:
             high_level_distribution_conditions=(
                 () if persistent is None else persistent["top_conditions"]
             ),
+            distribution_count_5=(
+                None if persistent is None else persistent["distribution_5"]
+            ),
+            distribution_count_10=(
+                None if persistent is None else persistent["distribution_10"]
+            ),
+            distribution_count_20=(
+                None if persistent is None else persistent["distribution_20"]
+            ),
+            churning_count_10=(
+                None if persistent is None else persistent["churning_10"]
+            ),
+            churning_cluster=(
+                None if persistent is None else persistent["churning_cluster"]
+            ),
+            climax_run_score=(
+                None if persistent is None else persistent["climax_score"]
+            ),
+            climax_run_candidate=(
+                None if persistent is None else persistent["climax_candidate"]
+            ),
+            climax_run_conditions=(
+                () if persistent is None else persistent["climax_conditions"]
+            ),
         )
         return forecast.with_decision(decision)
 
@@ -652,6 +749,17 @@ def _attach_additional_risk_sources(selected, histories, group):
     selected["high_level_distribution_conditions"] = aligned_top[
         "high_level_distribution_conditions"
     ]
+    for field in (
+        "distribution_count_5",
+        "distribution_count_10",
+        "distribution_count_20",
+        "churning_count_10",
+        "churning_cluster",
+        "climax_run_score",
+        "climax_run_candidate",
+        "climax_run_conditions",
+    ):
+        selected[field] = aligned_top[field]
     selected["persistent_risk_raw_score"] = selected[
         [
             "individual_risk_raw_score",
@@ -819,6 +927,33 @@ def _risk_context(row):
         top_conditions = tuple(
             row.get("high_level_distribution_conditions") or ()
         )
+        distribution_5 = _optional_context_count(
+            row.get("distribution_count_5"),
+            "distribution_count_5",
+        )
+        distribution_10 = _optional_context_count(
+            row.get("distribution_count_10"),
+            "distribution_count_10",
+        )
+        distribution_20 = _optional_context_count(
+            row.get("distribution_count_20"),
+            "distribution_count_20",
+        )
+        churning_10 = _optional_context_count(
+            row.get("churning_count_10"),
+            "churning_count_10",
+        )
+        churning_cluster = _optional_context_boolean(
+            row.get("churning_cluster"),
+        )
+        climax_score = _optional_context_score(
+            row.get("climax_run_score"),
+            "climax_run_score",
+        )
+        climax_candidate = _optional_context_boolean(
+            row.get("climax_run_candidate"),
+        )
+        climax_conditions = tuple(row.get("climax_run_conditions") or ())
         if any(
             pd.isna(value)
             for value in (score_value, raw_score_value, state, age)
@@ -889,6 +1024,14 @@ def _risk_context(row):
         "top_supply": top_supply,
         "top_structure": top_structure,
         "top_conditions": top_conditions,
+        "distribution_5": distribution_5,
+        "distribution_10": distribution_10,
+        "distribution_20": distribution_20,
+        "churning_10": churning_10,
+        "churning_cluster": churning_cluster,
+        "climax_score": climax_score,
+        "climax_candidate": climax_candidate,
+        "climax_conditions": climax_conditions,
     }
 
 
@@ -916,6 +1059,42 @@ def _optional_context_score(value, name):
     if value is None or pd.isna(value):
         return None
     return _optional_score(value, name)
+
+
+def _optional_count(value, name):
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be an integer or None")
+    result = int(value)
+    if result < 0:
+        raise ValueError(f"{name} must not be negative")
+    return result
+
+
+def _optional_context_count(value, name):
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be numeric")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric < 0.0 or not numeric.is_integer():
+        raise ValueError(f"{name} must be a non-negative integer")
+    return int(numeric)
+
+
+def _optional_boolean(value, name):
+    if value is None:
+        return None
+    if not isinstance(value, (bool, np.bool_)):
+        raise TypeError(f"{name} must be a boolean or None")
+    return bool(value)
+
+
+def _optional_context_boolean(value):
+    if value is None or pd.isna(value):
+        return None
+    return _optional_boolean(value, "context boolean")
 
 
 def _required_score(value, name):

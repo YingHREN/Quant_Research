@@ -193,7 +193,27 @@ def _high_level_distribution_risk(decision):
             decision.get("structure_damage_score")
         ),
         "conditions": list(
-            decision.get("high_level_distribution_conditions") or ()
+            dict.fromkeys(
+                (
+                    *(
+                        decision.get(
+                            "high_level_distribution_conditions"
+                        )
+                        or ()
+                    ),
+                    *(decision.get("climax_run_conditions") or ()),
+                )
+            )
+        ),
+        "distribution_count_5": decision.get("distribution_count_5"),
+        "distribution_count_10": decision.get("distribution_count_10"),
+        "distribution_count_20": decision.get("distribution_count_20"),
+        "churning_count_10": decision.get("churning_count_10"),
+        "churning_cluster": decision.get("churning_cluster"),
+        "climax_run_score": json_safe(decision.get("climax_run_score")),
+        "climax_run_candidate": decision.get("climax_run_candidate"),
+        "climax_run_conditions": list(
+            decision.get("climax_run_conditions") or ()
         ),
         "unavailable_reason": (
             None if available else "insufficient_high_level_context"

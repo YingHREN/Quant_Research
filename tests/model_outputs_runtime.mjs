@@ -102,6 +102,13 @@ const forecast = {
       distribution_pressure_score: 70,
       structure_damage_score: 55,
       conditions: ["distribution_day", "failed_breakout", "below_ema20"],
+      distribution_count_5: 1,
+      distribution_count_10: 3,
+      distribution_count_20: 5,
+      churning_count_10: 2,
+      churning_cluster: true,
+      climax_run_score: 80,
+      climax_run_candidate: true,
     }, {
       ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
       lifecycle: "planned",
@@ -146,6 +153,11 @@ assert.match(zh, /高位背景 75/);
 assert.match(zh, /供应聚集 70/);
 assert.match(zh, /结构破坏 55/);
 assert.match(zh, /疑似派发代理，不代表已确认机构交易/);
+assert.match(zh, /5日派发次数 1/);
+assert.match(zh, /10日派发次数 3/);
+assert.match(zh, /20日派发次数 5/);
+assert.match(zh, /10日 Churning 次数 2/);
+assert.match(zh, /末端加速分数 80/);
 
 renderModelOutputs(container, {
   forecast,

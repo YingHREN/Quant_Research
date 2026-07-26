@@ -31,6 +31,77 @@ def elevated_distribution_history():
 
 
 class HighLevelDistributionTest(unittest.TestCase):
+    def test_churning_requires_multiple_events_in_rolling_window(self):
+        frame = elevated_distribution_history()
+        for offset in (-8, -4):
+            previous = frame.iloc[offset - 1]["Close"]
+            frame.iloc[offset, frame.columns.get_loc("Open")] = previous
+            frame.iloc[offset, frame.columns.get_loc("Close")] = previous * 1.002
+            frame.iloc[offset, frame.columns.get_loc("High")] = previous * 1.02
+            frame.iloc[offset, frame.columns.get_loc("Low")] = previous * 0.98
+            frame.iloc[offset, frame.columns.get_loc("Volume")] = 2_000_000.0
+
+        row = build_high_level_distribution_state(frame).iloc[-2]
+
+        self.assertEqual(row["churning_count_10"], 2)
+        self.assertTrue(row["churning_cluster"])
+        self.assertIn(
+            "multi_session_churning",
+            row["distribution_pressure_conditions"],
+        )
+
+    def test_single_high_volume_non_progress_day_is_not_churning_cluster(self):
+        frame = elevated_distribution_history()
+        previous = frame.iloc[-4]["Close"]
+        frame.iloc[-3, frame.columns.get_loc("Open")] = previous
+        frame.iloc[-3, frame.columns.get_loc("Close")] = previous * 1.002
+        frame.iloc[-3, frame.columns.get_loc("High")] = previous * 1.02
+        frame.iloc[-3, frame.columns.get_loc("Low")] = previous * 0.98
+        frame.iloc[-3, frame.columns.get_loc("Volume")] = 2_000_000.0
+
+        row = build_high_level_distribution_state(frame).iloc[-2]
+
+        self.assertEqual(row["churning_count_10"], 1)
+        self.assertFalse(row["churning_cluster"])
+
+    def test_climax_run_requires_multiple_independent_evidence_groups(self):
+        early = np.linspace(50.0, 100.0, 260)
+        acceleration = 100.0 * np.power(1.02, np.arange(1, 21))
+        closes = np.concatenate([early, acceleration])
+        frame = make_ohlcv(closes)
+        frame.iloc[-10:, frame.columns.get_loc("High")] = closes[-10:] * 1.04
+        frame.iloc[-10:, frame.columns.get_loc("Low")] = closes[-10:] * 0.97
+        frame.iloc[-10:, frame.columns.get_loc("Volume")] = 2_200_000.0
+
+        row = build_high_level_distribution_state(frame).iloc[-1]
+
+        self.assertGreaterEqual(row["climax_run_score"], 60.0)
+        self.assertTrue(row["climax_run_candidate"])
+        self.assertGreaterEqual(len(row["climax_run_conditions"]), 3)
+        self.assertNotEqual(
+            row["high_level_distribution_raw_state"],
+            "confirmed",
+        )
+
+    def test_distribution_counts_expire_causally(self):
+        frame = elevated_distribution_history()
+        event_position = len(frame) - 12
+        frame.iloc[event_position, frame.columns.get_loc("Open")] *= 1.05
+        frame.iloc[event_position, frame.columns.get_loc("Close")] *= 0.95
+        frame.iloc[event_position, frame.columns.get_loc("High")] = (
+            frame.iloc[event_position]["Open"] * 1.01
+        )
+        frame.iloc[event_position, frame.columns.get_loc("Low")] = (
+            frame.iloc[event_position]["Close"] * 0.99
+        )
+        frame.iloc[event_position, frame.columns.get_loc("Volume")] = 2_000_000
+
+        rows = build_high_level_distribution_state(frame)
+
+        self.assertGreaterEqual(rows.iloc[event_position]["distribution_count_5"], 1)
+        self.assertEqual(rows.iloc[-1]["distribution_count_10"], 1)
+        self.assertGreaterEqual(rows.iloc[-1]["distribution_count_20"], 2)
+
     def test_prior_advance_supply_and_structure_damage_confirm_top_risk(self):
         row = build_high_level_distribution_state(
             elevated_distribution_history()

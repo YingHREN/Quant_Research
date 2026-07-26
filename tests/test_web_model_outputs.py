@@ -50,6 +50,19 @@ def forecast_payload():
                 "failed_breakout",
                 "below_ema20",
             ],
+            "distribution_count_5": 1,
+            "distribution_count_10": 3,
+            "distribution_count_20": 5,
+            "churning_count_10": 2,
+            "churning_cluster": True,
+            "climax_run_score": 80.0,
+            "climax_run_candidate": True,
+            "climax_run_conditions": [
+                "climax_acceleration",
+                "climax_range_expansion",
+                "climax_ema_extension",
+                "climax_abnormal_volume",
+            ],
             "immediate_risk_score": 100.0,
         },
     }
@@ -125,6 +138,12 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(top_risk["distribution_pressure_score"], 70.0)
         self.assertEqual(top_risk["structure_damage_score"], 55.0)
         self.assertIn("failed_breakout", top_risk["conditions"])
+        self.assertEqual(top_risk["distribution_count_20"], 5)
+        self.assertEqual(top_risk["churning_count_10"], 2)
+        self.assertTrue(top_risk["churning_cluster"])
+        self.assertEqual(top_risk["climax_run_score"], 80.0)
+        self.assertTrue(top_risk["climax_run_candidate"])
+        self.assertIn("climax_acceleration", top_risk["conditions"])
         structural = outputs["bullish_structure"][0]
         self.assertEqual(structural["key"], "bullish_structure_reversal_v1")
         self.assertEqual(structural["score"], 2)

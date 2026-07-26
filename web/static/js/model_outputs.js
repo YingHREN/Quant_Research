@@ -153,6 +153,20 @@ function modelCard(model, locale, { open = false } = {}) {
       number(model.structure_damage_score, locale),
     ));
   }
+  [
+    ["distribution_count_5", "modelOutput.field.distributionCount5"],
+    ["distribution_count_10", "modelOutput.field.distributionCount10"],
+    ["distribution_count_20", "modelOutput.field.distributionCount20"],
+    ["churning_count_10", "modelOutput.field.churningCount10"],
+    ["climax_run_score", "modelOutput.field.climaxRunScore"],
+  ].forEach(([field, labelKey]) => {
+    if (model[field] !== undefined) {
+      values.append(labeledValue(
+        t(labelKey, {}, locale),
+        number(model[field], locale),
+      ));
+    }
+  });
   if (model.horizon_sessions !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.horizon", {}, locale),

@@ -7,6 +7,7 @@ import pandas as pd
 
 from research.market_pressure import build_pressure_rows
 from research.risk_memory import build_risk_memory_state
+from research.supply_regime import build_supply_regime_rows
 
 
 MINIMUM_CONTEXT_COVERAGE = 0.75
@@ -26,6 +27,7 @@ def build_high_level_distribution_state(
     close = checked["Close"]
     volume = checked["Volume"]
     pressure = build_pressure_rows(checked)
+    supply_regime = build_supply_regime_rows(checked)
     ema20 = close.ewm(span=20, adjust=False).mean()
     sma50 = close.rolling(50, min_periods=50).mean()
     prior_high_252 = close.shift(1).rolling(252, min_periods=126).max()
@@ -67,6 +69,15 @@ def build_high_level_distribution_state(
     close_volume_points += (
         (pressure["close_location"] <= -0.5).astype(float) * 10.0
     ).where(pressure["close_location"].notna(), 0.0)
+    close_volume_points += (
+        supply_regime["churning_cluster"].eq(True).astype(float) * 15.0
+    )
+    close_volume_points += (
+        (supply_regime["distribution_count_10"] >= 2.0)
+        .fillna(False)
+        .astype(float)
+        * 15.0
+    )
     close_volume_score = close_volume_points.clip(upper=40.0)
 
     upper_wick_supply = (
@@ -79,6 +90,12 @@ def build_high_level_distribution_state(
     rejection_points = (
         upper_wick_supply.astype(float).fillna(0.0) * 15.0
         + pressure["failed_breakout"].astype(float) * 20.0
+        + (
+            (supply_regime["failed_breakout_count_10"] >= 2.0)
+            .fillna(False)
+            .astype(float)
+            * 10.0
+        )
     )
     rejection_score = rejection_points.clip(upper=30.0)
 
@@ -131,6 +148,18 @@ def build_high_level_distribution_state(
     result["rejection_supply_score"] = rejection_score.round(2)
     result["relative_supply_score"] = relative_score.round(2)
     result["distribution_pressure_score"] = supply_score.round(2)
+    for field in (
+        "distribution_count_5",
+        "distribution_count_10",
+        "distribution_count_20",
+        "churning_count_10",
+        "churning_cluster",
+        "failed_breakout_count_10",
+        "climax_run_score",
+        "climax_run_candidate",
+        "climax_run_conditions",
+    ):
+        result[field] = supply_regime[field]
     result["structure_damage_score"] = structure_score.round(2)
     result["structure_damage_coverage"] = structure_coverage.round(4)
     result["high_level_distribution_raw_score"] = raw_score.round(2)
@@ -170,6 +199,13 @@ def build_high_level_distribution_state(
             "weak_close": pressure["close_location"] <= -0.5,
             "upper_wick_supply": upper_wick_supply,
             "failed_breakout": pressure["failed_breakout"],
+            "multi_session_churning": supply_regime["churning_cluster"],
+            "distribution_cluster": (
+                supply_regime["distribution_count_10"] >= 2.0
+            ),
+            "repeated_failed_breakout": (
+                supply_regime["failed_breakout_count_10"] >= 2.0
+            ),
             **relative_conditions,
         },
         checked.index,
