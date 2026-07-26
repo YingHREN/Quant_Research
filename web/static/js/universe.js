@@ -13,6 +13,13 @@ function firstDefined(row, keys) {
   return undefined;
 }
 
+export function classificationFor(row = {}, taxonomy = "sec") {
+  const classification = row.sector_classification ?? row.sectorClassification;
+  if (!classification || typeof classification !== "object") return null;
+  const value = classification[taxonomy];
+  return value && typeof value === "object" ? value : null;
+}
+
 export function filterTickers(rows, query = "", filters = {}) {
   const normalizedQuery = String(query || "").trim().toUpperCase();
   return (Array.isArray(rows) ? rows : []).filter((row) => {
@@ -26,6 +33,15 @@ export function filterTickers(rows, query = "", filters = {}) {
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
     if (filters.inactive && !(row.inactive || row.stale)) return false;
+    const sectorKey = String(filters.sectorKey || "");
+    if (sectorKey && sectorKey !== "all") {
+      const classification = classificationFor(
+        row,
+        filters.sectorTaxonomy || "sec",
+      );
+      const actual = classification?.sector_key || "unclassified";
+      if (actual !== sectorKey) return false;
+    }
     return true;
   });
 }
@@ -75,6 +91,13 @@ function describeShape(row, locale) {
   return t("universe.shape.none", {}, locale);
 }
 
+function sectorLabel(sectorKey, locale) {
+  if (!sectorKey) return t("universe.sector.unclassified", {}, locale);
+  const key = `market.sector.${sectorKey}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? String(sectorKey).replaceAll("_", " ") : localized;
+}
+
 export function describeTickerState(row = {}, locale = getLocale()) {
   return {
     status: t(
@@ -92,6 +115,7 @@ export function renderUniverse(container, rows, options = {}) {
   const selectedTicker = options.selectedTicker || null;
   const onSelect = typeof options.onSelect === "function" ? options.onSelect : () => {};
   const locale = options.locale || getLocale();
+  const sectorTaxonomy = options.sectorTaxonomy || "sec";
   container.replaceChildren();
 
   if (!rows.length) {
@@ -122,6 +146,13 @@ export function renderUniverse(container, rows, options = {}) {
 
     const metadata = document.createElement("span");
     metadata.className = "ticker-meta";
+    const sector = classificationFor(row, sectorTaxonomy);
+    const sectorNode = appendText(
+      metadata,
+      "ticker-sector",
+      sectorLabel(sector?.sector_key, locale),
+    );
+    sectorNode.dataset.state = sector ? "classified" : "unclassified";
     const percentile = row.momentum_percentile ?? row.momentumPercentile;
     appendText(
       metadata,

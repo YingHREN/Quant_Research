@@ -74,6 +74,52 @@ class FakeRepository:
         }
 
 
+class FakeClassificationService:
+    def __init__(self):
+        self.calls = []
+
+    def build(self, tickers):
+        self.calls.append(tuple(tickers))
+        return {
+            "status": "available",
+            "asof": "2026-07-24",
+            "research_universe_count": 1014,
+            "sector_counts": {
+                "sec": {"technology": 237},
+                "market_behavior": {"technology": 154},
+            },
+            "by_ticker": {
+                ticker: {
+                    "state": "agree" if ticker == "AAA" else "unclassified",
+                    "sec": (
+                        {
+                            "sector_key": "technology",
+                            "confidence": 1.0,
+                            "source": "sec",
+                            "rule_version": "sec_sic_v1",
+                            "asof": "2026-07-24",
+                        }
+                        if ticker == "AAA"
+                        else None
+                    ),
+                    "market_behavior": (
+                        {
+                            "sector_key": "technology",
+                            "benchmark_ticker": "XLK",
+                            "confidence": 0.8,
+                            "source": "price_returns",
+                            "rule_version": "market_behavior_v1",
+                            "asof": "2026-07-24",
+                        }
+                        if ticker == "AAA"
+                        else None
+                    ),
+                }
+                for ticker in tickers
+            },
+        }
+
+
 def _registry():
     return FactorRegistry(
         [
@@ -123,6 +169,39 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         self.assertEqual(payload["asof"], "2026-07-21")
         self.assertEqual(repository.snapshot_calls, 2)
         self.assertEqual(service.cache_size, 1)
+
+    def test_build_merges_research_classifications_without_loading_prices(self):
+        repository = FakeRepository()
+        classifications = FakeClassificationService()
+        service = UniverseSnapshotService(
+            repository,
+            _registry(),
+            classification_service=classifications,
+        )
+
+        payload = service.build()
+
+        self.assertEqual(payload["classification_summary"]["status"], "available")
+        self.assertEqual(
+            payload["classification_summary"]["research_universe_count"],
+            1014,
+        )
+        by_ticker = {row["ticker"]: row for row in payload["tickers"]}
+        self.assertEqual(
+            by_ticker["AAA"]["sector_classification"]["state"],
+            "agree",
+        )
+        self.assertEqual(
+            by_ticker["AAA"]["sector_classification"]["market_behavior"][
+                "benchmark_ticker"
+            ],
+            "XLK",
+        )
+        self.assertEqual(len(classifications.calls), 1)
+        self.assertEqual(
+            set(classifications.calls[0]),
+            set(repository.histories),
+        )
 
 
 if __name__ == "__main__":

@@ -60,6 +60,7 @@ from web.services.market_data import (
 )
 from web.services.market_overview import MarketOverviewService
 from web.services.universe import UniverseSnapshotService
+from web.services.research_classification import ResearchClassificationService
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
@@ -89,6 +90,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             PROJECT_ROOT / "data" / "analysis_cache.db"
         ),
         ENTRY_SIGNAL_ARTIFACT_CACHE_ENTRIES=64,
+        RESEARCH_DATABASE=os.fspath(PROJECT_ROOT / "data" / "research_prices.db"),
     )
     if config:
         flask_app.config.update(config)
@@ -175,9 +177,17 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     universe_service = flask_app.config.get("UNIVERSE_SERVICE")
     if universe_service is None:
+        classification_service = flask_app.config.get(
+            "RESEARCH_CLASSIFICATION_SERVICE"
+        )
+        if classification_service is None:
+            classification_service = ResearchClassificationService(
+                flask_app.config["RESEARCH_DATABASE"]
+            )
         universe_service = UniverseSnapshotService(
             repository,
             factor_registry,
+            classification_service=classification_service,
             revision_getter=lambda: getattr(
                 forecast_service,
                 "database_revision",
@@ -204,6 +214,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions["dashboard_update_manager"] = update_manager
     flask_app.extensions["dashboard_factor_registry"] = factor_registry
     flask_app.extensions["dashboard_universe_service"] = universe_service
+    flask_app.extensions[
+        "dashboard_research_classification_service"
+    ] = getattr(universe_service, "_classification_service", None)
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions[

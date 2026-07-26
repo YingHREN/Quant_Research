@@ -85,9 +85,10 @@ function byClass(node, className) {
 
 const ids = [
   "universe-list", "universe-count", "universe-status", "universe-search", "sort-key",
-  "sort-direction", "market-date", "market-coverage", "selected-ticker", "selected-close",
+  "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
+  "market-date", "market-coverage", "selected-ticker", "selected-close",
   "selected-change", "observation-date", "security-state", "research-status", "data-warnings",
-  "top-risk-state",
+  "top-risk-state", "security-classification",
   "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
   "factor-overview", "factor-table-body",
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
@@ -206,7 +207,27 @@ const universe = {
   tickers: [{
     ticker: "AAA", latest_date: "2026-07-22", lag_days: 0, inactive: false,
     stale: false, shape_state: "strict_vcp", momentum_percentile: 80,
+    sector_classification: {
+      state: "agree",
+      sec: {
+        sector_key: "technology", confidence: 1, source: "sec",
+        rule_version: "sec_sic_v1", asof: "2026-07-24",
+      },
+      market_behavior: {
+        sector_key: "technology", benchmark_ticker: "XLK", confidence: 0.8,
+        source: "price_returns", rule_version: "market_behavior_v1",
+        asof: "2026-07-24", residual_correlation: 0.42,
+        residual_beta: 1.2, relative_return_63d: 0.08, common_days: 252,
+      },
+    },
   }],
+  classification_summary: {
+    status: "available", asof: "2026-07-24", research_universe_count: 1014,
+    sector_counts: {
+      sec: { technology: 237 },
+      market_behavior: { technology: 154 },
+    },
+  },
   factor_groups: [{
     key: "trend", label: "Trend", methodology: "Moving-average position diagnostics.", overview: true,
   }],

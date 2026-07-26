@@ -179,6 +179,31 @@ class WebAssetTest(unittest.TestCase):
         ):
             self.assertIn(marker, html)
 
+    def test_sector_classification_controls_and_detail_card_are_present(self):
+        html = HTML.read_text()
+        for marker in (
+            'id="sector-taxonomy"',
+            'id="sector-key"',
+            'id="sector-membership-summary"',
+            'id="security-classification"',
+        ):
+            self.assertIn(marker, html)
+        i18n_source = (STATIC / "js/i18n.js").read_text()
+        app_source = (STATIC / "js/app.js").read_text()
+        for key in (
+            "universe.sector.taxonomy",
+            "universe.sector.sec",
+            "universe.sector.marketBehavior",
+            "universe.sector.unclassified",
+            "classification.confidence",
+            "classification.commonDays",
+            "classification.conflict",
+        ):
+            self.assertGreaterEqual(i18n_source.count(f'"{key}"'), 2)
+        self.assertIn("renderSecurityClassification", app_source)
+        self.assertIn("sectorTaxonomy", app_source)
+        self.assertIn("sectorKey", app_source)
+
     def test_frontend_never_injects_dynamic_html_strings(self):
         scripts = (STATIC / "js").glob("*.js")
         source = "\n".join(path.read_text() for path in scripts)
@@ -189,17 +214,27 @@ class WebAssetTest(unittest.TestCase):
     def test_universe_helpers_filter_sort_and_preserve_inputs(self):
         module_uri = (STATIC / "js/universe.js").as_uri()
         script = f"""
-            import {{ filterTickers, sortTickers }} from {json.dumps(module_uri)};
+            import {{
+              classificationFor, filterTickers, sortTickers
+            }} from {json.dumps(module_uri)};
             const rows = [
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, stale: false, strict_vcp: true, tight_platform: false,
-                near_pivot: true, momentum_percentile: 92, volatility: 18}},
+                near_pivot: true, momentum_percentile: 92, volatility: 18,
+                sector_classification: {{state: 'agree',
+                  sec: {{sector_key: 'technology'}},
+                  market_behavior: {{sector_key: 'technology'}}}}}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, stale: true, strict_vcp: false, tight_platform: true,
-                near_pivot: false, momentum_percentile: 71, volatility: 24}},
+                near_pivot: false, momentum_percentile: 71, volatility: 24,
+                sector_classification: {{state: 'conflict',
+                  sec: {{sector_key: 'technology'}},
+                  market_behavior: {{sector_key: 'financials'}}}}}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
-                near_pivot: true, momentum_percentile: null, volatility: null}}
+                near_pivot: true, momentum_percentile: null, volatility: null,
+                sector_classification: {{state: 'unclassified',
+                  sec: null, market_behavior: null}}}}
             ];
             const snapshot = JSON.stringify(rows);
             const searched = filterTickers(rows, 'ms', {{}}).map(row => row.ticker);
@@ -209,8 +244,19 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             const sorted = sortTickers(rows, 'momentum_percentile', 'desc')
               .map(row => row.ticker);
+            const secTechnology = filterTickers(rows, '', {{
+              sectorTaxonomy: 'sec', sectorKey: 'technology'
+            }}).map(row => row.ticker);
+            const behaviorFinancials = filterTickers(rows, '', {{
+              sectorTaxonomy: 'market_behavior', sectorKey: 'financials'
+            }}).map(row => row.ticker);
+            const behaviorUnclassified = filterTickers(rows, '', {{
+              sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
+            }}).map(row => row.ticker);
             console.log(JSON.stringify({{
-              searched, filtered, inactive, sorted,
+              searched, filtered, inactive, sorted, secTechnology,
+              behaviorFinancials, behaviorUnclassified,
+              aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
             }}));
         """
@@ -228,6 +274,10 @@ class WebAssetTest(unittest.TestCase):
                 "filtered": ["MSFT"],
                 "inactive": ["AAPL", "OLD"],
                 "sorted": ["MSFT", "AAPL", "OLD"],
+                "secTechnology": ["MSFT", "AAPL"],
+                "behaviorFinancials": ["AAPL"],
+                "behaviorUnclassified": ["OLD"],
+                "aaplBehavior": "financials",
                 "unchanged": True,
             },
         )

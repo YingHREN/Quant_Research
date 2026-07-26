@@ -24,7 +24,12 @@ import {
   readStoredTicker,
   store,
 } from "./store.js";
-import { filterTickers, renderUniverse, sortTickers } from "./universe.js";
+import {
+  classificationFor,
+  filterTickers,
+  renderUniverse,
+  sortTickers,
+} from "./universe.js";
 import {
   createUpdateController,
   shouldReloadAfterUpdate,
@@ -87,6 +92,235 @@ function currentRows() {
   );
 }
 
+function sectorLabel(sectorKey, locale = store.getState().locale) {
+  if (!sectorKey) return t("universe.sector.unclassified", {}, locale);
+  const key = `market.sector.${sectorKey}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? String(sectorKey).replaceAll("_", " ") : localized;
+}
+
+function appendClassificationText(parent, className, value) {
+  const node = document.createElement("span");
+  node.className = className;
+  node.textContent = value;
+  parent.append(node);
+  return node;
+}
+
+function classificationCard(titleKey, classification, kind, locale) {
+  const card = document.createElement("article");
+  card.className = `classification-card classification-card-${kind}`;
+  const heading = document.createElement("h3");
+  heading.textContent = t(titleKey, {}, locale);
+  card.append(heading);
+  const sector = document.createElement("strong");
+  sector.className = "classification-sector";
+  sector.textContent = sectorLabel(classification?.sector_key, locale);
+  card.append(sector);
+  if (!classification) {
+    card.dataset.state = "unclassified";
+    return card;
+  }
+  const metadata = document.createElement("div");
+  metadata.className = "classification-metadata";
+  if (Number.isFinite(classification.confidence)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.confidence",
+        { value: `${Math.round(classification.confidence * 100)}%` },
+        locale,
+      ),
+    );
+  }
+  if (classification.benchmark_ticker) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.benchmark",
+        { ticker: classification.benchmark_ticker },
+        locale,
+      ),
+    );
+  }
+  if (Number.isFinite(classification.common_days)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t("classification.commonDays", { days: classification.common_days }, locale),
+    );
+  }
+  if (Number.isFinite(classification.residual_correlation)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.correlation",
+        { value: classification.residual_correlation.toFixed(2) },
+        locale,
+      ),
+    );
+  }
+  if (Number.isFinite(classification.residual_beta)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.beta",
+        { value: classification.residual_beta.toFixed(2) },
+        locale,
+      ),
+    );
+  }
+  if (Number.isFinite(classification.relative_return_63d)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.relativeReturn",
+        { value: formatDailyReturn(classification.relative_return_63d) },
+        locale,
+      ),
+    );
+  }
+  card.append(metadata);
+  const source = document.createElement("small");
+  source.className = "classification-source";
+  source.textContent = t(
+    "classification.source",
+    {
+      source: classification.source || "—",
+      version: classification.rule_version || "—",
+    },
+    locale,
+  );
+  card.append(source);
+  return card;
+}
+
+export function renderSecurityClassification(
+  ticker = store.getState().selectedTicker,
+  locale = store.getState().locale,
+) {
+  const container = elements.securityClassification;
+  if (!container) return;
+  const row = store.getState().universe.find((item) => item.ticker === ticker);
+  const classification = row?.sector_classification;
+  if (!classification) {
+    const empty = document.createElement("p");
+    empty.className = "secondary-copy";
+    empty.textContent = t("classification.empty", {}, locale);
+    container.replaceChildren(empty);
+    container.dataset.state = "unclassified";
+    return;
+  }
+  const stateKeys = {
+    agree: "classification.agree",
+    conflict: "classification.conflict",
+    sec_only: "classification.secOnly",
+    behavior_only: "classification.behaviorOnly",
+    unclassified: "classification.stateUnclassified",
+  };
+  const heading = document.createElement("div");
+  heading.className = "classification-heading";
+  const title = document.createElement("strong");
+  title.textContent = t(
+    stateKeys[classification.state] || "classification.stateUnclassified",
+    {},
+    locale,
+  );
+  heading.append(title);
+  const grid = document.createElement("div");
+  grid.className = "classification-grid";
+  grid.append(
+    classificationCard(
+      "classification.secHeading",
+      classification.sec,
+      "sec",
+      locale,
+    ),
+    classificationCard(
+      "classification.behaviorHeading",
+      classification.market_behavior,
+      "behavior",
+      locale,
+    ),
+  );
+  const children = [heading, grid];
+  if (
+    classification.state === "conflict"
+    && classification.sec
+    && classification.market_behavior
+  ) {
+    const reason = document.createElement("p");
+    reason.className = "classification-reason";
+    reason.textContent = t(
+      "classification.conflictReason",
+      {
+        sec: sectorLabel(classification.sec.sector_key, locale),
+        behavior: sectorLabel(
+          classification.market_behavior.sector_key,
+          locale,
+        ),
+        benchmark: classification.market_behavior.benchmark_ticker || "—",
+      },
+      locale,
+    );
+    children.push(reason);
+  }
+  container.replaceChildren(...children);
+  container.dataset.state = classification.state || "unclassified";
+}
+
+function renderSectorControls(rows, state) {
+  const taxonomy = state.filters.sectorTaxonomy || "sec";
+  const selectedSector = state.filters.sectorKey || "all";
+  const summary = state.universePayload?.classification_summary;
+  const counts = summary?.sector_counts?.[taxonomy] || {};
+  elements.sectorTaxonomy.value = taxonomy;
+  const options = [];
+  const all = document.createElement("option");
+  all.value = "all";
+  all.textContent = t("universe.sector.all", {}, state.locale);
+  options.push(all);
+  Object.keys(counts).sort().forEach((sectorKey) => {
+    const option = document.createElement("option");
+    option.value = sectorKey;
+    option.textContent = sectorKey === "unclassified"
+      ? t("universe.sector.unclassified", {}, state.locale)
+      : sectorLabel(sectorKey, state.locale);
+    options.push(option);
+  });
+  elements.sectorKey.replaceChildren(...options);
+  elements.sectorKey.value = Object.hasOwn(counts, selectedSector)
+    ? selectedSector
+    : "all";
+  if (!summary || summary.status !== "available") {
+    setText(
+      elements.sectorMembershipSummary,
+      t("universe.sector.unavailable", {}, state.locale),
+    );
+    elements.sectorMembershipSummary.dataset.tone = "warning";
+    return;
+  }
+  elements.sectorMembershipSummary.removeAttribute("data-tone");
+  const researchCount = selectedSector === "all"
+    ? summary.research_universe_count
+    : counts[selectedSector] || 0;
+  setText(
+    elements.sectorMembershipSummary,
+    t(
+      selectedSector === "all"
+        ? "universe.sector.membership"
+        : "universe.sector.selectedMembership",
+      { research: researchCount, local: rows.length },
+      state.locale,
+    ),
+  );
+}
+
 function checkedMarkerLayers() {
   return elements.markerLayerControls
     .filter((control) => control.checked)
@@ -122,7 +356,10 @@ function paintUniverse() {
     selectedTicker: state.selectedTicker,
     onSelect: selectTicker,
     locale: state.locale,
+    sectorTaxonomy: state.filters.sectorTaxonomy || "sec",
   });
+  renderSectorControls(rows, state);
+  renderSecurityClassification(state.selectedTicker, state.locale);
   setText(elements.universeCount, `${rows.length}/${state.universe.length}`);
   setText(
     elements.universeStatus,
@@ -362,6 +599,25 @@ function bindControls() {
     );
     paintUniverse();
   });
+  elements.sectorTaxonomy.addEventListener("change", (event) => {
+    store.setState({
+      filters: {
+        ...store.getState().filters,
+        sectorTaxonomy: event.currentTarget.value,
+        sectorKey: "all",
+      },
+    });
+    paintUniverse();
+  });
+  elements.sectorKey.addEventListener("change", (event) => {
+    store.setState({
+      filters: {
+        ...store.getState().filters,
+        sectorKey: event.currentTarget.value,
+      },
+    });
+    paintUniverse();
+  });
   document.querySelectorAll("[data-filter]").forEach((control) => {
     control.addEventListener("change", () => {
       const filters = { ...store.getState().filters, [control.dataset.filter]: control.checked };
@@ -449,6 +705,9 @@ function captureElements() {
     universeCount: byId("universe-count"),
     universeStatus: byId("universe-status"),
     universeSearch: byId("universe-search"),
+    sectorTaxonomy: byId("sector-taxonomy"),
+    sectorKey: byId("sector-key"),
+    sectorMembershipSummary: byId("sector-membership-summary"),
     sortKey: byId("sort-key"),
     sortDirection: byId("sort-direction"),
     marketDate: byId("market-date"),
@@ -459,6 +718,7 @@ function captureElements() {
     observationDate: byId("observation-date"),
     securityState: byId("security-state"),
     topRiskState: byId("top-risk-state"),
+    securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),
     dataWarnings: byId("data-warnings"),
     priceChart: byId("price-chart"),

@@ -57,6 +57,32 @@
       <input id="universe-search" type="search" autocomplete="off" placeholder="e.g. AAPL"
              data-i18n-placeholder="universe.searchPlaceholder">
 
+      <div class="sector-controls">
+        <div>
+          <label class="field-label" for="sector-taxonomy" data-i18n="universe.sector.taxonomy">
+            分类口径
+          </label>
+          <select id="sector-taxonomy">
+            <option value="sec" data-i18n="universe.sector.sec">SEC 基本面</option>
+            <option value="market_behavior" data-i18n="universe.sector.marketBehavior">
+              ETF 交易行为
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label" for="sector-key" data-i18n="universe.sector.label">
+            板块
+          </label>
+          <select id="sector-key">
+            <option value="all" data-i18n="universe.sector.all">全部板块</option>
+          </select>
+        </div>
+      </div>
+      <p id="sector-membership-summary" class="sector-membership-summary" role="status"
+         aria-live="polite" data-i18n="universe.sector.loading">
+        正在加载板块分类…
+      </p>
+
       <div class="sort-controls">
         <div>
           <label class="field-label" for="sort-key" data-i18n="universe.sort.label">Sort by</label>
@@ -110,6 +136,13 @@
           <div><dt data-i18n="security.dailyChange">Daily change</dt><dd id="selected-change">—</dd></div>
           <div><dt data-i18n="security.observationDate">Observation date</dt><dd id="observation-date">—</dd></div>
         </dl>
+        <section id="security-classification" class="security-classification span-full"
+                 aria-label="Sector classifications"
+                 data-i18n-aria-label="classification.aria">
+          <p class="secondary-copy" data-i18n="classification.empty">
+            选择股票后查看基本面与交易行为板块。
+          </p>
+        </section>
         <p id="research-status" class="inline-status span-full" role="status" aria-live="polite" data-i18n="security.choose">
           Choose a ticker from the stock pool.
         </p>

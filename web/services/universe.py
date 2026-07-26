@@ -28,6 +28,7 @@ class UniverseSnapshotService:
         self,
         repository,
         factor_registry,
+        classification_service=None,
         revision_getter=lambda: 0,
         max_cache_size=4,
     ):
@@ -39,6 +40,7 @@ class UniverseSnapshotService:
             raise ValueError("max_cache_size must be positive")
         self._repository = repository
         self._factor_registry = factor_registry
+        self._classification_service = classification_service
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
         self._cache = OrderedDict()
@@ -65,21 +67,39 @@ class UniverseSnapshotService:
             histories = self._repository.load_universe_histories(
                 None if asof is None else pd.Timestamp(asof)
             )
+            rows = build_universe_rows(
+                summaries,
+                histories,
+                self._factor_registry,
+            )
+            classifications = self._build_classifications(
+                [row["ticker"] for row in rows]
+            )
+            merge_sector_classifications(rows, classifications)
             payload = {
                 "asof": asof,
                 "freshness": freshness,
-                "tickers": build_universe_rows(
-                    summaries,
-                    histories,
-                    self._factor_registry,
-                ),
+                "tickers": rows,
                 "factor_groups": factor_groups(self._factor_registry),
+                "classification_summary": {
+                    key: deepcopy(value)
+                    for key, value in classifications.items()
+                    if key != "by_ticker"
+                },
             }
             self._cache[key] = deepcopy(payload)
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_cache_size:
                 self._cache.popitem(last=False)
             return deepcopy(payload)
+
+    def _build_classifications(self, tickers):
+        if self._classification_service is None:
+            return _unavailable_classifications(tickers)
+        try:
+            return self._classification_service.build(tickers)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return _unavailable_classifications(tickers)
 
 
 def build_universe_rows(summaries, histories, registry):
@@ -135,6 +155,39 @@ def build_universe_rows(summaries, histories, registry):
         )
         rows.append(row)
     return rows
+
+
+def merge_sector_classifications(rows, payload):
+    by_ticker = payload.get("by_ticker", {})
+    for row in rows:
+        row["sector_classification"] = deepcopy(
+            by_ticker.get(
+                row["ticker"],
+                {
+                    "state": "unclassified",
+                    "sec": None,
+                    "market_behavior": None,
+                },
+            )
+        )
+    return rows
+
+
+def _unavailable_classifications(tickers):
+    return {
+        "status": "unavailable",
+        "asof": None,
+        "research_universe_count": 0,
+        "sector_counts": {},
+        "by_ticker": {
+            ticker: {
+                "state": "unclassified",
+                "sec": None,
+                "market_behavior": None,
+            }
+            for ticker in tickers
+        },
+    }
 
 
 def factor_groups(registry):

@@ -165,6 +165,27 @@ class FalseyRepository(FakeRepository):
         return False
 
 
+class FakeResearchClassificationService:
+    def build(self, tickers):
+        return {
+            "status": "available",
+            "asof": "2026-07-24",
+            "research_universe_count": 1014,
+            "sector_counts": {
+                "sec": {"technology": 237},
+                "market_behavior": {"technology": 154},
+            },
+            "by_ticker": {
+                ticker: {
+                    "state": "unclassified",
+                    "sec": None,
+                    "market_behavior": None,
+                }
+                for ticker in tickers
+            },
+        }
+
+
 class StaleSelectionRepository(FakeRepository):
     def __init__(self):
         super().__init__()
@@ -542,6 +563,7 @@ def test_config(**overrides):
         "TESTING": True,
         "FORECAST_SERVICE": InjectedForecastService(),
         "ENTRY_SIGNAL_SERVICE": InjectedEntrySignalService(),
+        "RESEARCH_CLASSIFICATION_SERVICE": FakeResearchClassificationService(),
     }
     config.update(overrides)
     return config
@@ -561,7 +583,14 @@ class WebApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            set(response.json), {"asof", "freshness", "tickers", "factor_groups"}
+            set(response.json),
+            {
+                "asof",
+                "freshness",
+                "tickers",
+                "factor_groups",
+                "classification_summary",
+            },
         )
         self.assertEqual(response.json["asof"], "2026-07-21")
         self.assertTrue(response.json["factor_groups"])
@@ -593,7 +622,12 @@ class WebApiTest(unittest.TestCase):
                 "volatility",
                 "volatility_factor_key",
                 "volatility_unit",
+                "sector_classification",
             },
+        )
+        self.assertEqual(
+            response.json["classification_summary"]["research_universe_count"],
+            1014,
         )
         self.assertEqual(self.repository.calls.count(("freshness",)), 1)
         self.assertEqual(self.repository.calls.count(("list_summaries",)), 1)
