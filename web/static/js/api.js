@@ -102,6 +102,10 @@ export function getUpdateStatus() {
   return requestJson("/api/update/status");
 }
 
+export function getCacheStatus() {
+  return requestJson("/api/cache/status");
+}
+
 export const api = Object.freeze({
   getUniverse,
   getStock,
@@ -109,4 +113,5 @@ export const api = Object.freeze({
   getMarketOverview,
   startUpdate,
   getUpdateStatus,
+  getCacheStatus,
 });

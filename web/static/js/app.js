@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { createCacheStatusController } from "./cache_status.js";
 import { createLinkedCharts } from "./charts.js";
 import { renderFactors, renderStructures } from "./factors.js";
 import {
@@ -40,6 +41,7 @@ const elements = {};
 let stockRequestSequence = 0;
 let chartController = null;
 let updateController = null;
+let cacheStatusController = null;
 let unsubscribeLocale = null;
 let universeError = null;
 let researchError = null;
@@ -630,6 +632,8 @@ async function refreshUniverseAfterUpdate(updateSnapshot = {}) {
     universeError = errorState(error);
     setText(elements.universeStatus, errorText(universeError, store.getState().locale));
     elements.universeStatus.dataset.tone = "error";
+  } finally {
+    await cacheStatusController?.refresh();
   }
 }
 
@@ -798,6 +802,9 @@ function captureElements() {
     scenarioMeta: byId("scenario-meta"),
     updateData: byId("update-data"),
     updateStatus: byId("update-status"),
+    cacheStatusSummary: byId("cache-status-summary"),
+    cacheStatusDetails: byId("cache-status-details"),
+    cacheStatusRefresh: byId("cache-status-refresh"),
     markerLayerCount: byId("marker-layer-count"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
     forecastControls: [...document.querySelectorAll("[data-forecast-horizon]")],
@@ -837,8 +844,14 @@ export async function initializeDashboard() {
     status: elements.updateStatus,
     onTerminal: refreshUniverseAfterUpdate,
   });
+  cacheStatusController = createCacheStatusController({
+    summary: elements.cacheStatusSummary,
+    details: elements.cacheStatusDetails,
+    refreshButton: elements.cacheStatusRefresh,
+  });
   bindControls();
   await updateController.initialize();
+  await cacheStatusController.initialize();
   await loadUniverse();
 }
 
@@ -847,6 +860,7 @@ if (typeof document !== "undefined") {
   window.addEventListener("pagehide", () => {
     chartController?.destroy();
     updateController?.destroy();
+    cacheStatusController?.destroy();
     unsubscribeLocale?.();
   }, { once: true });
 }

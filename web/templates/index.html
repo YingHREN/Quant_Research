@@ -41,6 +41,16 @@
     <p id="update-status" class="global-status" role="status" aria-live="polite" data-i18n="update.state.idle">
       Price-only update status: idle
     </p>
+    <details id="cache-status-panel" class="cache-status-panel">
+      <summary>
+        <span data-i18n="cache.title">预测缓存</span>
+        <span id="cache-status-summary" role="status" aria-live="polite"
+              data-i18n="cache.state.loading">正在读取缓存状态…</span>
+      </summary>
+      <div id="cache-status-details" class="cache-status-details"></div>
+      <button id="cache-status-refresh" class="quiet-button" type="button"
+              data-i18n="cache.refresh">刷新缓存状态</button>
+    </details>
   </header>
 
   <div class="workstation">

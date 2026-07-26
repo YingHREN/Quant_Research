@@ -154,6 +154,43 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn('data-i18n="recovery.universe"', html)
         self.assertIn('data-i18n="recovery.stock"', html)
 
+    def test_page_has_collapsible_forecast_cache_status(self):
+        html = HTML.read_text()
+        self.assertIn('id="cache-status-panel"', html)
+        self.assertIn('id="cache-status-summary"', html)
+        self.assertIn('id="cache-status-details"', html)
+        self.assertIn('id="cache-status-refresh"', html)
+
+    def test_cache_status_formatter_is_bilingual_and_explicit(self):
+        module_uri = (STATIC / "js/cache_status.js").as_uri()
+        script = f"""
+            import {{ describeCacheStatus }} from {json.dumps(module_uri)};
+            const ready = {{
+              state: "ready", last_access: "disk_hit", entry_count: 2,
+              market_asof: "2026-07-24", size_bytes: 1536,
+              memory_ready: true
+            }};
+            console.log(JSON.stringify({{
+              zh: describeCacheStatus(ready, "zh-CN"),
+              en: describeCacheStatus(ready, "en"),
+              rebuilding: describeCacheStatus({{state: "rebuilding"}}, "zh-CN"),
+              unavailable: describeCacheStatus({{state: "unavailable"}}, "en")
+            }}));
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        actual = json.loads(result.stdout)
+        self.assertIn("磁盘命中", actual["zh"])
+        self.assertIn("2026-07-24", actual["zh"])
+        self.assertIn("Disk hit", actual["en"])
+        self.assertIn("正在重建", actual["rebuilding"])
+        self.assertIn("unavailable", actual["unavailable"])
+
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
         self.assertEqual(actual["stored"], ["top_risk"])
