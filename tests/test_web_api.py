@@ -939,6 +939,7 @@ class WebApiTest(unittest.TestCase):
             | {
                 "forecasts",
                 "forecast_evaluation",
+                "feature_provenance_registry",
                 "model_output_registry",
                 "top_risk",
             },
@@ -946,6 +947,10 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(
             payload["model_output_registry"]["version"],
             "model_output_registry_v1",
+        )
+        self.assertEqual(
+            payload["feature_provenance_registry"]["version"],
+            "feature_provenance_registry_v1",
         )
         for horizons in payload["forecasts"]["by_date"].values():
             for forecast in horizons.values():
@@ -1254,6 +1259,7 @@ class WebApiTest(unittest.TestCase):
             {
                 "forecasts",
                 "forecast_evaluation",
+                "feature_provenance_registry",
                 "model_output_registry",
             },
         )
@@ -2039,7 +2045,37 @@ class ForecastServiceTest(unittest.TestCase):
                 "bearish_turn_conditions",
                 "unavailable_reason",
                 "decision",
+                "feature_provenance",
             },
+        )
+        provenance_registry = payload["feature_provenance_registry"]
+        self.assertEqual(
+            provenance_registry["version"],
+            "feature_provenance_registry_v1",
+        )
+        self.assertEqual(
+            provenance_registry["feature_version"],
+            "ridge-features-v2",
+        )
+        provenance = forecasts["by_date"][self.chart_dates[0]]["20"][
+            "feature_provenance"
+        ]
+        self.assertEqual(
+            provenance["registry_ref"],
+            provenance_registry["version"],
+        )
+        self.assertEqual(
+            provenance["source_cutoff"],
+            self.chart_dates[0],
+        )
+        self.assertEqual(
+            provenance["observed_through"],
+            self.chart_dates[0],
+        )
+        self.assertRegex(provenance["data_version"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            provenance["execution_timing"],
+            "next_session_open",
         )
         self.assertEqual(set(payload["forecast_evaluation"]), {"5", "20", "60"})
         self.assertEqual(factory.providers[0].calls[0][0], "AAA")
@@ -2370,7 +2406,7 @@ class ForecastServiceTest(unittest.TestCase):
                 )
                 with mock.patch(
                     "web.services.forecasts.FORECAST_FEATURE_VERSION",
-                    "ridge-features-v2",
+                    "ridge-features-v3",
                 ):
                     ForecastService(artifact_store=store).build(
                         "AAA", self.chart_dates, self.histories

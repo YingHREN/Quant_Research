@@ -380,6 +380,46 @@ function summaryStrip(outputs, date, locale) {
   return strip;
 }
 
+function provenanceStrip(forecast, registry, locale) {
+  const provenance = forecast?.feature_provenance;
+  if (
+    !provenance
+    || !registry
+    || provenance.registry_ref !== registry.version
+    || provenance.feature_version !== registry.feature_version
+  ) {
+    return null;
+  }
+  const strip = element("section", "model-output-summary model-output-provenance");
+  strip.setAttribute("aria-label", t("modelOutput.provenance.title", {}, locale));
+  const dataVersion = typeof provenance.data_version === "string"
+    ? provenance.data_version.slice(0, 12)
+    : "—";
+  strip.append(
+    labeledValue(
+      t("modelOutput.provenance.title", {}, locale),
+      t("modelOutput.provenance.closeToOpen", {}, locale),
+    ),
+    labeledValue(
+      t("modelOutput.provenance.availableAt", {}, locale),
+      provenance.available_at || "—",
+    ),
+    labeledValue(
+      t("modelOutput.provenance.sourceCutoff", {}, locale),
+      provenance.source_cutoff || "—",
+    ),
+    labeledValue(
+      t("modelOutput.provenance.featureVersion", {}, locale),
+      provenance.feature_version || "—",
+    ),
+    labeledValue(
+      t("modelOutput.provenance.dataVersion", {}, locale),
+      dataVersion,
+    ),
+  );
+  return strip;
+}
+
 function registeredGroups(outputs, registry) {
   const externalRegistryMatches = (
     registry
@@ -462,6 +502,12 @@ export function renderModelOutputs(container, options = {}) {
 
   container.dataset.state = "available";
   container.append(summaryStrip(outputs, date, locale));
+  const provenance = provenanceStrip(
+    options.forecast,
+    options.featureRegistry,
+    locale,
+  );
+  if (provenance) container.append(provenance);
 
   const grid = element("div", "model-output-groups");
   registeredGroups(outputs, registry).forEach((definition) => {

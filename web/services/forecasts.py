@@ -23,6 +23,10 @@ from web.forecasts.decision import (
     ForecastDecisionPolicy,
     build_forecast_risk_context,
 )
+from web.forecasts.feature_provenance import (
+    FEATURE_VERSION,
+    default_feature_provenance_registry,
+)
 from web.forecasts.ridge import MODEL_KEY, MODEL_VERSION, RidgeForecastProvider
 from web.services.forecast_artifacts import (
     ForecastArtifact,
@@ -35,7 +39,7 @@ from web.services.top_risk_timeline import (
 
 DEFAULT_CACHE_SIZE = 16
 DEFAULT_MAX_FORECAST_DATES = 1
-FORECAST_FEATURE_VERSION = "ridge-features-v1"
+FORECAST_FEATURE_VERSION = FEATURE_VERSION
 FORECAST_RISK_CONTEXT_VERSION = "forecast-risk-context-v1"
 
 
@@ -178,6 +182,7 @@ class ForecastService:
         first_date = dates[0] if dates else None
         last_date = dates[-1] if dates else None
         coverage, fingerprints = _history_snapshot_metadata(histories)
+        market_signature = _market_signature(coverage, fingerprints)
         with self._lock:
             self._check_expected_revision(expected_revision)
             _frame, provider, evaluations, risk_context = self._revision_artifacts(
@@ -203,6 +208,7 @@ class ForecastService:
                 provider,
                 evaluations,
                 risk_context,
+                market_signature,
             )
             self._cache[key] = deepcopy(bundle)
             self._cache.move_to_end(key)
@@ -280,7 +286,15 @@ class ForecastService:
             self._artifact_fingerprints = None
             self._last_cache_access = "miss"
 
-    def _compute(self, ticker, dates, provider, evaluations, risk_context):
+    def _compute(
+        self,
+        ticker,
+        dates,
+        provider,
+        evaluations,
+        risk_context,
+        market_signature,
+    ):
         forecast_dates = (
             dates
             if self._max_forecast_dates is None
@@ -306,9 +320,20 @@ class ForecastService:
             model_key=self.model_key,
             model_version=self.model_version,
         )
+        provenance_registry = default_feature_provenance_registry()
+        for date_key, horizons in by_date.items():
+            provenance = provenance_registry.snapshot(
+                date_key,
+                market_signature,
+            )
+            for forecast in horizons.values():
+                forecast["feature_provenance"] = dict(provenance)
         model_status = "available" if by_date else "unavailable"
         unavailable_reason = None if by_date else _aggregate_reason(reasons)
         return {
+            "feature_provenance_registry": (
+                provenance_registry.public_contract()
+            ),
             "forecasts": {
                 "model": {
                     "key": self.model_key,
@@ -496,6 +521,9 @@ def unavailable_forecast_bundle(
     reason_value = reason.value if isinstance(reason, UnavailableReason) else str(reason)
     evaluations = _unavailable_evaluations(model_key, model_version, reason_value)
     return {
+        "feature_provenance_registry": (
+            default_feature_provenance_registry().public_contract()
+        ),
         "forecasts": {
             "model": {
                 "key": model_key,
