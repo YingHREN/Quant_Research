@@ -31,10 +31,10 @@ def _artifact(value=1.0):
     )
 
 
-def _identity(feature_version="features-v1"):
+def _identity(feature_version="features-v1", model_version="v4"):
     return ForecastArtifactIdentity(
         model_key="ridge_direction_v1",
-        model_version="v4",
+        model_version=model_version,
         feature_version=feature_version,
         risk_context_version="risk-v1",
     )
@@ -65,6 +65,9 @@ class ForecastArtifactStoreTest(unittest.TestCase):
             1.0,
         )
         self.assertIsNone(store.load(_identity(), "market-b"))
+        self.assertIsNone(
+            store.load(_identity(model_version="v5"), "market-a")
+        )
 
         store.save(_identity("features-v2"), "market-a", _artifact(2.0))
         store.save(_identity("features-v3"), "market-a", _artifact(3.0))

@@ -1689,6 +1689,13 @@ class ForecastServiceTest(unittest.TestCase):
                 -5,
                 corrected["AAA"].columns.get_loc("Close"),
             ] += 0.25
+            extended = {}
+            for ticker, history in self.histories.items():
+                appended = history.iloc[-1:].copy()
+                appended.index = pd.DatetimeIndex(
+                    [history.index[-1] + pd.offsets.BDay(1)]
+                )
+                extended[ticker] = pd.concat([history, appended])
 
             with mock.patch(
                 "web.services.forecasts.build_feature_frame",
@@ -1699,6 +1706,9 @@ class ForecastServiceTest(unittest.TestCase):
                 )
                 ForecastService(artifact_store=store).build(
                     "AAA", self.chart_dates, corrected
+                )
+                ForecastService(artifact_store=store).build(
+                    "AAA", self.chart_dates, extended
                 )
                 with mock.patch(
                     "web.services.forecasts.FORECAST_FEATURE_VERSION",
@@ -1715,7 +1725,7 @@ class ForecastServiceTest(unittest.TestCase):
                         "AAA", self.chart_dates, self.histories
                     )
 
-            self.assertEqual(builder.call_count, 4)
+            self.assertEqual(builder.call_count, 5)
 
     def test_prewarm_persists_without_forecasting_and_store_failures_are_safe(self):
         with tempfile.TemporaryDirectory() as temporary:
