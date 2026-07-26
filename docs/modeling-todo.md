@@ -12,6 +12,7 @@
 | DATA-001 | P0 | 实施中 | 扩充 8～10 年点时日线数据基础 | 复权行情、公司行动、历史股票池 |
 | PERF-001 | P0 | 已完成 | 股票池轻量化、按需单股分析和版本化内存缓存 | 本地价格库 revision |
 | PERF-002 | P0 | 已完成 | 将全市场预测产物持久化到硬盘缓存表 | PERF-001、行情内容指纹、模型版本 |
+| PERF-003 | P0 | 设计完成 | 行情更新成功后自动预热预测硬盘缓存 | PERF-002、UpdateJobManager |
 | POLICY-001 | P1 | 实施中 | 分离 Ridge 收益预测与向下风险语义 | `forecast_decision_policy` |
 | CANSLIM-001 | P1 | 待实施 | 建立基本面、技术面、机构面和大盘环境四维严格候选池 | 点时财报、全市场 RS、13F、大盘状态 |
 | ENTRY-001 | P1 | 待实施 | 用逐日因果重放标记历史 VCP、放量突破和 Pocket Pivot | 日线 OHLCV、现有 VCP/Pivot 规则 |
@@ -59,7 +60,7 @@
 
 ### 后续持续优化
 
-- [ ] 行情更新成功后自动预热新 artifact，把重计算等待放到更新阶段；预热失败不能回滚已经成功写入的行情。
+- [x] 行情更新成功后自动预热已拆分为 `PERF-003` 独立任务；预热失败不能回滚已经成功写入的行情。
 - [ ] 在网页显示缓存状态：命中、重建中、上次生成时间、对应行情日期和算法版本，避免用户把后台重建误认为网页卡死。
 - [ ] 增加缓存维护命令：查看条目、验证 checksum、手动预热、清除过期缓存和报告磁盘占用。
 - [ ] 记录命中率、读取耗时、重建耗时、payload 大小和失败次数，形成可比较的性能基线。
@@ -70,6 +71,20 @@
 - [ ] 后续将个股摘要、图表、模型输出拆分为独立接口，允许价格图先展示、预测面板随后加载。
 - [ ] 为缓存数据库设置容量预警与保留策略；不得让缓存成为原始行情或研究结果的唯一副本。
 - [ ] 若未来部署多进程/多实例服务，引入跨进程文件锁或单独预热 worker，避免多个进程同时重建同一 artifact。
+
+## P0 — 行情更新后自动预热（PERF-003）
+
+设计文档：`docs/superpowers/specs/2026-07-26-automatic-forecast-cache-prewarm-design.md`
+
+- [ ] 新增 `ForecastCacheWarmer`，统一选择最近两个 active cohort，并按旧到新调用 `ForecastService.prewarm()`。
+- [ ] `build_forecast_cache.py` 与网页更新流程复用同一 warmer，不再重复 cohort 选择逻辑。
+- [ ] `UpdateJobManager` 在成功写入后先使内存 revision 失效，再同步预热持久化 artifact。
+- [ ] completed、partial 和 rate-limited run 只要写入过数据都执行预热；零写入 run 跳过。
+- [ ] 预热失败只记录 `cache_warmup_error`，不得覆盖行情任务原 terminal state 或 resumable 状态。
+- [ ] snapshot 增加 warmup 状态、起止时间、错误码和 cohort 日期，更新期间保持 `state=running`。
+- [ ] 默认 Flask manager 自动装配 warmer；注入 fake 或不支持 `prewarm()` 的 forecast service 保持旧行为。
+- [ ] 增加回调顺序、失败隔离、零写入、不同 terminal state、并发 start、CLI 复用和 API 合约测试。
+- [ ] 用测试价格库完成真实更新，确认缓存自动刷新；全新进程首次个股请求目标不超过 5 秒。
 
 ## P0 — 向上早期反转观察
 
