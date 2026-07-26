@@ -375,6 +375,11 @@ class WebAssetTest(unittest.TestCase):
             const searched = filterTickers(rows, 'ms', {{}}).map(row => row.ticker);
             const filtered = filterTickers(rows, '', {{strictVcp: true, fresh: true}})
               .map(row => row.ticker);
+            const eitherShape = filterTickers(
+              rows,
+              '',
+              {{strictVcp: true, tightPlatform: true}},
+            ).map(row => row.ticker);
             const inactive = filterTickers(rows, '', {{inactive: true}})
               .map(row => row.ticker);
             const sorted = sortTickers(rows, 'momentum_percentile', 'desc')
@@ -395,7 +400,7 @@ class WebAssetTest(unittest.TestCase):
               sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
             }}).map(row => row.ticker);
             console.log(JSON.stringify({{
-              searched, filtered, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
+              searched, filtered, eitherShape, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
               behaviorFinancials, behaviorUnclassified,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
@@ -413,6 +418,7 @@ class WebAssetTest(unittest.TestCase):
             {
                 "searched": ["MSFT"],
                 "filtered": ["MSFT"],
+                "eitherShape": ["MSFT", "AAPL", "OLD"],
                 "inactive": ["AAPL", "OLD"],
                 "sorted": ["MSFT", "AAPL", "OLD"],
                 "rsSorted": ["MSFT", "AAPL", "OLD"],

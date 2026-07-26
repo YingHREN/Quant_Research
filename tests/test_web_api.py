@@ -785,7 +785,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(explicit_service._artifact_store.path, explicit_path)
         self.assertIsNone(disabled_service._artifact_store)
 
-    def test_universe_never_computes_heavy_structures(self):
+    def test_universe_uses_lightweight_structure_detectors_not_registry_factors(self):
         class RaisingStructuralFactor(MappedFactor):
             def compute(self, context):
                 raise AssertionError(f"heavy structure ran for {context.ticker}")
@@ -830,10 +830,10 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertIsNotNone(current_row["momentum_percentile"])
         self.assertIsNotNone(current_row["volatility"])
-        self.assertIsNone(current_row["strict_vcp"])
-        self.assertIsNone(current_row["tight_platform"])
-        self.assertIsNone(current_row["near_pivot"])
-        self.assertEqual(current_row["shape_state"], "unavailable")
+        self.assertFalse(current_row["strict_vcp"])
+        self.assertFalse(current_row["tight_platform"])
+        self.assertFalse(current_row["near_pivot"])
+        self.assertEqual(current_row["shape_state"], "none")
 
     def test_universe_diagnostics_feed_real_filter_and_sort_pipeline(self):
         repository = UniverseCohortRepository()
@@ -848,16 +848,16 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         by_ticker = {row["ticker"]: row for row in response.json["tickers"]}
         self.assertTrue(
-            all(row["shape_state"] == "unavailable" for row in by_ticker.values())
+            all(row["shape_state"] == "none" for row in by_ticker.values())
         )
         self.assertTrue(
-            all(row["strict_vcp"] is None for row in by_ticker.values())
+            all(row["strict_vcp"] is False for row in by_ticker.values())
         )
         self.assertTrue(
-            all(row["tight_platform"] is None for row in by_ticker.values())
+            all(row["tight_platform"] is False for row in by_ticker.values())
         )
         self.assertTrue(
-            all(row["near_pivot"] is None for row in by_ticker.values())
+            all(row["near_pivot"] is False for row in by_ticker.values())
         )
         self.assertTrue(by_ticker["OLD"]["inactive"])
         self.assertFalse(by_ticker["OLD"]["stale"])
@@ -876,7 +876,7 @@ class WebApiTest(unittest.TestCase):
         self.assertTrue(by_ticker["STALE"]["stale"])
         self.assertFalse(by_ticker["STALE"]["inactive"])
         self.assertEqual(by_ticker["STALE"]["data_status"], "stale")
-        self.assertEqual(by_ticker["STALE"]["shape_state"], "unavailable")
+        self.assertEqual(by_ticker["STALE"]["shape_state"], "none")
         self.assertEqual(by_ticker["STALE"]["volatility"], 25.0)
 
         module_uri = (

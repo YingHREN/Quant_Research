@@ -24,12 +24,26 @@ export function filterTickers(rows, query = "", filters = {}) {
   const normalizedQuery = String(query || "").trim().toUpperCase();
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     if (!String(row.ticker || "").toUpperCase().includes(normalizedQuery)) return false;
-    if (filters.strictVcp
-        && !(firstDefined(row, FIELD_ALIASES.strictVcp) || row.shape_state === "strict_vcp")) return false;
-    if (filters.tightPlatform
-        && !(firstDefined(row, FIELD_ALIASES.tightPlatform) || row.shape_state === "tight_platform")) return false;
-    if (filters.nearPivot
-        && !(firstDefined(row, FIELD_ALIASES.nearPivot) || row.shape_state === "near_pivot")) return false;
+    const selectedShapes = [];
+    if (filters.strictVcp) {
+      selectedShapes.push(
+        Boolean(firstDefined(row, FIELD_ALIASES.strictVcp))
+        || row.shape_state === "strict_vcp",
+      );
+    }
+    if (filters.tightPlatform) {
+      selectedShapes.push(
+        Boolean(firstDefined(row, FIELD_ALIASES.tightPlatform))
+        || row.shape_state === "tight_platform",
+      );
+    }
+    if (filters.nearPivot) {
+      selectedShapes.push(
+        Boolean(firstDefined(row, FIELD_ALIASES.nearPivot))
+        || row.shape_state === "near_pivot",
+      );
+    }
+    if (selectedShapes.length && !selectedShapes.some(Boolean)) return false;
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
     if (filters.inactive && !(row.inactive || row.stale)) return false;

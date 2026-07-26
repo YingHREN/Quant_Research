@@ -11,6 +11,8 @@ from threading import RLock
 
 import pandas as pd
 
+from factors.compute import tight_platform
+from research.vcp import detect_vcp
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
 
@@ -18,7 +20,7 @@ from web.services.analysis import AnalysisContext
 UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-UNIVERSE_ALGORITHM_VERSION = "universe_summary_v3"
+UNIVERSE_ALGORITHM_VERSION = "universe_summary_v4"
 
 
 class UniverseSnapshotService:
@@ -152,6 +154,7 @@ def build_universe_rows(summaries, histories, registry):
         )
         inactive = bool(summary.inactive)
         stale = not inactive and summary.lag_days > 0
+        structure = build_structure_summary(histories.get(summary.ticker))
         row = _summary_dict(summary)
         row.update(
             {
@@ -160,10 +163,7 @@ def build_universe_rows(summaries, histories, registry):
                 "data_status": (
                     "inactive" if inactive else "stale" if stale else "current"
                 ),
-                "strict_vcp": None,
-                "tight_platform": None,
-                "near_pivot": None,
-                "shape_state": "unavailable",
+                **structure,
                 "momentum_percentile": momentum,
                 "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
                 "momentum_percentile_unit": "percentile_0_100",
@@ -174,6 +174,46 @@ def build_universe_rows(summaries, histories, registry):
         )
         rows.append(row)
     return rows
+
+
+def build_structure_summary(history):
+    """Return the latest lightweight structure state used by universe filters."""
+    if history is None or history.empty:
+        return {
+            "strict_vcp": None,
+            "tight_platform": None,
+            "near_pivot": None,
+            "shape_state": "unavailable",
+        }
+
+    try:
+        pattern = detect_vcp(history)
+        platform = tight_platform(history)
+    except (KeyError, TypeError, ValueError):
+        return {
+            "strict_vcp": None,
+            "tight_platform": None,
+            "near_pivot": None,
+            "shape_state": "unavailable",
+        }
+
+    strict_vcp = bool(pattern.accepted)
+    platform_active = bool(platform.get("is_platform"))
+    near_pivot = bool(strict_vcp and pattern.stage == "near_pivot")
+    if near_pivot:
+        shape_state = "near_pivot"
+    elif strict_vcp:
+        shape_state = "strict_vcp"
+    elif platform_active:
+        shape_state = "tight_platform"
+    else:
+        shape_state = "none"
+    return {
+        "strict_vcp": strict_vcp,
+        "tight_platform": platform_active,
+        "near_pivot": near_pivot,
+        "shape_state": shape_state,
+    }
 
 
 def merge_sector_classifications(rows, payload):

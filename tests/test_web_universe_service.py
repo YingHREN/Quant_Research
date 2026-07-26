@@ -1,11 +1,12 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
 
 from web.factors.registry import FactorRegistry
-from web.services.universe import UniverseSnapshotService
+from web.services.universe import UniverseSnapshotService, build_structure_summary
 
 
 def _history(end="2026-07-21", periods=260):
@@ -153,6 +154,33 @@ def _registry():
 
 
 class UniverseSnapshotServiceTest(unittest.TestCase):
+    def test_structure_summary_exposes_filterable_vcp_states(self):
+        history = _history()
+        pattern = SimpleNamespace(
+            accepted=True,
+            stage="near_pivot",
+            distance_to_pivot_pct=-2.5,
+        )
+
+        with (
+            patch("web.services.universe.detect_vcp", return_value=pattern),
+            patch(
+                "web.services.universe.tight_platform",
+                return_value={"is_platform": True},
+            ),
+        ):
+            summary = build_structure_summary(history)
+
+        self.assertEqual(
+            summary,
+            {
+                "strict_vcp": True,
+                "tight_platform": True,
+                "near_pivot": True,
+                "shape_state": "near_pivot",
+            },
+        )
+
     def test_cache_is_revision_scoped_bounded_and_returns_copies(self):
         repository = FakeRepository()
         revision = [3]
