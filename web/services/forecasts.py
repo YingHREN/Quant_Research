@@ -27,6 +27,9 @@ from web.services.forecast_artifacts import (
     ForecastArtifact,
     ForecastArtifactIdentity,
 )
+from web.services.top_risk_timeline import (
+    build_top_risk_timeline as serialize_top_risk_timeline,
+)
 
 
 DEFAULT_CACHE_SIZE = 16
@@ -191,6 +194,40 @@ class ForecastService:
                 "risk_row_count": len(risk_context),
                 "evaluation_horizons": sorted(evaluations),
             }
+
+    def build_top_risk_timeline(
+        self,
+        ticker,
+        chart_dates,
+        histories,
+        *,
+        expected_revision=None,
+    ):
+        """Return cached TOPRISK transitions for one chart date range."""
+        ticker = _required_identity_value(ticker, "ticker")
+        dates = _chart_dates(chart_dates)
+        if not isinstance(histories, dict):
+            try:
+                histories = dict(histories)
+            except (TypeError, ValueError) as exc:
+                raise TypeError("histories must be a mapping") from exc
+        if ticker not in histories:
+            raise ValueError("histories must contain the requested ticker")
+        coverage, fingerprints = _history_snapshot_metadata(histories)
+        with self._lock:
+            self._check_expected_revision(expected_revision)
+            _frame, _provider, _evaluations, risk_context = (
+                self._revision_artifacts(
+                    histories,
+                    coverage,
+                    fingerprints,
+                )
+            )
+            return serialize_top_risk_timeline(
+                risk_context,
+                ticker,
+                dates,
+            )
 
     def invalidate(self):
         """Advance the database revision and discard only completed bundles."""

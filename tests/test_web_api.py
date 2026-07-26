@@ -1867,6 +1867,58 @@ class ForecastServiceTest(unittest.TestCase):
         self.assertEqual(builder.call_count, 2)
         self.assertEqual(len(factory.providers), 2)
 
+    def test_top_risk_timeline_reuses_revision_artifact(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        risk_index = pd.MultiIndex.from_product(
+            [["AAA"], pd.to_datetime(self.chart_dates)],
+            names=("ticker", "observation_date"),
+        )
+        risk_context = pd.DataFrame(
+            {
+                "high_level_distribution_score": [45.0, 72.0],
+                "high_level_distribution_raw_score": [45.0, 72.0],
+                "high_level_distribution_state": ["watch", "confirmed"],
+                "high_level_distribution_raw_state": ["watch", "confirmed"],
+                "high_level_distribution_age_sessions": [0, 0],
+                "top_risk_recovery": [False, False],
+            },
+            index=risk_index,
+        )
+
+        with mock.patch(
+            "web.services.forecasts.build_forecast_risk_context",
+            return_value=risk_context,
+        ) as risk_builder:
+            first = service.build_top_risk_timeline(
+                "AAA",
+                self.chart_dates,
+                self.histories,
+            )
+            second = service.build_top_risk_timeline(
+                "AAA",
+                self.chart_dates,
+                self.histories,
+            )
+
+        self.assertEqual(risk_builder.call_count, 1)
+        self.assertEqual(first, second)
+        self.assertEqual(
+            [event["type"] for event in first["events"]],
+            ["top_risk_watch", "top_risk_confirmed"],
+        )
+
+    def test_top_risk_timeline_checks_expected_revision(self):
+        service = ForecastService(provider_factory=FakeForecastFactory())
+
+        with self.assertRaises(ForecastRevisionChanged):
+            service.build_top_risk_timeline(
+                "AAA",
+                self.chart_dates,
+                self.histories,
+                expected_revision=99,
+            )
+
     def test_new_service_restores_persistent_revision_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:
             store = ForecastArtifactStore(
@@ -1904,6 +1956,32 @@ class ForecastServiceTest(unittest.TestCase):
                 first_service._artifact_provider,
                 second_service._artifact_provider,
             )
+
+    def test_top_risk_timeline_restores_persistent_risk_context(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            first_service = ForecastService(artifact_store=store)
+            first_service.prewarm(self.histories)
+
+            with mock.patch(
+                "web.services.forecasts.build_feature_frame",
+                side_effect=AssertionError("persistent hit rebuilt features"),
+            ), mock.patch(
+                "web.services.forecasts.build_forecast_risk_context",
+                side_effect=AssertionError("persistent hit rebuilt risk"),
+            ):
+                result = ForecastService(
+                    artifact_store=store
+                ).build_top_risk_timeline(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                )
+
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(result["unavailable_reason"], "not_available")
 
     def test_persistent_artifact_misses_for_history_and_version_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
