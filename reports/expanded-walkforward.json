@@ -1,0 +1,48 @@
+{
+  "study_version": "expanded-walkforward-v1",
+  "database": "research_prices.db",
+  "latest_date": "2026-07-24",
+  "start_date": "2018-01-01",
+  "ticker_count": 240,
+  "row_count": 447875,
+  "group_counts": {
+    "semiconductor": 52,
+    "software": 99,
+    "other": 89
+  },
+  "sector_mode": "none",
+  "folds": 5,
+  "minimum_samples": 1000,
+  "decision": {
+    "eligible": false,
+    "metric_gate_passed": false,
+    "ridge_metric_gate_passed": false,
+    "ridge_metric_gate_reasons": [
+      "overlapping:ridge_decay_market:balanced_accuracy_not_improved",
+      "overlapping:ridge_decay_market:fold_majority_not_won",
+      "overlapping:ridge_decay_market:return_mae_degraded",
+      "overlapping:ridge_decay_market:rank_ic_not_improved",
+      "non_overlapping:ridge_decay_market:balanced_accuracy_not_improved",
+      "non_overlapping:ridge_decay_market:fold_majority_not_won",
+      "non_overlapping:ridge_decay_market:return_mae_degraded",
+      "non_overlapping:ridge_decay_market:rank_ic_not_improved"
+    ],
+    "direction_metric_gate_passed": false,
+    "direction_metric_gate_reasons": [
+      "semiconductor:overlapping:logistic_decay_market:subgroup_fold_majority_not_won",
+      "semiconductor:non_overlapping:logistic_decay_market:subgroup_fold_majority_not_won"
+    ],
+    "metric_gate_reasons": [
+      "overlapping:ridge_decay_market:balanced_accuracy_not_improved",
+      "overlapping:ridge_decay_market:fold_majority_not_won",
+      "overlapping:ridge_decay_market:return_mae_degraded",
+      "overlapping:ridge_decay_market:rank_ic_not_improved",
+      "non_overlapping:ridge_decay_market:balanced_accuracy_not_improved",
+      "non_overlapping:ridge_decay_market:fold_majority_not_won",
+      "non_overlapping:ridge_decay_market:return_mae_degraded",
+      "non_overlapping:ridge_decay_market:rank_ic_not_improved"
+    ],
+    "reason": "production_blocked_until_point_in_time_universe_and_classification_history_are_available"
+  },
+  "diagnostic_prediction_rows": 180
+}

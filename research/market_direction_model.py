@@ -217,6 +217,7 @@ def walk_forward_ridge_predictions(
     feature_columns: Sequence[str],
     n_folds: int = 5,
     minimum_samples: int = 100,
+    specification: str = "ridge_baseline",
 ) -> pd.DataFrame:
     """Evaluate Ridge directions on the same executable, purged folds."""
     checked_horizon = _validate_horizons((horizon,))[0]
@@ -226,6 +227,9 @@ def walk_forward_ridge_predictions(
     missing = [column for column in columns if column not in frame]
     if missing:
         raise ValueError(f"frame is missing feature columns: {missing}")
+    checked_specification = str(specification).strip()
+    if not checked_specification:
+        raise ValueError("specification must not be empty")
     if (
         isinstance(minimum_samples, bool)
         or not isinstance(minimum_samples, Integral)
@@ -260,7 +264,7 @@ def walk_forward_ridge_predictions(
             ),
             checked_horizon,
             fold_number,
-            "ridge_baseline",
+            checked_specification,
             len(train),
         )
         rows["predicted_return"] = predicted_return

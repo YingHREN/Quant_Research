@@ -81,6 +81,18 @@ class MarketPressureTest(unittest.TestCase):
         self.assertTrue(np.isnan(row["close_location"]))
         self.assertTrue(np.isnan(row["upper_wick_ratio"]))
 
+    def test_adjusted_ohlc_roundoff_is_accepted_but_material_error_is_not(self):
+        frame = history([100.0] * 21)
+        frame.loc[frame.index[-1], "High"] = np.nextafter(100.0, 0.0)
+
+        result = build_pressure_rows(frame)
+
+        self.assertEqual(len(result), len(frame))
+        invalid = frame.copy()
+        invalid.loc[invalid.index[-1], "High"] = 99.99
+        with self.assertRaisesRegex(ValueError, "high is inconsistent"):
+            build_pressure_rows(invalid)
+
     def test_unavailable_evidence_requires_reason_and_freezes_metadata(self):
         with self.assertRaisesRegex(ValueError, "requires a reason"):
             Evidence(
