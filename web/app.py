@@ -8,7 +8,6 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
 import math
 from numbers import Real
 import os
@@ -26,7 +25,6 @@ from werkzeug.exceptions import HTTPException
 
 from web.contracts import ErrorPayload, iso_date, json_safe
 from web.factors.builtin import build_chart_rows, build_default_registry
-from web.factors.registry import FactorRegistry
 from web.forecasts.base import SUPPORTED_HORIZONS, UnavailableReason
 from web.forecasts.model_outputs import build_model_outputs
 from research.market_context import build_group_score_frame
@@ -53,6 +51,7 @@ from web.services.market_data import (
     UnknownTicker,
 )
 from web.services.market_overview import MarketOverviewService
+from web.services.universe import UniverseSnapshotService
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
@@ -65,18 +64,6 @@ from marketdata.storage import IntradayStore
 
 
 DEFAULT_DATABASE = DEFAULT_MARKET_DATA_DATABASE
-UNIVERSE_FACTOR_KEYS = (
-    "strict_vcp",
-    "tight_platform",
-    "pivot_distance_pct",
-    "mom_12_1",
-    "realized_vol_63",
-)
-UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
-UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-NEAR_PIVOT_ABS_PCT = 5.0
-
-
 def create_app(config=None, repository=None, update_manager=None) -> Flask:
     """Build the dashboard app with optional repository and job-manager fakes."""
     flask_app = Flask(__name__)
@@ -114,7 +101,24 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
-        factor_registry = build_default_registry()
+        factor_registry = build_default_registry(
+            max_peer_cache_size=flask_app.config.get(
+                "FACTOR_PEER_CACHE_SIZE",
+                4096,
+            )
+        )
+    universe_service = flask_app.config.get("UNIVERSE_SERVICE")
+    if universe_service is None:
+        universe_service = UniverseSnapshotService(
+            repository,
+            factor_registry,
+            revision_getter=lambda: getattr(
+                forecast_service,
+                "database_revision",
+                0,
+            ),
+            max_cache_size=flask_app.config.get("UNIVERSE_CACHE_SIZE", 4),
+        )
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:
         scenario_provider = HistoricalScenarioProvider()
@@ -133,6 +137,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions["dashboard_repository"] = repository
     flask_app.extensions["dashboard_update_manager"] = update_manager
     flask_app.extensions["dashboard_factor_registry"] = factor_registry
+    flask_app.extensions["dashboard_universe_service"] = universe_service
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions["dashboard_intraday_status_service"] = intraday_status_service
@@ -183,21 +188,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
     @flask_app.get("/api/universe")
     def universe():
-        freshness = repository.freshness()
-        summaries = repository.list_summaries()
-        asof = freshness.get("latest_date")
-        histories = repository.load_universe_histories(
-            None if asof is None else pd.Timestamp(asof)
-        )
-        payload = {
-            "asof": asof,
-            "freshness": freshness,
-            "tickers": _universe_rows(
-                summaries, histories, asof, factor_registry
-            ),
-            "factor_groups": _factor_groups(factor_registry),
-        }
-        return _json_response(payload)
+        return _json_response(universe_service.build())
 
     @flask_app.get("/api/stocks/<path:ticker>")
     def stock(ticker):
@@ -244,7 +235,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             if context.ticker == normalized_ticker
         )
         factor_rows = factor_registry.evaluate_selected_with_peers(
-            context, peer_contexts
+            context,
+            peer_contexts,
+            cache_namespace=forecast_revision,
         )
         factor_payload = [result.to_dict() for result in factor_rows]
         chart = build_chart_rows(context)
@@ -489,98 +482,6 @@ def _attach_model_outputs(payload, chart, structures=None):
             )
 
 
-def _summary_dict(summary):
-    if is_dataclass(summary):
-        return asdict(summary)
-    return {
-        "ticker": summary.ticker,
-        "latest_date": summary.latest_date,
-        "lag_days": summary.lag_days,
-        "inactive": summary.inactive,
-    }
-
-
-def _universe_rows(summaries, histories, asof, registry):
-    """Build diagnostics at each ticker's real last bar from one bulk snapshot."""
-    benchmark = histories.get("SPY")
-    contexts = [
-        AnalysisContext(
-            ticker=summary.ticker,
-            observation_date=pd.Timestamp(histories[summary.ticker].index[-1]),
-            history=histories[summary.ticker],
-            benchmark_history=benchmark,
-        )
-        for summary in summaries
-        if summary.ticker in histories and not histories[summary.ticker].empty
-    ]
-    selected_factors = [
-        factor for factor in registry.factors if factor.key in UNIVERSE_FACTOR_KEYS
-    ]
-    evaluated = FactorRegistry(selected_factors).evaluate_universe(contexts)
-
-    rows = []
-    for summary in summaries:
-        results = {
-            result.key: result for result in evaluated.get(summary.ticker, ())
-        }
-        strict_vcp = _strict_vcp_present(results.get("strict_vcp"))
-        tight_platform = _tight_platform_present(results.get("tight_platform"))
-        near_pivot = _near_pivot(results.get("pivot_distance_pct"))
-        momentum = _percentile_0_100(results.get(UNIVERSE_MOMENTUM_FACTOR_KEY))
-        volatility = _annualized_percent(results.get(UNIVERSE_VOLATILITY_FACTOR_KEY))
-        inactive = bool(summary.inactive)
-        stale = not inactive and summary.lag_days > 0
-
-        row = _summary_dict(summary)
-        row.update(
-            {
-                "fresh": not inactive and summary.lag_days == 0,
-                "stale": stale,
-                "data_status": "inactive" if inactive else "stale" if stale else "current",
-                "strict_vcp": strict_vcp,
-                "tight_platform": tight_platform,
-                "near_pivot": near_pivot,
-                "shape_state": _shape_state(strict_vcp, tight_platform, near_pivot),
-                "momentum_percentile": momentum,
-                "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
-                "momentum_percentile_unit": "percentile_0_100",
-                "volatility": volatility,
-                "volatility_factor_key": UNIVERSE_VOLATILITY_FACTOR_KEY,
-                "volatility_unit": "annualized_percent",
-            }
-        )
-        rows.append(row)
-    return rows
-
-
-def _strict_vcp_present(result):
-    if result is None or result.missing or not isinstance(result.raw_value, dict):
-        return False
-    return result.raw_value.get("reject_reason") is None
-
-
-def _tight_platform_present(result):
-    if result is None or result.missing or not isinstance(result.raw_value, dict):
-        return False
-    return bool(result.raw_value.get("is_platform"))
-
-
-def _near_pivot(result):
-    value = None if result is None or result.missing else result.raw_value
-    return _finite_number(value) and abs(float(value)) <= NEAR_PIVOT_ABS_PCT
-
-
-def _percentile_0_100(result):
-    if result is None or result.percentile is None:
-        return None
-    return round(float(result.percentile) * 100, 2)
-
-
-def _annualized_percent(result):
-    value = None if result is None or result.missing else result.raw_value
-    return round(float(value) * 100, 2) if _finite_number(value) else None
-
-
 def _finite_number(value):
     return (
         isinstance(value, Real)
@@ -656,31 +557,6 @@ def _attach_market_bearish_risk(chart, ticker, histories):
                 ),
             }
         )
-
-
-def _shape_state(strict_vcp, tight_platform, near_pivot):
-    if strict_vcp:
-        return "strict_vcp"
-    if tight_platform:
-        return "tight_platform"
-    if near_pivot:
-        return "near_pivot"
-    return "none"
-
-
-def _factor_groups(registry):
-    groups = getattr(registry, "groups", ())
-    if groups:
-        return [group.to_dict() for group in groups]
-    return [
-        {
-            "key": group,
-            "label": group.replace("_", " ").title(),
-            "methodology": "Point-in-time descriptive diagnostics.",
-            "overview": False,
-        }
-        for group in dict.fromkeys(factor.group for factor in registry.factors)
-    ]
 
 
 def _snapshot_dict(snapshot):

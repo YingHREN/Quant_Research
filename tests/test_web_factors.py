@@ -117,6 +117,83 @@ class FactorRegistryTest(unittest.TestCase):
             4,
         )
 
+    def test_neutral_numeric_factor_never_evaluates_peers(self):
+        calls = []
+
+        class NeutralCountingFactor(ConstantFactor):
+            key = "neutral_counting"
+            direction = "neutral"
+
+            def compute(self, factor_context):
+                calls.append((self.key, factor_context.ticker))
+                return factor_context.metadata["value"]
+
+        class DirectionalCountingFactor(ConstantFactor):
+            key = "directional_counting"
+
+            def compute(self, factor_context):
+                calls.append((self.key, factor_context.ticker))
+                return factor_context.metadata["value"]
+
+        registry = FactorRegistry(
+            [NeutralCountingFactor(), DirectionalCountingFactor()]
+        )
+        registry.evaluate_selected_with_peers(
+            context("AAA", 1),
+            [context("BBB", 2), context("CCC", 3)],
+        )
+
+        self.assertEqual(
+            [ticker for key, ticker in calls if key == "neutral_counting"],
+            ["AAA"],
+        )
+        self.assertEqual(
+            [ticker for key, ticker in calls if key == "directional_counting"],
+            ["AAA", "BBB", "CCC"],
+        )
+
+    def test_peer_factor_cache_is_revision_scoped_and_bounded(self):
+        calls = []
+
+        class CountingFactor(ConstantFactor):
+            def compute(self, factor_context):
+                calls.append(factor_context.ticker)
+                return factor_context.metadata["value"]
+
+        registry = FactorRegistry(
+            [CountingFactor()],
+            max_peer_cache_size=2,
+        )
+        selected = context("AAA", 1)
+        peers = [context("BBB", 2), context("CCC", 3)]
+
+        first = registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=7,
+        )
+        second = registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=7,
+        )
+
+        self.assertEqual(calls.count("AAA"), 2)
+        self.assertEqual(calls.count("BBB"), 1)
+        self.assertEqual(calls.count("CCC"), 1)
+        self.assertIsNot(first[0], second[0])
+        self.assertLessEqual(registry.peer_cache_size, 2)
+
+        registry.evaluate_selected_with_peers(
+            selected,
+            peers,
+            cache_namespace=8,
+        )
+
+        self.assertEqual(calls.count("BBB"), 2)
+        self.assertEqual(calls.count("CCC"), 2)
+        self.assertLessEqual(registry.peer_cache_size, 2)
+
     def test_result_json_shape_is_safe_and_stable(self):
         result = self.registry.evaluate_one(ConstantFactor(), context(value=2.5))
 
@@ -335,6 +412,48 @@ class BuiltinFactorTest(unittest.TestCase):
                 last[key] is None or isinstance(last[key], (int, float)),
                 key,
             )
+
+    def test_directional_peer_factors_do_not_build_chart_rows(self):
+        registry = build_default_registry()
+        factors = {factor.key: factor for factor in registry.factors}
+        history = price_history(260)
+        ctx = context_from_history(history)
+        asof = history.loc[history.index <= ctx.observation_date]
+        close = asof["Close"].astype(float)
+        volume = asof["Volume"].astype(float)
+        expected = {
+            "close_vs_ema20_pct": (
+                close.iloc[-1]
+                / close.ewm(span=20, adjust=False).mean().iloc[-1]
+                - 1
+            )
+            * 100,
+            "close_vs_sma50_pct": (
+                close.iloc[-1] / close.rolling(50).mean().iloc[-1] - 1
+            )
+            * 100,
+            "close_vs_sma200_pct": (
+                close.iloc[-1] / close.rolling(200).mean().iloc[-1] - 1
+            )
+            * 100,
+            "volume_ratio": (
+                volume.iloc[-1] / volume.rolling(20).mean().iloc[-1]
+            ),
+        }
+
+        with patch(
+            "web.factors.builtin.build_chart_rows",
+            side_effect=AssertionError("directional peer factor rebuilt the chart"),
+        ):
+            actual = {
+                key: registry.evaluate_one(factors[key], ctx)
+                for key in expected
+            }
+
+        for key, expected_value in expected.items():
+            with self.subTest(factor=key):
+                self.assertFalse(actual[key].missing)
+                self.assertAlmostEqual(actual[key].raw_value, expected_value)
 
     def test_default_registry_groups_builtins_and_exposes_structure_rejections(self):
         registry = build_default_registry()
