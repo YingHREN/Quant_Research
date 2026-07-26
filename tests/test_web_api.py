@@ -19,6 +19,7 @@ from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableRe
 from web.forecasts.dataset import build_feature_frame
 from web.services.forecasts import ForecastRevisionChanged, ForecastService
 from web.services.forecast_artifacts import ForecastArtifactStore
+from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.market_data import (
     InvalidTicker,
     MarketDataUnavailable,
@@ -57,6 +58,11 @@ class FakeSnapshot:
             "current_ticker": None,
             "error": None,
             "resumable": False,
+            "cache_warmup_state": "idle",
+            "cache_warmup_error": None,
+            "cache_warmup_started_at": None,
+            "cache_warmup_finished_at": None,
+            "cache_warmup_cohorts": [],
         }
 
 
@@ -1087,6 +1093,23 @@ class WebApiTest(unittest.TestCase):
         self.assertIs(app.extensions["dashboard_forecast_service"], service)
         self.assertIsInstance(
             app.extensions["dashboard_update_manager"], UpdateJobManager
+        )
+        self.assertIsNone(
+            app.extensions["dashboard_update_manager"]._on_cache_warmup
+        )
+
+    def test_default_forecast_service_wires_automatic_cache_warmup(self):
+        app = create_app(
+            {"TESTING": True},
+            FakeRepository(),
+        )
+
+        manager = app.extensions["dashboard_update_manager"]
+        warmer = manager._on_cache_warmup
+        self.assertIsInstance(warmer, ForecastCacheWarmer)
+        self.assertIs(
+            warmer._forecast_service,
+            app.extensions["dashboard_forecast_service"],
         )
 
     def test_forecast_failure_isolated_with_typed_unavailable_payload(self):
