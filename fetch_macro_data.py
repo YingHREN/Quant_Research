@@ -8,6 +8,7 @@ from datetime import date, timedelta
 import json
 import os
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -19,6 +20,14 @@ FRED_OBSERVATIONS_URL = (
     "https://api.stlouisfed.org/fred/series/observations"
 )
 DEFAULT_DATABASE = Path(__file__).resolve().parent / "data" / "macro_data.db"
+REALTIME_CHUNK_YEARS = 5
+
+
+def _add_years(value, years):
+    try:
+        return value.replace(year=value.year + years)
+    except ValueError:
+        return value.replace(year=value.year + years, day=28)
 
 
 def fetch_initial_release_observations(
@@ -30,46 +39,70 @@ def fetch_initial_release_observations(
     opener=urlopen,
 ):
     """Fetch output_type=4 so historical values use their initial release."""
-    query = urlencode(
-        {
-            "api_key": api_key,
-            "file_type": "json",
-            "series_id": series_id,
-            "observation_start": observation_start,
-            "observation_end": observation_end,
-            "realtime_start": "1776-07-04",
-            "realtime_end": "9999-12-31",
-            "output_type": 4,
-        }
-    )
-    request = Request(
-        f"{FRED_OBSERVATIONS_URL}?{query}",
-        headers={"User-Agent": "stock-screener-macro/1.0"},
-    )
-    with opener(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
     rows = []
-    for observation in payload.get("observations", ()):
-        raw_value = observation.get("value")
-        if raw_value in (None, "", "."):
-            continue
-        realtime_start = observation["realtime_start"]
-        rows.append(
+    realtime_start = date.fromisoformat(observation_start)
+    realtime_limit = date.fromisoformat(observation_end)
+    while realtime_start <= realtime_limit:
+        next_start = _add_years(realtime_start, REALTIME_CHUNK_YEARS)
+        realtime_end = min(
+            next_start - timedelta(days=1),
+            realtime_limit,
+        )
+        request_realtime_end = (
+            "9999-12-31"
+            if realtime_end == realtime_limit
+            else realtime_end.isoformat()
+        )
+        query = urlencode(
             {
+                "api_key": api_key,
+                "file_type": "json",
                 "series_id": series_id,
-                "observation_date": observation["date"],
-                # FRED exposes a real-time date, not an intraday release time.
-                # End-of-UTC-day availability prevents same-day lookahead.
-                "available_at": f"{realtime_start}T23:59:59+00:00",
-                "value": float(raw_value),
-                "realtime_start": realtime_start,
-                "realtime_end": observation.get(
-                    "realtime_end",
-                    "9999-12-31",
-                ),
-                "source": "ALFRED_initial_release",
+                "observation_start": observation_start,
+                "observation_end": observation_end,
+                "realtime_start": realtime_start.isoformat(),
+                "realtime_end": request_realtime_end,
+                "output_type": 4,
             }
         )
+        request = Request(
+            f"{FRED_OBSERVATIONS_URL}?{query}",
+            headers={"User-Agent": "stock-screener-macro/1.0"},
+        )
+        try:
+            with opener(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            payload = json.loads(error.read().decode("utf-8"))
+            message = payload.get("error_message", "")
+            if (
+                error.code != 400
+                or "does not exist in ALFRED" not in message
+            ):
+                raise
+            payload = {"observations": []}
+        for observation in payload.get("observations", ()):
+            raw_value = observation.get("value")
+            if raw_value in (None, "", "."):
+                continue
+            released_at = observation["realtime_start"]
+            rows.append(
+                {
+                    "series_id": series_id,
+                    "observation_date": observation["date"],
+                    # FRED exposes a date, not an intraday release time.
+                    # End-of-UTC-day availability prevents same-day lookahead.
+                    "available_at": f"{released_at}T23:59:59+00:00",
+                    "value": float(raw_value),
+                    "realtime_start": released_at,
+                    "realtime_end": observation.get(
+                        "realtime_end",
+                        "9999-12-31",
+                    ),
+                    "source": "ALFRED_initial_release",
+                }
+            )
+        realtime_start = realtime_end + timedelta(days=1)
     return rows
 
 
