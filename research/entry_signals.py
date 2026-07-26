@@ -28,15 +28,20 @@ def build_entry_signal_rows(history: pd.DataFrame) -> list[dict]:
 
     for position in range(len(history)):
         prefix = history.iloc[: position + 1]
+        analysis_window = prefix.iloc[-252:]
+        pocket_window = prefix.iloc[-12:]
+        breakout_window = prefix.iloc[-51:]
         timestamp = pd.Timestamp(prefix.index[-1])
         current_close = float(prefix["Close"].iloc[-1])
-        pattern = detect_vcp(prefix)
+        pattern = detect_vcp(analysis_window)
         strict_evidence = pattern_evidence(pattern)
-        platform_evidence = _platform_evidence(tight_platform(prefix))
-        pocket_evidence = pocket_pivot_evidence(prefix)
+        platform_evidence = _platform_evidence(
+            tight_platform(analysis_window)
+        )
+        pocket_evidence = pocket_pivot_evidence(pocket_window)
 
         breakout = _breakout_evidence(
-            prefix,
+            breakout_window,
             active_event,
         )
         crossed = breakout["price_confirmed"]

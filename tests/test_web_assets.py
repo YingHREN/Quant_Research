@@ -1460,9 +1460,11 @@ class WebAssetTest(unittest.TestCase):
             }}));
             rows[68].time = '2026-07-17';
             rows[69].time = '2026-07-18';
-            controller.setChartData({{...payload, chart: rows, structures: {{annotations: [{{
-              time: '2026-07-18', type: 'strict_vcp', label: 'Strict VCP',
-            }}]}}}});
+            controller.setChartData({{...payload, chart: rows, structures: {{annotations: [
+              {{time: '2026-07-16', type: 'strict_vcp_start'}},
+              {{time: '2026-07-17', type: 'vcp_breakout_confirmed'}},
+              {{time: '2026-07-18', type: 'pocket_pivot'}},
+            ]}}}});
             assert.equal(created[0].forecastDataEvents, 0);
             assert.equal(controller.getForecastHorizon(), 20);
             assert.equal(markerControllers.length, 1);
@@ -1516,9 +1518,26 @@ class WebAssetTest(unittest.TestCase):
               2,
             );
             const forecastMarkers = markerControllers[0];
-            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'belowBar',
+            const currentForecastMarker = () => forecastMarkers.markers.find((marker) => (
+              marker.text.startsWith('预测起点') || marker.text.startsWith('Forecast start')
+            ));
+            assert.deepEqual(currentForecastMarker(), {{time: '2026-07-17', position: 'belowBar',
               color: '#35c6a5', shape: 'arrowUp', text: '预测起点 · 上涨'}});
-            assert.equal(forecastMarkers.markers[1].time, '2026-07-18');
+            assert.ok(forecastMarkers.markers.some((marker) => (
+              marker.time === '2026-07-16'
+              && marker.shape === 'square'
+              && marker.text === '发现严格 VCP 准备形态'
+            )));
+            assert.ok(forecastMarkers.markers.some((marker) => (
+              marker.time === '2026-07-17'
+              && marker.shape === 'arrowUp'
+              && marker.text === 'VCP 向上突破已确认'
+            )));
+            assert.ok(forecastMarkers.markers.some((marker) => (
+              marker.time === '2026-07-18'
+              && marker.shape === 'circle'
+              && marker.text === 'Pocket Pivot 需求确认'
+            )));
             const zhUp = textTree(detail);
             assert.match(zhUp, /上涨强化条件/);
             assert.match(zhUp, /下跌加速条件/);
@@ -1588,7 +1607,7 @@ class WebAssetTest(unittest.TestCase):
             assert.equal(controller.setForecastHorizon(5), 5);
             assert.equal(controller.getForecastHorizon(), 5);
             assert.deepEqual(created[0].timeScale().range, rangeBeforeHorizonSwitch);
-            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
+            assert.deepEqual(currentForecastMarker(), {{time: '2026-07-17', position: 'aboveBar',
               color: '#91a3b0', shape: 'circle', text: '预测起点 · 中性'}});
             const zhNeutral = textTree(detail);
             assert.doesNotMatch(zhNeutral, /上涨概率/);
@@ -1596,14 +1615,14 @@ class WebAssetTest(unittest.TestCase):
 
             assert.equal(controller.setForecastHorizon(60), 60);
             assert.deepEqual(created[0].timeScale().range, rangeBeforeHorizonSwitch);
-            assert.deepEqual(forecastMarkers.markers[0], {{time: '2026-07-17', position: 'aboveBar',
+            assert.deepEqual(currentForecastMarker(), {{time: '2026-07-17', position: 'aboveBar',
               color: '#ff7a7a', shape: 'arrowDown', text: '预测起点 · 下跌'}});
             assert.equal(markerControllers.length, 1);
             assert.ok(forecastMarkers.calls > callsBeforeSwitch);
 
             created[0].clickHandler({{time: '2026-07-17'}});
             created[0].crosshairHandler({{time: '2026-07-18'}});
-            assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
+            assert.equal(currentForecastMarker().time, '2026-07-17');
             assert.match(textTree(detail), /已锁定/);
             assert.equal(created[1].crosshairPositions.at(-1).time, '2026-07-17');
             created[1].crosshairHandler({{time: '2026-07-18'}});
@@ -1682,8 +1701,8 @@ class WebAssetTest(unittest.TestCase):
             controller.setRange('3m');
             controller.setLocale('en');
             assert.equal(controller.getForecastHorizon(), 60);
-            assert.equal(forecastMarkers.markers[0].time, '2026-07-17');
-            assert.equal(forecastMarkers.markers[0].text, 'Forecast start · Down');
+            assert.equal(currentForecastMarker().time, '2026-07-17');
+            assert.equal(currentForecastMarker().text, 'Forecast start · Down');
             assert.match(textTree(detail), /Locked/);
             assert.match(textTree(detail), /Confidence note Both outcome classes are required/);
             assert.match(textTree(detail), /Evidence status Not precomputed/);
@@ -1717,9 +1736,13 @@ class WebAssetTest(unittest.TestCase):
             }});
             assert.equal(created[0].element.dataset.panLocked, 'false');
             assert.equal(created[1].element.dataset.panLocked, 'false');
-            assert.equal(forecastMarkers.markers.length, 1);
-            assert.equal(forecastMarkers.markers[0].time, '2026-07-18');
-            assert.doesNotMatch(forecastMarkers.markers[0].text, /Forecast direction/);
+            assert.equal(forecastMarkers.markers.length, 3);
+            assert.equal(currentForecastMarker(), undefined);
+            const markerAtUnlockedDate = forecastMarkers.markers.find(
+              (marker) => marker.time === '2026-07-18',
+            );
+            assert.equal(markerAtUnlockedDate.text, 'Pocket Pivot');
+            assert.doesNotMatch(markerAtUnlockedDate.text, /Forecast direction/);
             assert.match(textTree(detail), /Unavailable/);
             assert.match(textTree(detail), /Unavailable reason Historical point not precomputed/);
 
@@ -2012,12 +2035,32 @@ class WebAssetTest(unittest.TestCase):
               near_support_score: 72,
               near_support_sources: ['ema20', 'confirmed_swing_low'],
               near_support_state: 'above',
+              strict_vcp_active: true,
+              strict_vcp_pivot: 103.5,
+              strict_vcp_reject_reason: null,
+              vcp_breakout_confirmed: true,
+              vcp_breakout_volume_ratio: 1.62,
+              vcp_breakout_pct_over_pivot: 2.1,
+              vcp_breakout_reject_reason: null,
+              pocket_pivot: false,
+              pocket_pivot_current_volume: 1250000,
+              pocket_pivot_prior_down_volume: 1400000,
+              pocket_pivot_reject_reason: 'volume_not_above_prior_down_days',
               latest_confirmed_low_date: '2026-07-10',
               latest_confirmed_low_price: 94,
               latest_confirmed_low_confirmed_date: '2026-07-14'}};
-            controller.setChartData({{chart: [row], structures: {{key_levels: {{
+            const secondRow = {{...row, time: '2026-07-23', prior_high_breakout: false,
+              trendline_breakout: false, reversal_candidate: false,
+              early_reversal_watch: false}};
+            controller.setChartData({{chart: [row, secondRow], structures: {{key_levels: {{
               strict_vcp_pivot: 103, tight_platform_pivot: 104,
-            }}, annotations: [{{time: row.time, type: 'strict_vcp', label: 'Strict VCP'}}]}}}});
+            }}, annotations: [
+              {{time: row.time, type: 'strict_vcp_start'}},
+              {{time: secondRow.time, type: 'vcp_breakout_confirmed'}},
+              {{time: secondRow.time, type: 'pocket_pivot'}},
+              {{time: '2026-07-24', type: 'pocket_pivot'}},
+              {{time: row.time, type: 'future_unknown_signal'}},
+            ]}}}});
             await new Promise((resolve) => setTimeout(resolve, 0));
             await Promise.resolve();
             const markers = markerSets.at(-1);
@@ -2066,11 +2109,42 @@ class WebAssetTest(unittest.TestCase):
             [line[0] for line in actual["volumeLines"]],
             ["Volume MA20", "Volume ratio"],
         )
+        entry_markers = [
+            marker for marker in actual["markers"]
+            if marker["text"] in {
+                "Strict VCP setup detected",
+                "VCP breakout confirmed",
+                "Pocket Pivot",
+            }
+        ]
         self.assertEqual(
-            actual["markers"][0]["text"],
-            "Bullish breakout setup (Strict VCP)",
+            entry_markers,
+            [
+                {
+                    "time": "2026-07-22",
+                    "position": "aboveBar",
+                    "color": "#60a5fa",
+                    "shape": "square",
+                    "text": "Strict VCP setup detected",
+                },
+                {
+                    "time": "2026-07-23",
+                    "position": "belowBar",
+                    "color": "#35c6a5",
+                    "shape": "arrowUp",
+                    "text": "VCP breakout confirmed",
+                },
+                {
+                    "time": "2026-07-23",
+                    "position": "belowBar",
+                    "color": "#5cc8ff",
+                    "shape": "circle",
+                    "text": "Pocket Pivot",
+                },
+            ],
         )
-        self.assertEqual(actual["requestedForecastDates"], ["2026-07-22"])
+        self.assertEqual(len(actual["priceLines"]), 2)
+        self.assertEqual(actual["requestedForecastDates"], ["2026-07-23"])
         self.assertIn("Prior-high breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn("Trendline breakout", [marker["text"] for marker in actual["markers"]])
         self.assertIn(
@@ -2085,9 +2159,27 @@ class WebAssetTest(unittest.TestCase):
             "向上早期反转观察 · 100",
             [marker["text"] for marker in actual["zhMarkers"]],
         )
+        self.assertIn(
+            "发现严格 VCP 准备形态",
+            [marker["text"] for marker in actual["zhMarkers"]],
+        )
+        self.assertIn(
+            "VCP 向上突破已确认",
+            [marker["text"] for marker in actual["zhMarkers"]],
+        )
+        self.assertIn(
+            "Pocket Pivot 需求确认",
+            [marker["text"] for marker in actual["zhMarkers"]],
+        )
         self.assertEqual(
             next(line for line in actual["priceLineSeries"] if line[0] == "Descending resistance"),
-            ["Descending resistance", [{"time": "2026-07-22", "value": 100.5}]],
+            [
+                "Descending resistance",
+                [
+                    {"time": "2026-07-22", "value": 100.5},
+                    {"time": "2026-07-23", "value": 100.5},
+                ],
+            ],
         )
         projection = next(line for line in actual["priceLineSeries"] if line[0] == "Model forecast")
         self.assertEqual(actual["forecastOptions"]["lineWidth"], 3)
@@ -2098,6 +2190,24 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(details["Pivot-distance change"], "+0.75 pp")
         self.assertEqual(details["EMA20 cross"], "Crossed above")
         self.assertEqual(details["Prior-high breakout"], "Yes")
+        self.assertEqual(details["Strict VCP state"], "Active")
+        self.assertEqual(details["Strict VCP pivot"], "103.5")
+        self.assertEqual(details["VCP breakout confirmation"], "Yes")
+        self.assertEqual(details["Breakout volume ratio"], "1.62×")
+        self.assertEqual(details["Close above pivot"], "+2.10%")
+        self.assertEqual(details["Pocket Pivot"], "No")
+        self.assertEqual(details["Pocket Pivot current volume"], "1,250,000")
+        self.assertEqual(details["Pocket Pivot comparison volume"], "1,400,000")
+        self.assertEqual(
+            details["Pocket Pivot explanation"],
+            "Up-day volume did not exceed the largest prior 10-session down-day volume",
+        )
+        zh_details = dict(actual["zhDetail"])
+        self.assertEqual(zh_details["严格 VCP 状态"], "已触发")
+        self.assertEqual(
+            zh_details["Pocket Pivot 判定说明"],
+            "上涨日成交量未超过近10日最大下跌日成交量",
+        )
         self.assertEqual(details["Trendline breakout"], "Yes")
         self.assertEqual(details["Bullish structural reversal conditions"], "2/3")
         self.assertEqual(details["Early bullish reversal watch"], "100/100")

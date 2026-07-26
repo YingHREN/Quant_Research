@@ -6,8 +6,9 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+from factors.compute import pocket_pivot_evidence, tight_platform
 from research.entry_signals import build_entry_signal_rows
-from research.vcp import VCPPattern
+from research.vcp import VCPPattern, detect_vcp
 from tests.helpers import make_ohlcv
 from tests.test_vcp import textbook_vcp_fixture
 
@@ -45,6 +46,41 @@ def _accepted_after_sixty(frame):
 
 
 class EntrySignalHistoryTest(unittest.TestCase):
+    def test_each_detector_receives_only_its_bounded_causal_window(self):
+        close = 100 + np.sin(np.arange(300) / 7) * 4
+        history = make_ohlcv(close)
+        strict_lengths = []
+        platform_lengths = []
+        pocket_lengths = []
+
+        def record_strict(frame):
+            strict_lengths.append(len(frame))
+            return detect_vcp(frame)
+
+        def record_platform(frame):
+            platform_lengths.append(len(frame))
+            return tight_platform(frame)
+
+        def record_pocket(frame):
+            pocket_lengths.append(len(frame))
+            return pocket_pivot_evidence(frame)
+
+        with patch(
+            "research.entry_signals.detect_vcp",
+            side_effect=record_strict,
+        ), patch(
+            "research.entry_signals.tight_platform",
+            side_effect=record_platform,
+        ), patch(
+            "research.entry_signals.pocket_pivot_evidence",
+            side_effect=record_pocket,
+        ):
+            build_entry_signal_rows(history)
+
+        self.assertLessEqual(max(strict_lengths), 252)
+        self.assertLessEqual(max(platform_lengths), 252)
+        self.assertLessEqual(max(pocket_lengths), 12)
+
     def test_returns_one_ordered_row_per_input_date(self):
         history = textbook_vcp_fixture()
 

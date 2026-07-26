@@ -47,6 +47,7 @@ from web.services.forecasts import (
 from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.entry_signals import (
+    EntrySignalArtifactStore,
     EntrySignalService,
     merge_entry_signal_rows,
 )
@@ -82,6 +83,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         ),
         FORECAST_ARTIFACT_CACHE_ENTRIES=2,
         ENTRY_SIGNAL_CACHE_SIZE=16,
+        ENTRY_SIGNAL_ARTIFACT_CACHE_ENABLED=True,
+        ENTRY_SIGNAL_ARTIFACT_CACHE_PATH=os.fspath(
+            PROJECT_ROOT / "data" / "analysis_cache.db"
+        ),
+        ENTRY_SIGNAL_ARTIFACT_CACHE_ENTRIES=64,
     )
     if config:
         flask_app.config.update(config)
@@ -112,8 +118,26 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     entry_signal_service = flask_app.config.get("ENTRY_SIGNAL_SERVICE")
     if entry_signal_service is None:
+        persistent_entry_cache_enabled = bool(
+            flask_app.config["ENTRY_SIGNAL_ARTIFACT_CACHE_ENABLED"]
+        ) and (
+            not flask_app.config.get("TESTING")
+            or "ENTRY_SIGNAL_ARTIFACT_CACHE_PATH" in supplied_config
+            or "ENTRY_SIGNAL_ARTIFACT_CACHE_ENABLED" in supplied_config
+        )
+        entry_artifact_store = (
+            EntrySignalArtifactStore(
+                flask_app.config["ENTRY_SIGNAL_ARTIFACT_CACHE_PATH"],
+                max_entries=flask_app.config[
+                    "ENTRY_SIGNAL_ARTIFACT_CACHE_ENTRIES"
+                ],
+            )
+            if persistent_entry_cache_enabled
+            else None
+        )
         entry_signal_service = EntrySignalService(
             max_cache_size=flask_app.config["ENTRY_SIGNAL_CACHE_SIZE"],
+            artifact_store=entry_artifact_store,
         )
     if update_manager is None:
         cache_warmer = (
@@ -512,18 +536,10 @@ def _attach_model_outputs(payload, chart, structures=None):
         for row in chart
         if isinstance(row, dict) and isinstance(row.get("time"), str)
     }
-    latest_date = chart[-1].get("time") if chart else None
     for raw_date, horizons in by_date.items():
         if not isinstance(horizons, dict):
             continue
         row = dict(rows.get(raw_date, {}))
-        if structures and raw_date == latest_date:
-            strict = structures.get("strict_vcp")
-            platform = structures.get("tight_platform")
-            if isinstance(strict, dict):
-                row["strict_vcp"] = strict.get("reject_reason") is None
-            if isinstance(platform, dict):
-                row["tight_platform"] = bool(platform.get("is_platform"))
         for raw_horizon, forecast in horizons.items():
             if not isinstance(forecast, dict):
                 continue
@@ -635,37 +651,90 @@ def _stock_summary(chart, ticker_summary):
 def _structure_payload(factors, chart):
     by_key = {factor["key"]: factor for factor in factors}
     latest = chart[-1]
-    strict_vcp = by_key.get("strict_vcp", {}).get("raw_value")
-    tight_platform = by_key.get("tight_platform", {}).get("raw_value")
-    strict_vcp = strict_vcp if isinstance(strict_vcp, dict) else None
-    tight_platform = tight_platform if isinstance(tight_platform, dict) else None
+    strict_vcp = latest.get("strict_vcp_evidence")
+    tight_platform = latest.get("tight_platform_evidence")
+    if not isinstance(strict_vcp, dict):
+        strict_vcp = by_key.get("strict_vcp", {}).get("raw_value")
+    if not isinstance(tight_platform, dict):
+        tight_platform = by_key.get("tight_platform", {}).get("raw_value")
+    strict_vcp = dict(strict_vcp) if isinstance(strict_vcp, dict) else None
+    tight_platform = (
+        dict(tight_platform) if isinstance(tight_platform, dict) else None
+    )
+    if strict_vcp is not None:
+        strict_vcp.setdefault(
+            "rejection_reason_code",
+            strict_vcp.get("reject_reason"),
+        )
+    if tight_platform is not None:
+        tight_platform.setdefault(
+            "rejection_reason_code",
+            tight_platform.get("reject_reason") or tight_platform.get("reason"),
+        )
     strict_vcp_pivot = (
-        strict_vcp.get("vcp_pivot")
-        if strict_vcp and strict_vcp.get("reject_reason") is None
+        latest.get("strict_vcp_pivot")
+        if latest.get("strict_vcp_active") is True
         else None
     )
     tight_platform_pivot = (
-        tight_platform.get("platform_pivot")
-        if tight_platform and tight_platform.get("is_platform")
+        latest.get("tight_platform_pivot")
+        if latest.get("tight_platform_active") is True
         else None
     )
+    if "strict_vcp_active" not in latest:
+        strict_vcp_pivot = (
+            strict_vcp.get("vcp_pivot")
+            if strict_vcp and strict_vcp.get("reject_reason") is None
+            else None
+        )
+    if "tight_platform_active" not in latest:
+        tight_platform_pivot = (
+            tight_platform.get("platform_pivot")
+            if tight_platform and tight_platform.get("is_platform")
+            else None
+        )
     annotations = []
-    if _finite_number(strict_vcp_pivot):
-        annotations.append(
-            {
-                "time": latest["time"],
-                "type": "strict_vcp",
-                "label": "Bullish breakout setup (Strict VCP)",
-            }
-        )
-    if _finite_number(tight_platform_pivot):
-        annotations.append(
-            {
-                "time": latest["time"],
-                "type": "tight_platform",
-                "label": "Bullish breakout setup (tight platform)",
-            }
-        )
+    entry_annotations = (
+        (
+            "strict_vcp_start",
+            "strict_vcp_start",
+            "Strict VCP setup detected",
+        ),
+        (
+            "vcp_breakout_confirmed",
+            "vcp_breakout_confirmed",
+            "VCP breakout confirmed",
+        ),
+        ("pocket_pivot", "pocket_pivot", "Pocket Pivot"),
+    )
+    if any(field in latest for field, _, _ in entry_annotations):
+        for row in chart:
+            for field, annotation_type, label in entry_annotations:
+                if row.get(field) is True:
+                    annotations.append(
+                        {
+                            "time": row["time"],
+                            "type": annotation_type,
+                            "label": label,
+                        }
+                    )
+    else:
+        if _finite_number(strict_vcp_pivot):
+            annotations.append(
+                {
+                    "time": latest["time"],
+                    "type": "strict_vcp",
+                    "label": "Bullish breakout setup (Strict VCP)",
+                }
+            )
+        if _finite_number(tight_platform_pivot):
+            annotations.append(
+                {
+                    "time": latest["time"],
+                    "type": "tight_platform",
+                    "label": "Bullish breakout setup (tight platform)",
+                }
+            )
     return {
         "strict_vcp": strict_vcp,
         "tight_platform": tight_platform,
@@ -674,12 +743,14 @@ def _structure_payload(factors, chart):
             "pivot": latest["pivot"],
             "strict_vcp_pivot": strict_vcp_pivot,
             "tight_platform_pivot": tight_platform_pivot,
-            "pivot_distance_pct": latest["pivot_distance_pct"],
-            "pivot_distance_change_pct": latest["pivot_distance_change_pct"],
-            "ema20": latest["ema20"],
-            "sma50": latest["sma50"],
-            "sma200": latest["sma200"],
-            "atr20": latest["atr20"],
+            "pivot_distance_pct": latest.get("pivot_distance_pct"),
+            "pivot_distance_change_pct": latest.get(
+                "pivot_distance_change_pct"
+            ),
+            "ema20": latest.get("ema20"),
+            "sma50": latest.get("sma50"),
+            "sma200": latest.get("sma200"),
+            "atr20": latest.get("atr20"),
         },
     }
 

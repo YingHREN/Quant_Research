@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import pandas as pd
 
-from tests.test_web_api import price_history
+from tests.test_web_api import (
+    FakeManager,
+    FakeRepository,
+    InjectedForecastService,
+    price_history,
+)
+from web.app import create_app
 from web.services.entry_signals import (
+    EntrySignalArtifactStore,
     EntrySignalService,
     merge_entry_signal_rows,
 )
@@ -23,6 +33,85 @@ def built_rows(history):
 
 
 class EntrySignalServiceTest(unittest.TestCase):
+    def test_app_factory_enables_persistent_entry_artifacts_explicitly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = create_app(
+                {
+                    "TESTING": True,
+                    "FORECAST_SERVICE": InjectedForecastService(),
+                    "ENTRY_SIGNAL_ARTIFACT_CACHE_ENABLED": True,
+                    "ENTRY_SIGNAL_ARTIFACT_CACHE_PATH": str(
+                        Path(temporary) / "analysis_cache.db"
+                    ),
+                },
+                FakeRepository(),
+                FakeManager(),
+            )
+
+        service = app.extensions["dashboard_entry_signal_service"]
+        self.assertIsInstance(
+            service._artifact_store,
+            EntrySignalArtifactStore,
+        )
+
+    def test_persistent_artifact_is_reused_by_a_new_service(self):
+        history = price_history(periods=80)
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "web.services.entry_signals.build_entry_signal_rows",
+            side_effect=built_rows,
+        ) as build:
+            path = Path(temporary) / "analysis_cache.db"
+            first = EntrySignalService(
+                artifact_store=EntrySignalArtifactStore(path)
+            )
+            second = EntrySignalService(
+                artifact_store=EntrySignalArtifactStore(path)
+            )
+
+            first.build("AAA", history)
+            restored = second.build("AAA", history.copy())
+
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(restored, built_rows(history))
+
+    def test_persistent_artifact_misses_after_history_correction(self):
+        history = price_history(periods=80)
+        corrected = history.copy()
+        corrected.iloc[20, corrected.columns.get_loc("Close")] += 0.25
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "web.services.entry_signals.build_entry_signal_rows",
+            side_effect=built_rows,
+        ) as build:
+            store = EntrySignalArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            EntrySignalService(artifact_store=store).build("AAA", history)
+            EntrySignalService(artifact_store=store).build("AAA", corrected)
+
+        self.assertEqual(build.call_count, 2)
+
+    def test_corrupt_persistent_artifact_safely_rebuilds(self):
+        history = price_history(periods=80)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "analysis_cache.db"
+            store = EntrySignalArtifactStore(path)
+            EntrySignalService(artifact_store=store).build("AAA", history)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE entry_signal_artifacts SET payload = ?",
+                    (sqlite3.Binary(b"corrupt"),),
+                )
+            with patch(
+                "web.services.entry_signals.build_entry_signal_rows",
+                side_effect=built_rows,
+            ) as build:
+                restored = EntrySignalService(
+                    artifact_store=store
+                ).build("AAA", history)
+
+        self.assertEqual(build.call_count, 1)
+        self.assertEqual(restored, built_rows(history))
+
     def test_identical_history_is_cached_and_results_are_isolated(self):
         history = price_history(periods=80)
         with patch(

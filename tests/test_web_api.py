@@ -13,7 +13,13 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from web.app import _attach_forecast_target_dates, _attach_model_outputs, create_app
+from web.app import (
+    _attach_forecast_target_dates,
+    _attach_model_outputs,
+    _structure_payload,
+    create_app,
+)
+from web.services.entry_signals import EntrySignalService
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
 from web.forecasts.dataset import build_feature_frame
@@ -1309,7 +1315,7 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(numeric.calls, ["AAA", "BBB", "CCC", "DDD"])
         self.assertEqual(structured.calls, ["AAA"])
 
-    def test_stock_structures_expose_shape_specific_pivots_and_annotations(self):
+    def test_stock_structures_prefer_causal_chart_evidence_over_latest_factor(self):
         repository = FakeRepository()
         registry = FactorRegistry(
             [
@@ -1328,7 +1334,12 @@ class WebApiTest(unittest.TestCase):
             ]
         )
         response = create_app(
-            test_config(FACTOR_REGISTRY=registry),
+            test_config(
+                FACTOR_REGISTRY=registry,
+                ENTRY_SIGNAL_SERVICE=InjectedEntrySignalService(
+                    active_latest=True
+                ),
+            ),
             repository,
             FakeManager(),
         ).test_client().get("/api/stocks/AAA")
@@ -1336,26 +1347,100 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         structures = response.json["structures"]
         self.assertEqual(structures["key_levels"].get("strict_vcp_pivot"), 141.5)
-        self.assertEqual(structures["key_levels"].get("tight_platform_pivot"), 142.0)
+        self.assertIsNone(
+            structures["key_levels"].get("tight_platform_pivot")
+        )
         self.assertEqual(
             [(item["type"], item["label"]) for item in structures["annotations"]],
             [
-                ("strict_vcp", "Bullish breakout setup (Strict VCP)"),
-                (
-                    "tight_platform",
-                    "Bullish breakout setup (tight platform)",
-                ),
+                ("strict_vcp_start", "Strict VCP setup detected"),
             ],
         )
         self.assertTrue(
             all(item["time"] == response.json["observation_date"] for item in structures["annotations"])
         )
 
+    def test_structures_use_causal_historical_entry_rows(self):
+        chart = [
+            {
+                "time": "2026-07-01",
+                "strict_vcp_start": True,
+                "strict_vcp_active": True,
+                "strict_vcp_pivot": 100.0,
+                "strict_vcp_evidence": {
+                    "accepted": True,
+                    "vcp_pivot": 100.0,
+                },
+                "tight_platform_active": False,
+                "tight_platform_evidence": {"active": False},
+                "vcp_breakout_confirmed": False,
+                "pocket_pivot": False,
+                "pivot": 99.0,
+            },
+            {
+                "time": "2026-07-02",
+                "strict_vcp_start": False,
+                "strict_vcp_active": False,
+                "strict_vcp_pivot": 100.0,
+                "strict_vcp_evidence": {
+                    "accepted": False,
+                    "vcp_pivot": 100.0,
+                },
+                "tight_platform_active": False,
+                "tight_platform_evidence": {"active": False},
+                "vcp_breakout_confirmed": True,
+                "pocket_pivot": False,
+                "pivot": 101.0,
+            },
+            {
+                "time": "2026-07-03",
+                "strict_vcp_start": False,
+                "strict_vcp_active": False,
+                "strict_vcp_pivot": None,
+                "strict_vcp_evidence": {
+                    "accepted": False,
+                    "vcp_pivot": None,
+                },
+                "tight_platform_active": False,
+                "tight_platform_evidence": {"active": False},
+                "vcp_breakout_confirmed": False,
+                "pocket_pivot": True,
+                "pivot": 102.0,
+            },
+        ]
+
+        structures = _structure_payload([], chart)
+
+        self.assertEqual(
+            [(item["time"], item["type"]) for item in structures["annotations"]],
+            [
+                ("2026-07-01", "strict_vcp_start"),
+                ("2026-07-02", "vcp_breakout_confirmed"),
+                ("2026-07-03", "pocket_pivot"),
+            ],
+        )
+        self.assertEqual(
+            structures["strict_vcp"],
+            {
+                **chart[-1]["strict_vcp_evidence"],
+                "rejection_reason_code": None,
+            },
+        )
+        self.assertEqual(
+            structures["tight_platform"],
+            {
+                **chart[-1]["tight_platform_evidence"],
+                "rejection_reason_code": None,
+            },
+        )
+
     def test_stock_exposes_stable_codes_for_structure_rejections(self):
         repository = FakeRepository()
         repository.histories["AAA"] = price_history(periods=40)
         response = create_app(
-            test_config(), repository, FakeManager()
+            test_config(ENTRY_SIGNAL_SERVICE=EntrySignalService()),
+            repository,
+            FakeManager(),
         ).test_client().get("/api/stocks/AAA")
 
         self.assertEqual(response.status_code, 200)

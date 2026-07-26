@@ -33,12 +33,31 @@ const COLORS = Object.freeze({
   sma200: "#c084fc",
   pivot: "#ff9f43",
   strictPivot: "#ff9f43",
+  strictSignal: "#60a5fa",
   platformPivot: "#f472b6",
   trendline: "#ff8ccf",
   reversal: "#f7d154",
   forecast: "#7dd3fc",
   volumeMa20: "#5cc8ff",
   volumeRatio: "#f2bd5d",
+});
+
+const ENTRY_MARKER_STYLES = Object.freeze({
+  strict_vcp_start: Object.freeze({
+    position: "aboveBar", shape: "square", color: COLORS.strictSignal,
+  }),
+  vcp_breakout_confirmed: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.up,
+  }),
+  pocket_pivot: Object.freeze({
+    position: "belowBar", shape: "circle", color: COLORS.volumeMa20,
+  }),
+  strict_vcp: Object.freeze({
+    position: "aboveBar", shape: "arrowDown", color: COLORS.strictPivot,
+  }),
+  tight_platform: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.platformPivot,
+  }),
 });
 
 function finite(value) {
@@ -148,6 +167,26 @@ function booleanText(value, locale) {
   return t(value ? "common.yes" : "common.no", {}, locale);
 }
 
+function entryStateText(value, locale) {
+  const status = value === true
+    ? "active"
+    : value === false ? "inactive" : "unavailable";
+  return t(`modelOutput.status.${status}`, {}, locale);
+}
+
+function entryBooleanText(value, locale) {
+  return value === true || value === false
+    ? booleanText(value, locale)
+    : "—";
+}
+
+function entryReasonText(reason, locale) {
+  if (!reason) return "—";
+  const key = `modelOutput.reason.${reason}`;
+  const localized = t(key, {}, locale);
+  return localized === key ? String(reason).replaceAll("_", " ") : localized;
+}
+
 function earlyReversalConditionsText(row, locale) {
   const conditions = Array.isArray(row?.early_reversal_conditions)
     ? row.early_reversal_conditions
@@ -237,6 +276,17 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.earlyReversalWatch", {}, locale), value: finite(row.early_reversal_score) ? `${row.early_reversal_score}/100` : "—" },
     { label: t("chart.field.earlyReversalState", {}, locale), value: t(row.early_reversal_watch ? "chart.earlyReversal.watching" : "chart.earlyReversal.inactive", {}, locale) },
     { label: t("chart.field.earlyReversalEvidence", {}, locale), value: earlyReversalConditionsText(row, locale) },
+    { label: t("chart.field.strictVcpState", {}, locale), value: entryStateText(row.strict_vcp_active, locale) },
+    { label: t("chart.field.strictVcpPivot", {}, locale), value: numberText(row.strict_vcp_pivot) },
+    { label: t("chart.field.strictVcpReason", {}, locale), value: entryReasonText(row.strict_vcp_reject_reason, locale) },
+    { label: t("chart.field.vcpBreakoutConfirmed", {}, locale), value: entryBooleanText(row.vcp_breakout_confirmed, locale) },
+    { label: t("chart.field.vcpBreakoutVolumeRatio", {}, locale), value: finite(row.vcp_breakout_volume_ratio) ? `${numberText(row.vcp_breakout_volume_ratio)}×` : "—" },
+    { label: t("chart.field.vcpBreakoutPctOverPivot", {}, locale), value: percentText(row.vcp_breakout_pct_over_pivot) },
+    { label: t("chart.field.vcpBreakoutReason", {}, locale), value: entryReasonText(row.vcp_breakout_reject_reason, locale) },
+    { label: t("chart.field.pocketPivot", {}, locale), value: entryBooleanText(row.pocket_pivot, locale) },
+    { label: t("chart.field.pocketPivotCurrentVolume", {}, locale), value: numberText(row.pocket_pivot_current_volume, 0) },
+    { label: t("chart.field.pocketPivotPriorDownVolume", {}, locale), value: numberText(row.pocket_pivot_prior_down_volume, 0) },
+    { label: t("chart.field.pocketPivotReason", {}, locale), value: entryReasonText(row.pocket_pivot_reject_reason, locale) },
     ...marketRiskDetailItems(row, locale),
     { label: t("chart.field.trendlinePivots", {}, locale), value: row.trendline_high_1_date && row.trendline_high_2_date ? `${row.trendline_high_1_date} → ${row.trendline_high_2_date}` : "—" },
     { label: t("chart.field.latestHighConfirmed", {}, locale), value: row.latest_confirmed_high_confirmed_date || "—" },
@@ -736,17 +786,23 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
     ));
 
     const annotations = payload && payload.structures && payload.structures.annotations;
-    const structureMarkers = (Array.isArray(annotations) ? annotations : []).map((annotation) => ({
-      time: annotation.time,
-      position: annotation.type === "tight_platform" ? "belowBar" : "aboveBar",
-      color: annotation.type === "tight_platform" ? COLORS.platformPivot : COLORS.strictPivot,
-      shape: annotation.type === "tight_platform" ? "arrowUp" : "arrowDown",
-      text: (() => {
+    const structureMarkers = (Array.isArray(annotations) ? annotations : [])
+      .filter((annotation) => (
+        rowByTime.has(timeKey(annotation?.time))
+        && ENTRY_MARKER_STYLES[annotation?.type]
+      ))
+      .map((annotation) => {
+        const style = ENTRY_MARKER_STYLES[annotation.type];
         const key = `chart.shape.${annotation.type}`;
         const localized = t(key, {}, locale);
-        return localized === key ? annotation.label || t("chart.shape.default", {}, locale) : localized;
-      })(),
-    }));
+        return {
+          time: annotation.time,
+          ...style,
+          text: localized === key
+            ? annotation.label || t("chart.shape.default", {}, locale)
+            : localized,
+        };
+      });
     const reversalMarkers = rows.flatMap((row) => {
       const markers = [];
       if (row.prior_high_breakout) {

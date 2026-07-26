@@ -15,6 +15,10 @@ from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.forecasts import ForecastService
 from web.services.update_jobs import UpdateJobManager
+from web.services.entry_signals import (
+    EntrySignalArtifactStore,
+    EntrySignalService,
+)
 
 from tests.test_web_api import (
     FakeManager,
@@ -42,6 +46,34 @@ class ConstantFactor:
 
 
 class WebPerformanceContractTest(unittest.TestCase):
+    def test_new_entry_service_uses_persistent_rows_without_replaying_history(self):
+        history = price_history(periods=80)
+        rows = [
+            {
+                "time": timestamp.date().isoformat(),
+                "strict_vcp_active": False,
+            }
+            for timestamp in history.index
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            store = EntrySignalArtifactStore(
+                Path(temporary) / "analysis_cache.db"
+            )
+            with patch(
+                "web.services.entry_signals.build_entry_signal_rows",
+                return_value=rows,
+            ) as build:
+                EntrySignalService(artifact_store=store).build(
+                    "AAA",
+                    history,
+                )
+                EntrySignalService(artifact_store=store).build(
+                    "AAA",
+                    history.copy(),
+                )
+
+        self.assertEqual(build.call_count, 1)
+
     def test_selected_stock_builds_one_chart_regardless_of_peer_count(self):
         small_count = self._chart_build_count(peer_count=2)
         large_count = self._chart_build_count(peer_count=40)
