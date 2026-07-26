@@ -44,5 +44,8 @@
     ],
     "reason": "production_blocked_until_point_in_time_universe_and_classification_history_are_available"
   },
-  "diagnostic_prediction_rows": 180
+  "diagnostic_prediction_rows": 180,
+  "market_regime_version": "market_regime_v1",
+  "market_regime_rows": 480,
+  "minimum_regime_fold_samples": 30
 }
