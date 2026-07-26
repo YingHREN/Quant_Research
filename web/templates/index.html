@@ -133,6 +133,28 @@
               <button type="button" data-forecast-horizon="20" aria-pressed="true" data-i18n="forecast.horizon.20">20 sessions</button>
               <button type="button" data-forecast-horizon="60" aria-pressed="false" data-i18n="forecast.horizon.60">60 sessions</button>
             </div>
+            <details id="marker-layer-filter" class="marker-layer-filter">
+              <summary>
+                <span data-i18n="chart.layers.title">Chart signals</span>
+                <span id="marker-layer-count">3/9 model layers shown</span>
+              </summary>
+              <div class="marker-layer-actions">
+                <button type="button" data-marker-preset="core" data-i18n="chart.layers.preset.core">Core signals</button>
+                <button type="button" data-marker-preset="all" data-i18n="chart.layers.preset.all">Show all</button>
+                <button type="button" data-marker-preset="none" data-i18n="chart.layers.preset.none">Hide all</button>
+              </div>
+              <div class="marker-layer-grid">
+                <label><input type="checkbox" data-marker-layer="strict_vcp" checked> <span data-i18n="chart.layers.strict_vcp">Strict VCP formation</span></label>
+                <label><input type="checkbox" data-marker-layer="vcp_breakout" checked> <span data-i18n="chart.layers.vcp_breakout">VCP volume breakout</span></label>
+                <label><input type="checkbox" data-marker-layer="pocket_pivot" checked> <span data-i18n="chart.layers.pocket_pivot">Pocket Pivot</span></label>
+                <label><input type="checkbox" data-marker-layer="tight_platform"> <span data-i18n="chart.layers.tight_platform">Tight platform</span></label>
+                <label><input type="checkbox" data-marker-layer="structure_reversal"> <span data-i18n="chart.layers.structure_reversal">Bullish structural reversal</span></label>
+                <label><input type="checkbox" data-marker-layer="early_reversal"> <span data-i18n="chart.layers.early_reversal">Early bullish reversal watch</span></label>
+                <label><input type="checkbox" data-marker-layer="prior_high_breakout"> <span data-i18n="chart.layers.prior_high_breakout">Prior-high breakout</span></label>
+                <label><input type="checkbox" data-marker-layer="trendline_breakout"> <span data-i18n="chart.layers.trendline_breakout">Descending-trendline breakout</span></label>
+                <label><input type="checkbox" data-marker-layer="higher_low"> <span data-i18n="chart.layers.higher_low">Higher low</span></label>
+              </div>
+            </details>
           </div>
         </div>
         <p class="safety-copy forecast-static-disclaimer" data-i18n="forecast.disclaimer">Research use only. Forecasts and historical evidence are not investment advice or guarantees.</p>

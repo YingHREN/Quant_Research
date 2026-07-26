@@ -96,6 +96,30 @@ class WebAssetTest(unittest.TestCase):
             r"\.model-output-shell\s*\{[^}]*overflow-y:\s*auto;",
         )
 
+    def test_page_has_chart_marker_layer_controls(self):
+        html = HTML.read_text()
+        self.assertIn('id="marker-layer-filter"', html)
+        self.assertIn('id="marker-layer-count"', html)
+        for key in (
+            "strict_vcp",
+            "vcp_breakout",
+            "pocket_pivot",
+            "tight_platform",
+            "structure_reversal",
+            "early_reversal",
+            "prior_high_breakout",
+            "trendline_breakout",
+            "higher_low",
+        ):
+            self.assertIn(f'data-marker-layer="{key}"', html)
+        for preset in ("core", "all", "none"):
+            self.assertIn(f'data-marker-preset="{preset}"', html)
+
+    def test_dashboard_persists_chart_marker_layers(self):
+        actual = self.run_dashboard_runtime("marker-layers")
+        self.assertEqual(actual["stored"], ["pocket_pivot"])
+        self.assertEqual(actual["markerCount"], "1/9 model layers shown")
+
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
         self.assertEqual(actual["cardCount"], 10)
