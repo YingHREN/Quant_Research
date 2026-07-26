@@ -12,6 +12,7 @@ class Element {
     this.listeners = new Map();
     this.className = "";
     this.disabled = false;
+    this.hidden = false;
     this.checked = false;
     this.value = "";
     this.clientWidth = 800;
@@ -84,17 +85,25 @@ function byClass(node, className) {
 }
 
 const ids = [
-  "universe-list", "universe-count", "universe-status", "universe-search", "sort-key",
+  "universe-list", "universe-count", "universe-status", "universe-retry",
+  "universe-search", "sort-key",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
   "market-date", "market-coverage", "selected-ticker", "selected-close",
-  "selected-change", "observation-date", "security-state", "research-status", "data-warnings",
+  "selected-change", "observation-date", "security-state", "research-status", "stock-retry",
+  "data-warnings",
   "top-risk-state", "security-classification",
   "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
   "factor-overview", "factor-table-body",
   "structure-content", "scenario-chart", "scenario-meta", "update-data", "update-status",
   "marker-layer-count",
 ];
-const elements = new Map(ids.map((id) => [id, new Element("div", id)]));
+const activeIds = mode === "missing-top-risk-element"
+  ? ids.filter((id) => id !== "top-risk-state")
+  : ids;
+const elements = new Map(activeIds.map((id) => [id, new Element("div", id)]));
+for (const id of ["universe-retry", "stock-retry"]) {
+  if (elements.has(id)) elements.get(id).hidden = true;
+}
 elements.get("price-chart").clientHeight = 400;
 elements.get("volume-chart").clientHeight = 180;
 const body = new Element("body");
@@ -388,16 +397,29 @@ function jsonResponse(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, async json() { return payload; } };
 }
 
+const nativeSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (callback) => nativeSetTimeout(callback, 0);
+let universeAttempts = 0;
+let stockAttempts = 0;
+
 globalThis.fetch = async (path) => {
   if (path === "/api/update/status") return jsonResponse({ state: "idle" });
   if (path === "/api/universe") {
-    if (mode === "universe-error") {
+    universeAttempts += 1;
+    if (
+      mode === "universe-error"
+      || (mode === "universe-error-then-retry" && universeAttempts <= 3)
+    ) {
       return jsonResponse({ error: { code: "market_data_unavailable", message: "Market data is unavailable" } }, 503);
     }
     return jsonResponse(universe);
   }
   if (path === "/api/stocks/AAA") {
-    if (mode === "stock-error") {
+    stockAttempts += 1;
+    if (
+      mode === "stock-error"
+      || (mode === "stock-error-then-retry" && stockAttempts <= 3)
+    ) {
       return jsonResponse({ error: { code: "internal_error", message: "An internal error occurred" } }, 500);
     }
     if (mode === "stock-unknown-error") {
@@ -524,6 +546,14 @@ if (mode === "success") {
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
     modelZh, lockedModelZh, popoverZh, factorEn, tableEn, scenarioEn, structureEn,
     chartEn, modelEn, popoverEn, topRiskZh, topRiskEn }));
+} else if (mode === "missing-top-risk-element") {
+  assert.equal(elements.get("universe-count").textContent, "1/1");
+  assert.match(elements.get("research-status").textContent, /2026-07-22/);
+  assert.equal(elements.get("selected-ticker").textContent, "AAA");
+  console.log(JSON.stringify({
+    count: elements.get("universe-count").textContent,
+    ticker: elements.get("selected-ticker").textContent,
+  }));
 } else if (mode === "top-risk-fading" || mode === "top-risk-unavailable") {
   const zh = {
     text: elements.get("top-risk-state").textContent,
@@ -577,6 +607,34 @@ if (mode === "success") {
   }
   assert.equal(elements.get("research-status").dataset.tone, "error");
   console.log(JSON.stringify({ zh, en }));
+} else if (mode === "universe-error-then-retry") {
+  assert.equal(elements.get("universe-count").textContent, "0/0");
+  assert.equal(elements.get("universe-retry").hidden, false);
+  elements.get("universe-retry").dispatch("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(elements.get("universe-count").textContent, "1/1");
+  assert.equal(elements.get("selected-ticker").textContent, "AAA");
+  assert.equal(elements.get("universe-retry").hidden, true);
+  console.log(JSON.stringify({
+    attempts: universeAttempts,
+    count: elements.get("universe-count").textContent,
+    retryHidden: elements.get("universe-retry").hidden,
+  }));
+} else if (mode === "stock-error-then-retry") {
+  assert.equal(elements.get("universe-count").textContent, "1/1");
+  assert.equal(elements.get("stock-retry").hidden, false);
+  elements.get("stock-retry").dispatch("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(elements.get("universe-count").textContent, "1/1");
+  assert.match(elements.get("research-status").textContent, /2026-07-22/);
+  assert.equal(elements.get("stock-retry").hidden, true);
+  console.log(JSON.stringify({
+    attempts: stockAttempts,
+    count: elements.get("universe-count").textContent,
+    retryHidden: elements.get("stock-retry").hidden,
+  }));
 } else if (mode === "marker-layers") {
   const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
   const noneButton = markerPresetControls.find(
