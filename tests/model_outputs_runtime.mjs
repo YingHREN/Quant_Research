@@ -109,6 +109,8 @@ const forecast = {
       churning_cluster: true,
       climax_run_score: 80,
       climax_run_candidate: true,
+      risk_recovery: true,
+      conditions: ["distribution_day", "failed_breakout", "below_ema20", "strong_reclaim"],
     }, {
       ...identity("macro_risk", "model.macroRisk.name", "remembered_state", "unavailable"),
       lifecycle: "planned",
@@ -158,6 +160,7 @@ assert.match(zh, /10日派发次数 3/);
 assert.match(zh, /20日派发次数 5/);
 assert.match(zh, /10日 Churning 次数 2/);
 assert.match(zh, /末端加速分数 80/);
+assert.match(zh, /强势收复并解除顶部风险记忆/);
 
 renderModelOutputs(container, {
   forecast,

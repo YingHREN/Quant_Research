@@ -21,6 +21,7 @@ def build_high_level_distribution_state(
     history: pd.DataFrame,
     sector_close: pd.Series | None = None,
     qqq_history: pd.DataFrame | None = None,
+    group_supply: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Return point-in-time high-level supply and structure-risk rows."""
     checked = _history(history)
@@ -103,6 +104,7 @@ def build_high_level_distribution_state(
         checked,
         sector_close,
         qqq_history,
+        group_supply,
     )
     supply_score = close_volume_score + rejection_score + relative_score
 
@@ -137,7 +139,19 @@ def build_high_level_distribution_state(
         0.0,
     )
     memory_input = memory_input.where(context_score.notna())
-    memory = build_risk_memory_state(memory_input)
+    prior_high_20 = close.shift(1).rolling(20, min_periods=20).max()
+    strong_reclaim = (
+        (close > prior_high_20)
+        & (close > ema20)
+        & (pressure["signed_volume_proxy"] >= 0.5)
+        & (pressure["volume_ratio"] >= 1.2)
+    ).where(
+        prior_high_20.notna()
+        & pressure["signed_volume_proxy"].notna()
+        & pressure["volume_ratio"].notna()
+    )
+    risk_recovery = strong_reclaim.eq(True)
+    memory = _memory_with_resets(memory_input, risk_recovery)
     state = _semantic_states(raw_state, memory["state"])
 
     result = pd.DataFrame(index=checked.index)
@@ -171,6 +185,11 @@ def build_high_level_distribution_state(
     result["high_level_distribution_memory_age_sessions"] = memory[
         "memory_age_sessions"
     ]
+    result["risk_recovery"] = risk_recovery.astype(bool)
+    result["risk_recovery_conditions"] = _condition_tuples(
+        {"strong_reclaim": strong_reclaim},
+        checked.index,
+    )
     result["high_level_context_conditions"] = _condition_tuples(
         {
             "prior_60_session_advance": close.pct_change(
@@ -231,7 +250,7 @@ def build_high_level_distribution_state(
     return result
 
 
-def _relative_supply(history, sector_close, qqq_history):
+def _relative_supply(history, sector_close, qqq_history, group_supply):
     index = history.index
     score = pd.Series(0.0, index=index)
     conditions: dict[str, pd.Series] = {}
@@ -253,7 +272,65 @@ def _relative_supply(history, sector_close, qqq_history):
         stressed = count >= 4.0
         score += stressed.astype(float).fillna(0.0) * 15.0
         conditions["qqq_distribution_cluster"] = stressed
+    if isinstance(group_supply, pd.DataFrame) and not group_supply.empty:
+        aligned = group_supply.reindex(index)
+        group_rules = (
+            (
+                "group_distribution_breadth",
+                "distribution_breadth",
+                0.30,
+                15.0,
+            ),
+            (
+                "group_down_volume_breadth",
+                "down_volume_breadth",
+                0.60,
+                10.0,
+            ),
+            (
+                "group_volume_expansion",
+                "mean_volume_ratio",
+                1.30,
+                5.0,
+            ),
+        )
+        for condition_name, column, threshold, points in group_rules:
+            if column not in aligned:
+                continue
+            values = pd.to_numeric(aligned[column], errors="coerce")
+            met = (values >= threshold).where(values.notna())
+            score += met.eq(True).astype(float) * points
+            conditions[condition_name] = met
     return score.clip(upper=30.0), conditions
+
+
+def _memory_with_resets(raw_score, resets):
+    frames = []
+    start = 0
+    reset_values = resets.reindex(raw_score.index).eq(True)
+    for position, reset in enumerate(reset_values):
+        if not reset:
+            continue
+        if position > start:
+            frames.append(build_risk_memory_state(raw_score.iloc[start:position]))
+        reset_index = raw_score.index[position : position + 1]
+        frames.append(
+            pd.DataFrame(
+                {
+                    "raw_score": raw_score.iloc[position : position + 1],
+                    "state_score": 0.0,
+                    "state": "inactive",
+                    "memory_age_sessions": 0.0,
+                },
+                index=reset_index,
+            )
+        )
+        start = position + 1
+    if start < len(raw_score):
+        frames.append(build_risk_memory_state(raw_score.iloc[start:]))
+    if not frames:
+        return build_risk_memory_state(raw_score)
+    return pd.concat(frames).reindex(raw_score.index)
 
 
 def _raw_states(context, supply, structure):

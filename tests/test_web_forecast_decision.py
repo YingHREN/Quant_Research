@@ -68,6 +68,8 @@ def high_risk_decision(**changes):
         "climax_run_score": 80.0,
         "climax_run_candidate": True,
         "climax_run_conditions": ("climax_acceleration",),
+        "top_risk_recovery": True,
+        "top_risk_recovery_conditions": ("strong_reclaim",),
     }
     values.update(changes)
     return ForecastDecision(**values)
@@ -135,6 +137,8 @@ class ForecastDecisionContractTest(unittest.TestCase):
                 "climax_run_score": 80.0,
                 "climax_run_candidate": True,
                 "climax_run_conditions": ["climax_acceleration"],
+                "top_risk_recovery": True,
+                "top_risk_recovery_conditions": ["strong_reclaim"],
             },
         )
 
@@ -226,6 +230,8 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "climax_run_score",
                 "climax_run_candidate",
                 "climax_run_conditions",
+                "top_risk_recovery",
+                "top_risk_recovery_conditions",
             ],
         )
         self.assertIn("MU", context.index.get_level_values("ticker"))
@@ -379,6 +385,8 @@ class ForecastDecisionPolicyTest(unittest.TestCase):
             "climax_run_score": 0.0,
             "climax_run_candidate": False,
             "climax_run_conditions": (),
+            "top_risk_recovery": False,
+            "top_risk_recovery_conditions": (),
         }
 
     def test_unavailable_context_retains_raw_forecast(self):

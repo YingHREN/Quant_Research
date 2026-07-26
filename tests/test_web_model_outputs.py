@@ -63,6 +63,8 @@ def forecast_payload():
                 "climax_ema_extension",
                 "climax_abnormal_volume",
             ],
+            "top_risk_recovery": True,
+            "top_risk_recovery_conditions": ["strong_reclaim"],
             "immediate_risk_score": 100.0,
         },
     }
@@ -144,6 +146,8 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(top_risk["climax_run_score"], 80.0)
         self.assertTrue(top_risk["climax_run_candidate"])
         self.assertIn("climax_acceleration", top_risk["conditions"])
+        self.assertTrue(top_risk["risk_recovery"])
+        self.assertIn("strong_reclaim", top_risk["conditions"])
         structural = outputs["bullish_structure"][0]
         self.assertEqual(structural["key"], "bullish_structure_reversal_v1")
         self.assertEqual(structural["score"], 2)

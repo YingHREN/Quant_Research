@@ -31,6 +31,55 @@ def elevated_distribution_history():
 
 
 class HighLevelDistributionTest(unittest.TestCase):
+    def test_group_supply_breadth_is_capped_and_named(self):
+        frame = elevated_distribution_history()
+        group_supply = pd.DataFrame(
+            {
+                "distribution_breadth": 0.40,
+                "down_volume_breadth": 0.70,
+                "mean_volume_ratio": 1.40,
+            },
+            index=frame.index,
+        )
+
+        row = build_high_level_distribution_state(
+            frame,
+            group_supply=group_supply,
+        ).iloc[-1]
+
+        self.assertEqual(row["relative_supply_score"], 30.0)
+        self.assertIn(
+            "group_distribution_breadth",
+            row["distribution_pressure_conditions"],
+        )
+        self.assertIn(
+            "group_down_volume_breadth",
+            row["distribution_pressure_conditions"],
+        )
+
+    def test_strong_reclaim_clears_remembered_top_risk(self):
+        frame = elevated_distribution_history()
+        next_date = pd.bdate_range(
+            frame.index[-1] + pd.Timedelta(days=1),
+            periods=1,
+        )
+        recovery = make_ohlcv(
+            [125.0],
+            opens=[110.0],
+            highs=[126.0],
+            lows=[109.0],
+            volumes=[2_500_000.0],
+        ).set_axis(next_date)
+
+        row = build_high_level_distribution_state(
+            pd.concat([frame, recovery])
+        ).iloc[-1]
+
+        self.assertTrue(row["risk_recovery"])
+        self.assertEqual(row["high_level_distribution_state"], "inactive")
+        self.assertEqual(row["high_level_distribution_state_score"], 0.0)
+        self.assertIn("strong_reclaim", row["risk_recovery_conditions"])
+
     def test_churning_requires_multiple_events_in_rolling_window(self):
         frame = elevated_distribution_history()
         for offset in (-8, -4):

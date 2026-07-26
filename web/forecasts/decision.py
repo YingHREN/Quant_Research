@@ -56,6 +56,8 @@ RISK_CONTEXT_COLUMNS = (
     "climax_run_score",
     "climax_run_candidate",
     "climax_run_conditions",
+    "top_risk_recovery",
+    "top_risk_recovery_conditions",
 )
 PERSISTENT_RISK_SOURCES = frozenset(("individual", "group", "slow_decline"))
 SOURCE_WATCH_THRESHOLDS = {
@@ -106,6 +108,8 @@ class ForecastDecision:
     climax_run_score: float | None = None
     climax_run_candidate: bool | None = None
     climax_run_conditions: tuple[str, ...] = ()
+    top_risk_recovery: bool | None = None
+    top_risk_recovery_conditions: tuple[str, ...] = ()
 
     def __post_init__(self):
         if self.final_direction not in FORECAST_DIRECTIONS - {"unavailable"}:
@@ -235,6 +239,18 @@ class ForecastDecision:
             for condition in climax_conditions
         ):
             raise ValueError("climax_run_conditions must contain strings")
+        top_recovery = _optional_boolean(
+            self.top_risk_recovery,
+            "top_risk_recovery",
+        )
+        recovery_conditions = tuple(self.top_risk_recovery_conditions)
+        if any(
+            not isinstance(condition, str) or not condition
+            for condition in recovery_conditions
+        ):
+            raise ValueError(
+                "top_risk_recovery_conditions must contain strings"
+            )
         object.__setattr__(self, "reasons", reasons)
         object.__setattr__(self, "policy_key", policy_key)
         object.__setattr__(self, "policy_version", policy_version)
@@ -295,6 +311,12 @@ class ForecastDecision:
             "climax_run_conditions",
             climax_conditions,
         )
+        object.__setattr__(self, "top_risk_recovery", top_recovery)
+        object.__setattr__(
+            self,
+            "top_risk_recovery_conditions",
+            recovery_conditions,
+        )
 
     def to_dict(self):
         return {
@@ -352,6 +374,10 @@ class ForecastDecision:
             "climax_run_score": json_safe(self.climax_run_score),
             "climax_run_candidate": self.climax_run_candidate,
             "climax_run_conditions": list(self.climax_run_conditions),
+            "top_risk_recovery": self.top_risk_recovery,
+            "top_risk_recovery_conditions": list(
+                self.top_risk_recovery_conditions
+            ),
         }
 
 
@@ -595,6 +621,14 @@ class ForecastDecisionPolicy:
             climax_run_conditions=(
                 () if persistent is None else persistent["climax_conditions"]
             ),
+            top_risk_recovery=(
+                None if persistent is None else persistent["top_recovery"]
+            ),
+            top_risk_recovery_conditions=(
+                ()
+                if persistent is None
+                else persistent["top_recovery_conditions"]
+            ),
         )
         return forecast.with_decision(decision)
 
@@ -700,7 +734,7 @@ def build_forecast_risk_context(
 def _attach_additional_risk_sources(selected, histories, group):
     group_state = build_group_regime_state(histories, group)
     slow_state = build_slow_decline_state(histories, group)
-    top_state = _build_high_level_states(histories, group)
+    top_state = _build_high_level_states(histories, group, group_state)
     dates = selected.index.get_level_values("observation_date")
     selected["group_risk_raw_score"] = group_state["raw_score"].reindex(
         dates
@@ -758,8 +792,16 @@ def _attach_additional_risk_sources(selected, histories, group):
         "climax_run_score",
         "climax_run_candidate",
         "climax_run_conditions",
+        "risk_recovery",
+        "risk_recovery_conditions",
     ):
         selected[field] = aligned_top[field]
+    selected = selected.rename(
+        columns={
+            "risk_recovery": "top_risk_recovery",
+            "risk_recovery_conditions": "top_risk_recovery_conditions",
+        }
+    )
     selected["persistent_risk_raw_score"] = selected[
         [
             "individual_risk_raw_score",
@@ -814,7 +856,7 @@ def _attach_additional_risk_sources(selected, histories, group):
     return selected
 
 
-def _build_high_level_states(histories, group):
+def _build_high_level_states(histories, group, group_state):
     benchmark_close = _group_benchmark_close(histories, group)
     qqq_history = histories.get("QQQ")
     frames = {}
@@ -828,6 +870,7 @@ def _build_high_level_states(histories, group):
             history,
             sector_close=benchmark_close,
             qqq_history=qqq_history,
+            group_supply=group_state,
         )
         state = state.copy()
         state["high_level_distribution_conditions"] = [
@@ -954,6 +997,12 @@ def _risk_context(row):
             row.get("climax_run_candidate"),
         )
         climax_conditions = tuple(row.get("climax_run_conditions") or ())
+        top_recovery = _optional_context_boolean(
+            row.get("top_risk_recovery"),
+        )
+        top_recovery_conditions = tuple(
+            row.get("top_risk_recovery_conditions") or ()
+        )
         if any(
             pd.isna(value)
             for value in (score_value, raw_score_value, state, age)
@@ -1032,6 +1081,8 @@ def _risk_context(row):
         "climax_score": climax_score,
         "climax_candidate": climax_candidate,
         "climax_conditions": climax_conditions,
+        "top_recovery": top_recovery,
+        "top_recovery_conditions": top_recovery_conditions,
     }
 
 

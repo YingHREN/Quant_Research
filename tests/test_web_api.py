@@ -1664,6 +1664,8 @@ class ForecastServiceTest(unittest.TestCase):
                 "climax_run_score": None,
                 "climax_run_candidate": None,
                 "climax_run_conditions": [],
+                "top_risk_recovery": None,
+                "top_risk_recovery_conditions": [],
             },
         )
 

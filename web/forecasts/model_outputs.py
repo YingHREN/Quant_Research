@@ -202,6 +202,10 @@ def _high_level_distribution_risk(decision):
                         or ()
                     ),
                     *(decision.get("climax_run_conditions") or ()),
+                    *(
+                        decision.get("top_risk_recovery_conditions")
+                        or ()
+                    ),
                 )
             )
         ),
@@ -212,6 +216,7 @@ def _high_level_distribution_risk(decision):
         "churning_cluster": decision.get("churning_cluster"),
         "climax_run_score": json_safe(decision.get("climax_run_score")),
         "climax_run_candidate": decision.get("climax_run_candidate"),
+        "risk_recovery": decision.get("top_risk_recovery"),
         "climax_run_conditions": list(
             decision.get("climax_run_conditions") or ()
         ),
