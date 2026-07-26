@@ -57,6 +57,32 @@ class WebAssetTest(unittest.TestCase):
         )
         return json.loads(result.stdout)
 
+    def run_api_runtime(self):
+        result = subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/api_runtime.mjs"),
+                (STATIC / "js/api.js").as_uri(),
+            ],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return json.loads(result.stdout)
+
+    def test_api_retries_only_transient_failures(self):
+        actual = self.run_api_runtime()
+        self.assertEqual(
+            actual,
+            {
+                "networkAttempts": 3,
+                "serverAttempts": 2,
+                "clientAttempts": 1,
+                "invalidAttempts": 3,
+            },
+        )
+
     def test_marker_layer_preferences(self):
         self.assertTrue(
             (STATIC / "js/marker_layers.js").exists(),

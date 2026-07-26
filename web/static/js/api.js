@@ -7,7 +7,22 @@ export class ApiError extends Error {
   }
 }
 
-async function requestJson(path, options = {}) {
+const DEFAULT_RETRY_DELAYS = Object.freeze([400, 1200]);
+
+function defaultSleep(delayMs) {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+}
+
+function isRetryable(error) {
+  return error instanceof ApiError
+    && (
+      error.status === 0
+      || error.status >= 500
+      || error.code === "invalid_response"
+    );
+}
+
+async function requestJsonOnce(path, options = {}) {
   let response;
   try {
     response = await fetch(path, {
@@ -34,6 +49,22 @@ async function requestJson(path, options = {}) {
     );
   }
   return payload;
+}
+
+export async function requestJson(path, options = {}, retryOptions = {}) {
+  const retryDelays = retryOptions.retryDelays ?? DEFAULT_RETRY_DELAYS;
+  const sleep = retryOptions.sleep ?? defaultSleep;
+  let retryIndex = 0;
+
+  while (true) {
+    try {
+      return await requestJsonOnce(path, options);
+    } catch (error) {
+      if (!isRetryable(error) || retryIndex >= retryDelays.length) throw error;
+      await sleep(retryDelays[retryIndex]);
+      retryIndex += 1;
+    }
+  }
 }
 
 export function getUniverse() {
