@@ -225,6 +225,18 @@ def summarize_pilot(sample, audits, catalog):
         ]
         usable_rate = len(usable) / float(len(exchange_sample))
         estimated_tickers = int(round(candidates * usable_rate))
+        usable_common_like = [
+            row
+            for row in usable
+            if not bool(row.get("suspicious_security_label"))
+        ]
+        estimated_common_like = int(
+            round(
+                candidates
+                * len(usable_common_like)
+                / float(len(exchange_sample))
+            )
+        )
         byte_values = [int(row["raw_bytes"]) for row in usable]
         row_values = [int(row["valid_rows"]) for row in usable]
         mean_bytes = _mean(byte_values)
@@ -237,6 +249,7 @@ def summarize_pilot(sample, audits, catalog):
                 "eligible_catalog": candidates,
                 "sample_count": len(exchange_sample),
                 "usable_histories": len(usable),
+                "usable_common_like_histories": len(usable_common_like),
                 "success_rate": usable_rate,
                 "traded_since_2018_rate": sum(
                     bool(row.get("traded_since_2018"))
@@ -260,6 +273,7 @@ def summarize_pilot(sample, audits, catalog):
                 "mean_raw_bytes": mean_bytes,
                 "p90_raw_bytes": p90_bytes,
                 "estimated_successful_tickers": estimated_tickers,
+                "estimated_common_like_tickers": estimated_common_like,
                 "estimated_valid_rows_mean": int(
                     round(estimated_tickers * mean_rows)
                 ),
@@ -279,6 +293,9 @@ def summarize_pilot(sample, audits, catalog):
         "by_exchange": rows,
         "estimated_successful_tickers": sum(
             row["estimated_successful_tickers"] for row in rows
+        ),
+        "estimated_common_like_tickers": sum(
+            row["estimated_common_like_tickers"] for row in rows
         ),
         "estimated_valid_rows_mean": sum(
             row["estimated_valid_rows_mean"] for row in rows

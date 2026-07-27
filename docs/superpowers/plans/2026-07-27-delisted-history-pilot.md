@@ -27,11 +27,11 @@
 **Interfaces:**
 - Produces: `select_stratified_sample(catalog, quotas) -> tuple[dict, ...]`
 
-- [ ] 写失败测试，验证交易所/币种/类型/代码过滤和 100/100/50 配额。
-- [ ] 写失败测试，验证输入顺序变化不改变样本，配额不足明确失败。
-- [ ] 运行目标测试并确认接口缺失。
-- [ ] 实现固定 SHA-256 排序与样本行标准化。
-- [ ] 重跑测试并提交 `research: freeze delisted history sample`。
+- [x] 写失败测试，验证交易所/币种/类型/代码过滤和 100/100/50 配额。
+- [x] 写失败测试，验证输入顺序变化不改变样本，配额不足明确失败。
+- [x] 运行目标测试并确认接口缺失。
+- [x] 实现固定 SHA-256 排序与样本行标准化。
+- [x] 重跑测试并提交 `research: freeze delisted history sample`。
 
 ### Task 2: 日线质量审计与规模估计
 
@@ -43,11 +43,11 @@
 - Produces: `audit_history_rows(sample_row, payload, raw_bytes) -> dict`
 - Produces: `summarize_pilot(sample, audits, catalog) -> dict`
 
-- [ ] 写失败测试，覆盖合法行、重复日期、非法 OHLC、空响应和 2018 后相关性。
-- [ ] 写失败测试，以手算小样本验证成功率、平均/P90 字节和交易所外推。
-- [ ] 运行目标测试并确认接口缺失。
-- [ ] 实现逐行质量审计与固定统计口径。
-- [ ] 重跑测试并提交 `research: audit delisted history coverage`。
+- [x] 写失败测试，覆盖合法行、重复日期、非法 OHLC、空响应和 2018 后相关性。
+- [x] 写失败测试，以手算小样本验证成功率、平均/P90 字节和交易所外推。
+- [x] 运行目标测试并确认接口缺失。
+- [x] 实现逐行质量审计与固定统计口径。
+- [x] 重跑测试并提交 `research: audit delisted history coverage`。
 
 ### Task 3: 可续跑采集器与报告
 
@@ -59,10 +59,10 @@
 - 原始目录包含 `catalog.json`、`sample.json`、`histories/*.json`、
   `errors.json` 和 `manifest.json`。
 
-- [ ] 写失败测试，离线 fixture 运行后生成 CSV/JSON/Markdown 且不含 token。
-- [ ] 写失败测试，已有合法历史文件被复用，错误代码不触发替换抽样。
-- [ ] 实现原子缓存、有限重试、并发采集和报告渲染。
-- [ ] 重跑相关测试并提交 `research: add delisted history pilot runner`。
+- [x] 写失败测试，离线 fixture 运行后生成 CSV/JSON/Markdown 且不含 token。
+- [x] 写失败测试，已有合法历史文件被复用，错误代码不触发替换抽样。
+- [x] 实现原子缓存、有限重试、并发采集和报告渲染。
+- [x] 重跑相关测试并提交 `research: add delisted history pilot runner`。
 
 ### Task 4: 真实试验与合入
 
@@ -72,8 +72,8 @@
 - Create: `reports/delisted-history-pilot.md`
 - Modify: `docs/modeling-todo.md`
 
-- [ ] 使用真实 32,371 条目录运行固定 250 只试验。
-- [ ] 检查样本未替换、报告无 token、原始缓存未进入 Git。
-- [ ] 更新中文 TODO，记录真实成功率和全量规模估计。
+- [x] 使用真实 32,371 条目录运行固定 250 只试验。
+- [x] 检查样本未替换、报告无 token、原始缓存未进入 Git。
+- [x] 更新中文 TODO，记录真实成功率和全量规模估计。
 - [ ] 运行全量测试与 `git diff --check`。
 - [ ] 合入 main，合并后再次运行全量测试。

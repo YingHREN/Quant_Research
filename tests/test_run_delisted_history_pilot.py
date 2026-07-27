@@ -86,6 +86,11 @@ class RunDelistedHistoryPilotTest(unittest.TestCase):
             "退市普通股历史日线分层试验",
             self._paths()["report_markdown"].read_text(),
         )
+        markdown = self._paths()["report_markdown"].read_text()
+        self.assertIn("可用历史：3/3（100.0%）", markdown)
+        self.assertIn("质量警告响应：0；非法行情行：0；重复日期：0", markdown)
+        self.assertIn("疑似非普通股标签：0", markdown)
+        self.assertIn("预计有效日线：5 行", markdown)
         persisted = "".join(
             path.read_text()
             for path in (

@@ -240,6 +240,45 @@ class DelistedHistoryPilotTest(unittest.TestCase):
         self.assertEqual(result["estimated_successful_tickers"], 4)
         self.assertEqual(result["estimated_raw_bytes_mean"], 600)
 
+    def test_summary_keeps_suspicious_security_estimate_separate(self):
+        catalog = [
+            catalog_row("AAA", "NYSE"),
+            catalog_row("BBB-WS", "NYSE"),
+        ]
+        sample = (
+            {"ticker": "AAA", "exchange": "NYSE"},
+            {"ticker": "BBB-WS", "exchange": "NYSE"},
+        )
+        audits = (
+            {
+                "ticker": "AAA",
+                "exchange": "NYSE",
+                "request_status": "success",
+                "valid_rows": 10,
+                "raw_bytes": 100,
+                "traded_since_2018": True,
+                "suspicious_security_label": False,
+            },
+            {
+                "ticker": "BBB-WS",
+                "exchange": "NYSE",
+                "request_status": "success",
+                "valid_rows": 20,
+                "raw_bytes": 200,
+                "traded_since_2018": True,
+                "suspicious_security_label": True,
+            },
+        )
+
+        result = summarize_pilot(sample, audits, catalog)
+        exchange = result["by_exchange"][0]
+
+        self.assertEqual(exchange["usable_histories"], 2)
+        self.assertEqual(exchange["usable_common_like_histories"], 1)
+        self.assertEqual(exchange["estimated_successful_tickers"], 2)
+        self.assertEqual(exchange["estimated_common_like_tickers"], 1)
+        self.assertEqual(result["estimated_common_like_tickers"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

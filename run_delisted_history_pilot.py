@@ -258,32 +258,64 @@ def _write_reports(result, csv_path, json_path, markdown_path):
 
 def _markdown_report(result):
     summary = result["summary"]
+    audits = list(result["audits"])
+    usable = sum(
+        row.get("request_status") == "success"
+        and int(row.get("valid_rows") or 0) > 0
+        for row in audits
+    )
+    quality_warnings = sum(
+        row.get("quality_status") == "warning" for row in audits
+    )
+    invalid_rows = sum(int(row.get("invalid_rows") or 0) for row in audits)
+    duplicate_dates = sum(
+        int(row.get("duplicate_dates") or 0) for row in audits
+    )
+    suspicious_labels = sum(
+        bool(row.get("suspicious_security_label")) for row in audits
+    )
     rows = [
         "# 退市普通股历史日线分层试验",
         "",
         f"- 固定样本：{summary['sample_count']} 只",
         f"- 查询窗口：{result['start_date']} 至 {result['finish_date']}",
+        f"- 可用历史：{usable}/{summary['sample_count']}"
+        f"（{usable / float(summary['sample_count']):.1%}）",
+        f"- 质量警告响应：{quality_warnings}；非法行情行："
+        f"{invalid_rows:,}；重复日期：{duplicate_dates:,}",
+        f"- 疑似非普通股标签：{suspicious_labels}；供应商目录即使标记为"
+        " Common Stock，正式回填前仍需二次净化。",
         "- 结论边界：交易首末日期不是指数成员区间，不写生产数据库。",
         "",
-        "| 交易所 | 目录候选 | 样本 | 可用率 | 2018后交易率 | "
-        "预计可回填 | 平均体积估计 | P90体积上界 |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| 交易所 | 目录候选 | 样本 | 可用/空 | 疑似误分类 | "
+        "2018后交易率 | 预计可回填上界 | 普通股样式估计 | "
+        "平均体积估计 | P90体积上界 |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | "
+        "---: | ---: |",
     ]
     for item in summary["by_exchange"]:
         rows.append(
             "| "
             f"{item['exchange']} | {item['eligible_catalog']} | "
-            f"{item['sample_count']} | {item['success_rate']:.1%} | "
+            f"{item['sample_count']} | {item['usable_histories']}/"
+            f"{item['empty_responses']}（{item['success_rate']:.1%}） | "
+            f"{item['suspicious_labels']} | "
             f"{item['traded_since_2018_rate']:.1%} | "
             f"{item['estimated_successful_tickers']} | "
+            f"{item['estimated_common_like_tickers']} | "
             f"{_human_bytes(item['estimated_raw_bytes_mean'])} | "
             f"{_human_bytes(item['estimated_raw_bytes_p90'])} |"
         )
     rows.extend(
         (
             "",
-            f"- 主交易所预计可回填："
-            f"{summary['estimated_successful_tickers']:,} 只",
+            f"- 主交易所预计可回填上界："
+            f"{summary['estimated_successful_tickers']:,} 只；排除明显权证/单位"
+            f"标签后的普通股样式估计为 "
+            f"{summary['estimated_common_like_tickers']:,} 只。",
+            f"- 预计有效日线："
+            f"{summary['estimated_valid_rows_mean']:,} 行"
+            f"（P90 上界 {summary['estimated_valid_rows_p90']:,} 行）",
             f"- 未压缩 JSON 平均估计："
             f"{_human_bytes(summary['estimated_raw_bytes_mean'])}",
             f"- 未压缩 JSON P90 上界："
