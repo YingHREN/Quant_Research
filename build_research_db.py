@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+from data.group_assignments import audit_assignments, resolve_group_assignment
 from data.market_behavior import classify_market_behavior, write_market_behavior
 from data.research_store import (
     ResearchPriceStore,
@@ -34,6 +35,27 @@ def _price_history(connection, ticker, asof):
     ).fetchall()
 
 
+def _validate_reference_assets():
+    missing = sorted(set(SECTOR_ETFS.values()) - set(REFERENCE_TICKERS))
+    if missing:
+        raise ValueError(
+            "missing standard reference ETF mappings: " + ", ".join(missing)
+        )
+
+
+def _audit_failure(audit):
+    findings = {
+        key: audit.get(key, [])
+        for key in (
+            "invalid_benchmarks",
+            "duplicate_themes",
+            "conflicting_assignments",
+        )
+        if audit.get(key)
+    }
+    return findings or None
+
+
 def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     catalog_path = Path(catalog_path)
     raw_root = Path(raw_root)
@@ -41,6 +63,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     imported_at = imported_at or datetime.now(timezone.utc).isoformat()
     catalog = json.loads(catalog_path.read_text())
     snapshot_date = raw_root.name
+    _validate_reference_assets()
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     if temporary.exists():
         temporary.unlink()
@@ -87,6 +110,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     imported_at=imported_at,
                     security_type="ETF",
                     include_membership=False,
+                    include_group_assignment=False,
                 )
                 summaries.append(summary)
             except Exception as exc:
@@ -108,6 +132,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
             for ticker in ("SPY", *SECTOR_ETFS.values())
         }
         behavior_count = 0
+        assignments = []
         with connection:
             for security in catalog["securities"]:
                 ticker = security["ticker"]
@@ -119,12 +144,42 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     histories,
                     ticker,
                     SECTOR_ETFS,
-                    sec_sector=security["classification"]["sector_key"],
+                    sec_sector=(security.get("classification") or {}).get(
+                        "sector_key"
+                    ),
                     asof=catalog["asof"],
                 )
+                market_behavior = None
                 if result is not None:
                     write_market_behavior(connection, ticker, result)
                     behavior_count += 1
+                    market_behavior = {
+                        "sector_key": result.sector_key,
+                        "benchmark_ticker": result.benchmark_ticker,
+                        "confidence": result.confidence,
+                        "rule_version": result.rule_version,
+                    }
+                assignment = resolve_group_assignment(
+                    ticker,
+                    {
+                        "sec": security.get("classification") or {},
+                        "market_behavior": market_behavior,
+                    },
+                    catalog["asof"],
+                )
+                store.persist_group_assignment(
+                    assignment,
+                    effective_from=catalog["asof"],
+                    observed_at=catalog["asof"],
+                )
+                assignments.append(assignment)
+            assignment_audit = audit_assignments(assignments)
+            audit_failure = _audit_failure(assignment_audit)
+            if audit_failure:
+                raise ValueError(
+                    "group assignment audit failed: "
+                    + json.dumps(audit_failure, ensure_ascii=False, sort_keys=True)
+                )
             connection.execute(
                 """
                 INSERT INTO import_runs
@@ -161,6 +216,11 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 "SELECT COUNT(*) FROM dividends"
             ).fetchone()[0],
             "market_behavior": behavior_count,
+            "group_assignment_count": assignment_audit["total"],
+            "group_assignment_review_count": assignment_audit[
+                "needs_review_count"
+            ],
+            "group_assignment_coverage": assignment_audit["coverage"],
             "integrity": integrity,
         }
         connection.close()

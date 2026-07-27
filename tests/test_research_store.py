@@ -20,6 +20,61 @@ def daily(date, open_, high, low, close, adjusted_close, volume=1000):
 
 
 class ResearchStoreTest(unittest.TestCase):
+    def test_import_security_persists_canonical_group_assignment(self):
+        connection = sqlite3.connect(":memory:")
+        store = ResearchPriceStore(connection)
+        store.initialize()
+
+        store.import_security(
+            {
+                "ticker": "SNDK",
+                "name": "SanDisk",
+                "exchange": "NASDAQ",
+                "asof": "2026-07-24",
+                "classification": {
+                    "sector_key": "technology",
+                    "theme_keys": ["semiconductor"],
+                    "confidence": 1.0,
+                    "source": "sec",
+                    "rule_version": "sec_sic_v1",
+                },
+            },
+            [daily("2026-01-02", 10, 11, 9, 10, 10)],
+            [],
+            [],
+            snapshot_date="2026-07-24",
+            imported_at="2026-07-25T00:00:00Z",
+        )
+
+        row = connection.execute(
+            """
+            SELECT sector_key, sector_benchmark, theme_keys_json,
+                   theme_benchmarks_json, primary_model_group, effective_from,
+                   effective_to, observed_at, source, confidence,
+                   override_reason, classification_state
+            FROM group_assignments
+            WHERE ticker = 'SNDK'
+            """
+        ).fetchone()
+
+        self.assertEqual(
+            row,
+            (
+                "technology",
+                "XLK",
+                '["semiconductor"]',
+                '{"semiconductor":["SOXX","SMH"]}',
+                "semiconductor",
+                "2026-07-24",
+                None,
+                "2026-07-24",
+                "override",
+                1.0,
+                "flash memory and storage semiconductor exposure",
+                "classified",
+            ),
+        )
+
     def test_initialize_migrates_old_memberships_without_losing_rows(self):
         connection = sqlite3.connect(":memory:")
         connection.executescript(
