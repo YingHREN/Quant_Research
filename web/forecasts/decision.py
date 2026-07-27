@@ -732,7 +732,11 @@ def build_forecast_risk_context(
             if dynamic_membership and group.related_tickers
             else group
         )
-        scores = build_group_score_frame(histories, ticker_group)
+        ticker_histories = _group_scoped_histories(
+            histories,
+            ticker_group,
+        )
+        scores = build_group_score_frame(ticker_histories, ticker_group)
         if scores.empty:
             continue
         present = scores.index.get_level_values("ticker").isin(mapped)
@@ -755,6 +759,7 @@ def build_forecast_risk_context(
         selected = _attach_additional_risk_sources(
             selected,
             histories,
+            ticker_histories,
             ticker_group,
             groups_by_key,
             group_states,
@@ -790,6 +795,25 @@ def _normalized_assignments(assignments):
     return normalized
 
 
+def _group_scoped_histories(histories, group):
+    tickers = tuple(
+        dict.fromkeys(
+            (
+                *group.constituent_tickers,
+                *group.related_tickers,
+                *group.benchmark_tickers,
+                *group.fallback_benchmark_tickers,
+                "QQQ",
+            )
+        )
+    )
+    return {
+        ticker: histories[ticker]
+        for ticker in tickers
+        if ticker in histories
+    }
+
+
 def _evidence_groups(groups_by_key, assignment_by_ticker, histories):
     available = {
         str(ticker).strip().upper()
@@ -817,6 +841,7 @@ def _evidence_groups(groups_by_key, assignment_by_ticker, histories):
 def _attach_additional_risk_sources(
     selected,
     histories,
+    ticker_histories,
     group,
     groups_by_key,
     group_states,
@@ -830,8 +855,12 @@ def _attach_additional_risk_sources(
         groups_by_key,
         group_states,
     )
-    slow_state = build_slow_decline_state(histories, group)
-    top_state = _build_high_level_states(histories, group, group_state)
+    slow_state = build_slow_decline_state(ticker_histories, group)
+    top_state = _build_high_level_states(
+        ticker_histories,
+        group,
+        group_state,
+    )
     ticker_keys = selected.index.get_level_values("ticker")
     if dynamic_membership:
         sector_keys = tuple(
@@ -1026,9 +1055,10 @@ def _cached_group_state(histories, key, groups_by_key, group_states):
         return None
     if key not in group_states:
         group = groups_by_key[key]
+        scoped_histories = _group_scoped_histories(histories, group)
         group_states[key] = _benchmark_dependent_group_state(
-            build_group_regime_state(histories, group),
-            histories,
+            build_group_regime_state(scoped_histories, group),
+            scoped_histories,
             group,
         )
     return group_states[key]

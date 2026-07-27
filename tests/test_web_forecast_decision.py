@@ -501,6 +501,114 @@ class ForecastRiskContextTest(unittest.TestCase):
             {"NBIS"},
         )
 
+    def test_dynamic_context_scopes_histories_for_each_active_group(self):
+        assignments = {
+            "SNDK": {
+                "state": "assigned",
+                "ticker": "SNDK",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "ADBE": {
+                "state": "assigned",
+                "ticker": "ADBE",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["software"],
+                "theme_benchmarks": {
+                    "software": ["IGV", "XSW"],
+                },
+                "primary_model_group": "software",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "IGV": rising(slope=0.15),
+            "XSW": rising(slope=0.12),
+            "SNDK": rising(slope=0.4),
+            "ADBE": rising(slope=0.1),
+            "NBIS": rising(slope=0.25),
+            "UNRELATED": rising(slope=0.05),
+        }
+        observed = {"score": [], "regime": [], "slow": []}
+
+        def probe(builder, bucket):
+            def wrapped(scoped_histories, group):
+                observed[bucket].append(
+                    (group.key, frozenset(scoped_histories))
+                )
+                return builder(scoped_histories, group)
+
+            return wrapped
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            side_effect=probe(
+                forecast_decision_module.build_group_score_frame,
+                "score",
+            ),
+        ), mock.patch.object(
+            forecast_decision_module,
+            "build_group_regime_state",
+            side_effect=probe(
+                forecast_decision_module.build_group_regime_state,
+                "regime",
+            ),
+        ), mock.patch.object(
+            forecast_decision_module,
+            "build_slow_decline_state",
+            side_effect=probe(
+                forecast_decision_module.build_slow_decline_state,
+                "slow",
+            ),
+        ):
+            context = build_forecast_risk_context(histories, assignments)
+
+        score_scopes = dict(observed["score"])
+        slow_scopes = dict(observed["slow"])
+        regime_scopes = dict(observed["regime"])
+        expected_primary_scopes = {
+            "semiconductor": frozenset(
+                ("SNDK", "SOXX", "SMH", "QQQ")
+            ),
+            "software": frozenset(
+                ("ADBE", "IGV", "XSW", "XLK", "QQQ")
+            ),
+        }
+        self.assertEqual(score_scopes, expected_primary_scopes)
+        self.assertEqual(slow_scopes, expected_primary_scopes)
+        self.assertEqual(
+            regime_scopes["semiconductor"],
+            frozenset(("SNDK", "NBIS", "SOXX", "SMH", "QQQ")),
+        )
+        self.assertEqual(
+            regime_scopes["technology"],
+            frozenset(("SNDK", "ADBE", "XLK", "QQQ")),
+        )
+        self.assertNotIn(
+            "UNRELATED",
+            set().union(*(set(scope) for scope in regime_scopes.values())),
+        )
+        self.assertTrue(
+            context.xs("SNDK", level="ticker")[
+                "individual_risk_score"
+            ].notna().any()
+        )
+        self.assertTrue(
+            context.xs("ADBE", level="ticker")[
+                "individual_risk_score"
+            ].notna().any()
+        )
+
 
 class ForecastDecisionPolicyTest(unittest.TestCase):
     def setUp(self):
