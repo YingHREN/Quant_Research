@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
+from web.forecasts import decision as forecast_decision_module
 from web.forecasts.base import ForecastResult
 from web.forecasts.decision import (
     ForecastDecision,
@@ -425,6 +426,79 @@ class ForecastRiskContextTest(unittest.TestCase):
         self.assertEqual(
             set(context.xs("NBIS", level="ticker")["sector_group_key"]),
             {"technology"},
+        )
+
+    def test_missing_sector_and_theme_benchmarks_leave_group_risk_unavailable(self):
+        assignments = {
+            ticker: {
+                "state": "assigned",
+                "ticker": ticker,
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            }
+            for ticker in ("SNDK", "AMD", "NVDA")
+        }
+        histories = {
+            "QQQ": rising(),
+            "SNDK": rising(slope=0.4),
+            "AMD": rising(slope=0.35),
+            "NVDA": rising(slope=0.45),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertTrue(sndk["sector_risk_score"].isna().all())
+        self.assertTrue(sndk["theme_risk_score"].isna().all())
+        self.assertTrue(sndk["group_risk_score"].isna().all())
+        self.assertTrue(sndk["high_level_distribution_state"].notna().all())
+        self.assertTrue(
+            sndk["persistent_risk_sources"].map(
+                lambda sources: "group" not in sources
+            ).all()
+        )
+
+    def test_dynamic_context_invokes_full_ticker_builders_once_for_nbis(self):
+        assignments = {
+            "NBIS": {
+                "state": "assigned",
+                "ticker": "NBIS",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "NBIS": rising(slope=0.4),
+        }
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            wraps=forecast_decision_module.build_group_score_frame,
+        ) as group_score_builder, mock.patch.object(
+            forecast_decision_module,
+            "build_high_level_distribution_state",
+            wraps=forecast_decision_module.build_high_level_distribution_state,
+        ) as high_level_builder:
+            context = build_forecast_risk_context(histories, assignments)
+
+        self.assertEqual(group_score_builder.call_count, 1)
+        self.assertEqual(high_level_builder.call_count, 1)
+        self.assertEqual(
+            set(context.index.get_level_values("ticker")),
+            {"NBIS"},
         )
 
 

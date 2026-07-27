@@ -718,6 +718,8 @@ def build_forecast_risk_context(
                 )
             )
         )
+        if not mapped:
+            continue
         duplicates = seen_tickers.intersection(mapped)
         if duplicates:
             raise ValueError(
@@ -725,7 +727,12 @@ def build_forecast_risk_context(
                 + ", ".join(sorted(duplicates))
             )
         seen_tickers.update(mapped)
-        scores = build_group_score_frame(histories, group)
+        ticker_group = (
+            replace(group, related_tickers=())
+            if dynamic_membership and group.related_tickers
+            else group
+        )
+        scores = build_group_score_frame(histories, ticker_group)
         if scores.empty:
             continue
         present = scores.index.get_level_values("ticker").isin(mapped)
@@ -748,7 +755,7 @@ def build_forecast_risk_context(
         selected = _attach_additional_risk_sources(
             selected,
             histories,
-            group,
+            ticker_group,
             groups_by_key,
             group_states,
             assignment_by_ticker,
@@ -1018,11 +1025,43 @@ def _cached_group_state(histories, key, groups_by_key, group_states):
     if key not in groups_by_key:
         return None
     if key not in group_states:
-        group_states[key] = build_group_regime_state(
+        group = groups_by_key[key]
+        group_states[key] = _benchmark_dependent_group_state(
+            build_group_regime_state(histories, group),
             histories,
-            groups_by_key[key],
+            group,
         )
     return group_states[key]
+
+
+def _benchmark_dependent_group_state(state, histories, group):
+    if state.empty:
+        return state
+    available = pd.Series(True, index=state.index, dtype=bool)
+    for ticker in group.benchmark_tickers:
+        history = histories.get(ticker)
+        if (
+            not isinstance(history, pd.DataFrame)
+            or history.empty
+            or "Close" not in history
+            or not isinstance(history.index, pd.DatetimeIndex)
+        ):
+            available[:] = False
+            break
+        close = pd.to_numeric(history["Close"], errors="coerce").copy()
+        close.index = close.index.tz_localize(None)
+        if close.index.has_duplicates:
+            available[:] = False
+            break
+        aligned = close.reindex(state.index)
+        available &= aligned.notna() & np.isfinite(aligned)
+    if not group.benchmark_tickers:
+        available[:] = False
+    checked = state.copy()
+    numeric = checked.select_dtypes(include=[np.number]).columns
+    checked.loc[:, numeric] = checked.loc[:, numeric].where(available)
+    checked["state"] = checked["state"].where(available, "unavailable")
+    return checked
 
 
 def _aligned_group_state(
