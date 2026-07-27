@@ -94,20 +94,21 @@ class ResearchUniverseRepository:
                     return _unavailable_snapshot(
                         None, revision, "no_price_observations"
                     )
-                rows = connection.execute(
+                price_frame = pd.read_sql_query(
                     _SNAPSHOT_SQL,
-                    (
+                    connection,
+                    params=(
                         observation_date,
                         observation_date,
                         observation_date,
                         session_count,
                     ),
-                ).fetchall()
+                )
                 metadata = connection.execute(
                     _MEMBER_METADATA_SQL,
                     (observation_date, observation_date),
                 ).fetchall()
-            histories = _histories_from_rows(rows)
+            histories = _histories_from_frame(price_frame)
             members = _members_from_metadata(metadata, histories, observation_date)
             return ResearchUniverseSnapshot(
                 status="available",
@@ -146,13 +147,18 @@ class ResearchUniverseRepository:
                     )
                 requested = (selected, *benchmarks)
                 placeholders = ",".join("?" for _ in requested)
-                rows = connection.execute(
+                price_frame = pd.read_sql_query(
                     _DETAIL_SQL.format(placeholders=placeholders),
-                    (*requested, observation_date, DEFAULT_DETAIL_SESSIONS),
-                ).fetchall()
+                    connection,
+                    params=(
+                        *requested,
+                        observation_date,
+                        DEFAULT_DETAIL_SESSIONS,
+                    ),
+                )
         except sqlite3.Error as error:
             raise ResearchUniverseDataError("research_database_unavailable") from error
-        histories = _histories_from_rows(rows)
+        histories = _histories_from_frame(price_frame)
         if selected not in histories:
             raise UnknownResearchTicker(f"No research history found: {selected}")
         latest = histories[selected].index.max().date().isoformat()
@@ -202,42 +208,41 @@ def _is_member(connection, ticker, asof):
     )
 
 
-def _histories_from_rows(rows):
-    by_ticker = {}
-    seen = set()
-    for row in rows:
-        ticker = str(row["Ticker"])
-        date = str(row["Date"])
-        key = (ticker, date)
-        if key in seen:
-            raise ResearchUniverseDataError("duplicate_price_date")
-        seen.add(key)
-        values = (
-            row["Open"],
-            row["High"],
-            row["Low"],
-            row["Close"],
-            row["Volume"],
-        )
-        try:
-            numeric = tuple(float(value) for value in values)
-        except (TypeError, ValueError) as error:
-            raise ResearchUniverseDataError("malformed_numeric_price") from error
-        if not np.isfinite(numeric).all():
-            raise ResearchUniverseDataError("malformed_numeric_price")
-        if min(numeric[:4]) <= 0 or numeric[4] < 0:
-            raise ResearchUniverseDataError("invalid_price_value")
-        by_ticker.setdefault(ticker, []).append((date, *numeric))
+def _histories_from_frame(frame):
+    required = {"Ticker", "Date", "Open", "High", "Low", "Close", "Volume"}
+    if not isinstance(frame, pd.DataFrame) or not required.issubset(frame.columns):
+        raise ResearchUniverseDataError("invalid_price_schema")
+    if frame.duplicated(("Ticker", "Date")).any():
+        raise ResearchUniverseDataError("duplicate_price_date")
+    normalized = frame.loc[
+        :, ("Ticker", "Date", "Open", "High", "Low", "Close", "Volume")
+    ].copy()
+    try:
+        normalized["Date"] = pd.to_datetime(normalized["Date"], errors="raise")
+    except (TypeError, ValueError) as error:
+        raise ResearchUniverseDataError("invalid_price_dates") from error
+    try:
+        for column in ("Open", "High", "Low", "Close", "Volume"):
+            normalized[column] = pd.to_numeric(
+                normalized[column],
+                errors="raise",
+            )
+    except (TypeError, ValueError) as error:
+        raise ResearchUniverseDataError("malformed_numeric_price") from error
+    numeric = normalized[["Open", "High", "Low", "Close", "Volume"]]
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
+        raise ResearchUniverseDataError("malformed_numeric_price")
+    if (numeric[["Open", "High", "Low", "Close"]] <= 0).any().any():
+        raise ResearchUniverseDataError("invalid_price_value")
+    if (numeric["Volume"] < 0).any():
+        raise ResearchUniverseDataError("invalid_price_value")
     histories = {}
-    for ticker, values in by_ticker.items():
-        frame = pd.DataFrame(
-            values, columns=("Date", "Open", "High", "Low", "Close", "Volume")
-        )
-        frame.index = pd.to_datetime(frame.pop("Date"), errors="raise")
-        frame.index.name = "Date"
-        if not frame.index.is_monotonic_increasing or frame.index.has_duplicates:
+    for ticker, ticker_frame in normalized.groupby("Ticker", sort=False):
+        history = ticker_frame.drop(columns="Ticker").set_index("Date")
+        history.index.name = "Date"
+        if not history.index.is_monotonic_increasing:
             raise ResearchUniverseDataError("invalid_price_dates")
-        histories[ticker] = frame
+        histories[str(ticker)] = history
     return histories
 
 
@@ -288,26 +293,25 @@ WITH eligible AS (
     FROM universe_memberships
     WHERE effective_from <= ?
       AND (effective_to IS NULL OR ? < effective_to)
-), ranked AS (
-    SELECT prices.ticker AS Ticker,
-           prices.date AS Date,
-           prices.adjusted_open AS Open,
-           prices.adjusted_high AS High,
-           prices.adjusted_low AS Low,
-           prices.adjusted_close AS Close,
-           prices.volume AS Volume,
-           ROW_NUMBER() OVER (
-               PARTITION BY prices.ticker
-               ORDER BY prices.date DESC
-           ) AS recent_rank
-    FROM daily_prices AS prices
-    JOIN eligible ON eligible.ticker = prices.ticker
-    WHERE prices.date <= ?
 )
-SELECT Ticker, Date, Open, High, Low, Close, Volume
-FROM ranked
-WHERE recent_rank <= ?
-ORDER BY Ticker, Date
+SELECT prices.ticker AS Ticker,
+       prices.date AS Date,
+       prices.adjusted_open AS Open,
+       prices.adjusted_high AS High,
+       prices.adjusted_low AS Low,
+       prices.adjusted_close AS Close,
+       prices.volume AS Volume
+FROM eligible
+JOIN daily_prices AS prices
+  ON prices.rowid IN (
+      SELECT candidate.rowid
+      FROM daily_prices AS candidate
+      WHERE candidate.ticker = eligible.ticker
+        AND candidate.date <= ?
+      ORDER BY candidate.date DESC
+      LIMIT ?
+  )
+ORDER BY prices.ticker, prices.date
 """
 
 

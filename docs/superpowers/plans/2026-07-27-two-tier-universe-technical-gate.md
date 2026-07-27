@@ -188,19 +188,30 @@ Expected: import failure.
 
 - [ ] **Step 3: Implement one read-only snapshot transaction**
 
-Open SQLite with `mode=ro`, determine the latest available common `asof`, select
-active memberships, and use a window function:
+Open SQLite with `mode=ro`, determine the latest available common `asof`, and
+select active memberships with a bounded, index-backed query.
 
 ```sql
-ROW_NUMBER() OVER (
-  PARTITION BY daily_prices.ticker
-  ORDER BY daily_prices.date DESC
-) AS recent_rank
+prices.rowid IN (
+  SELECT candidate.rowid
+  FROM daily_prices AS candidate
+  WHERE candidate.ticker = eligible.ticker
+    AND candidate.date <= ?
+  ORDER BY candidate.date DESC
+  LIMIT ?
+)
 ```
 
-Return rows with `recent_rank <= 260`, reordered ascending by date. Execute a
+Return at most 260 rows per ticker, reordered ascending by date. Execute a
 constant number of SQL statements: metadata, membership/window prices, and
 optional security metadata. Never loop one query per ticker.
+
+Implementation note (2026-07-27): the initial `ROW_NUMBER()` form scanned the
+2.35-million-row price table and missed the five-second cold-build target. The
+final single-statement correlated rowid query performs one indexed bounded seek
+per eligible ticker inside SQLite while preserving constant application-level
+query count. On the real 1,014-member database it reduced the research snapshot
+from about 6.44 seconds to 1.27 seconds.
 
 - [ ] **Step 4: Add tests for bounded rows and synchronized observation dates**
 

@@ -446,7 +446,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(registered, emitted)
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v3",
+            "model_output_registry_v4",
         )
         self.assertEqual(
             outputs["decision"]["decision_permission"],

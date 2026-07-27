@@ -488,7 +488,10 @@ function renderStockHeader(payload) {
       locale,
     ),
   );
-  const membership = payload.pool_membership || {};
+  const universeRow = store.getState().universe.find(
+    (row) => row.ticker === payload.ticker,
+  );
+  const membership = universeRow?.pool_membership || payload.pool_membership || {};
   const pool = membership.active && membership.research
     ? "both"
     : membership.research ? "research" : "active";
