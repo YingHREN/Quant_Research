@@ -30,10 +30,13 @@ JSON 数组。每行必须保留 `Code`、`Name`、`Exchange`、`Currency`、`Ty
 
 1. `rejected_non_common`
    - 名称明确含 `warrant`，或代码带 `-WS`、`-WT`、`-W`；
-   - 名称明确含独立词 `unit`，或代码带 `-U`、`-UN`；
-   - 名称明确含独立词 `right`，或代码带 `-R`、`-RT`；
-   - 名称含 `preferred`、`depositary share`；
-   - 名称含 `note`、`bond`、`debenture`；
+   - 名称以 `unit/units` 结尾、明确写 `corporate/preferred unit`，或代码带
+     `-U`、`-UN`；
+   - 名称以 `right/rights` 结尾或明确写 `right to`，或代码带 `-R`、`-RT`；
+   - 名称明确写 `preferred stock/share/unit/series`、`participating preferred`
+     或代表优先股的 depositary share；
+   - 名称以利率、到期、senior/subordinated、fund/trust 等上下文明确表示
+     note、bond 或 debenture；
    - 名称含 `ETF`、`exchange traded fund`、`closed-end fund`。
 2. `needs_review`
    - 名称为空、只等于代码、含测试证券标记；
@@ -45,6 +48,8 @@ JSON 数组。每行必须保留 `Code`、`Name`、`Exchange`、`Currency`、`Ty
 SPAC 名称中的 `Acquisition Corp` 本身不是拒绝理由；只有其 unit、warrant 或
 right 证券被拒绝。普通公司名称以字母 `W`、`U` 或 `R` 结尾也不是拒绝理由，
 除非名称或带分隔符的后缀提供明确证据，避免误杀 `MWW` 一类普通股代码。
+`Preferred Apartment Communities`、`Unit Corporation`、`American Bank Note`
+等公司名称和不代表优先股的普通 ADS 也不是证券类型反证。
 
 每行输出稳定原因码、命中的名称/代码证据、规则版本和 `backfill_eligible`。
 只有 `accepted_common` 的该字段为真。
@@ -60,9 +65,10 @@ right 证券被拒绝。普通公司名称以字母 `W`、`U` 或 `R` 结尾也�
 - 未来取得带来源时间的 CIK 时只作为独立身份提示保存；单凭今天的
   ticker→CIK 对照不得连接退市代码，避免代码复用导致错连。
 
-不同目录行若出现同一有效 ISIN 但公司名称或证券类型决策冲突，全部进入
-`needs_review`，原因码为 `identity_conflict`。没有稳定身份键的代码之间不得
-自动合并价格序列。
+不同目录行若出现同一有效 ISIN 但公司名称或证券类型决策冲突，保留各自独立
+类型判断和回填资格，但身份状态改为 `conflicting_isin`、清空稳定身份键并记录
+`identity_conflict`。身份冲突不能把范围外证券改成范围内，也不能把明确权证改
+成普通股。没有稳定身份键的代码之间不得自动合并价格序列。
 
 ## 产物与数据流
 

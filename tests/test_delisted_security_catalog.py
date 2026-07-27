@@ -53,6 +53,27 @@ class DelistedSecurityCatalogTest(unittest.TestCase):
         self.assertEqual(spac["classification"], "accepted_common")
         self.assertEqual(ending_letter["classification"], "accepted_common")
 
+    def test_company_name_words_and_plain_ads_are_not_security_type_signals(self):
+        cases = (
+            ("APTS", "Preferred Apartment Communities Inc"),
+            ("UNT", "Unit Corporation"),
+            ("ABHH", "American Bank Note Holographics Inc"),
+            (
+                "AMAM",
+                "Ambrx Biopharma Inc. American Depositary Shares",
+            ),
+        )
+
+        for code, name in cases:
+            with self.subTest(code=code):
+                result = classify_catalog_row(row(code, name))
+                self.assertEqual(
+                    result["classification"],
+                    "accepted_common",
+                )
+                self.assertEqual(result["reason_codes"], [])
+                self.assertTrue(result["backfill_eligible"])
+
     def test_rejects_explicit_non_common_security_signals(self):
         cases = (
             ("AAA-WS", "AAA Inc", "warrant_signal"),
@@ -143,7 +164,7 @@ class DelistedSecurityCatalogTest(unittest.TestCase):
                 ]
             )
 
-    def test_same_isin_conflict_requires_review_without_merging_tickers(self):
+    def test_same_isin_conflict_blocks_identity_merge_not_type_backfill(self):
         catalog = build_delisted_catalog(
             [
                 row(
@@ -162,16 +183,40 @@ class DelistedSecurityCatalogTest(unittest.TestCase):
 
         self.assertEqual(len(catalog["securities"]), 2)
         for item in catalog["securities"]:
-            self.assertEqual(item["classification"], "needs_review")
+            self.assertEqual(item["classification"], "accepted_common")
             self.assertEqual(
                 item["reason_codes"],
                 ["identity_conflict"],
             )
-            self.assertFalse(item["backfill_eligible"])
-            self.assertEqual(
-                item["identity_key"],
-                "isin:US0378331005",
-            )
+            self.assertTrue(item["backfill_eligible"])
+            self.assertEqual(item["identity_status"], "conflicting_isin")
+            self.assertIsNone(item["identity_key"])
+
+    def test_identity_conflict_does_not_change_out_of_scope_classification(self):
+        catalog = build_delisted_catalog(
+            [
+                row("AAA", "AAA Inc", isin="US0378331005"),
+                row(
+                    "OTC",
+                    "Different OTC Inc",
+                    exchange="PINK",
+                    isin="US0378331005",
+                ),
+            ]
+        )
+        by_ticker = {
+            item["ticker"]: item for item in catalog["securities"]
+        }
+
+        self.assertEqual(
+            by_ticker["OTC"]["classification"],
+            "out_of_scope",
+        )
+        self.assertFalse(by_ticker["OTC"]["backfill_eligible"])
+        self.assertEqual(
+            by_ticker["OTC"]["identity_status"],
+            "conflicting_isin",
+        )
 
     def test_summary_counts_scope_classification_reason_and_identity(self):
         catalog = build_delisted_catalog(

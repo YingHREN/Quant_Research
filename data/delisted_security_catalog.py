@@ -21,25 +21,41 @@ _NON_COMMON_RULES = (
     ),
     (
         "unit_signal",
-        re.compile(r"\bunits?\b", re.IGNORECASE),
+        re.compile(
+            r"\bunits?\s*(?:$|EX\b)|\b(?:corporate|preferred) units?\b",
+            re.IGNORECASE,
+        ),
         re.compile(r"-(?:U|UN)$", re.IGNORECASE),
     ),
     (
         "right_signal",
-        re.compile(r"\brights?\b", re.IGNORECASE),
+        re.compile(r"\brights?\s*(?:$|to\b)", re.IGNORECASE),
         re.compile(r"-(?:R|RT)$", re.IGNORECASE),
     ),
     (
         "preferred_signal",
         re.compile(
-            r"\bpreferred\b|\bdepositary shares?\b",
+            r"\bpreferred\s+(?:stock|shares?|units?|series)\b|"
+            r"\bseries\s+[A-Z0-9.-]+(?:\s+\w+){0,4}\s+preferred\b|"
+            r"\bparticipating preferred\b|"
+            r"\bdepositary shares?\b.*\bpreferred\b|"
+            r"\bpreferred\b.*\bdepositary shares?\b|"
+            r"\bpreferred\s*$",
             re.IGNORECASE,
         ),
         None,
     ),
     (
         "debt_signal",
-        re.compile(r"\bnotes?\b|\bbonds?\b|\bdebentures?\b", re.IGNORECASE),
+        re.compile(
+            r"\b(?:senior|subordinated|exchange[- ]traded)"
+            r"(?:\s+\w+){0,3}\s+notes?\b|"
+            r"\bnotes?\s+(?:due|expiry|\(cbt\))\b|"
+            r"\bdebentures?\b|"
+            r"\bbonds?\s+(?:fund|trust|\(cbt\)|due)\b|"
+            r"\d(?:[\d .]*\d)?%\s+notes?\s*$",
+            re.IGNORECASE,
+        ),
         None,
     ),
     (
@@ -218,14 +234,14 @@ def build_delisted_catalog(rows):
             continue
         for index in indexes:
             item = dict(securities[index])
-            item["classification"] = "needs_review"
             item["reason_codes"] = sorted(
                 set(item["reason_codes"]) | {"identity_conflict"}
             )
             item["evidence"] = sorted(
                 set(item["evidence"]) | {f"identity:{item['identity_key']}"}
             )
-            item["backfill_eligible"] = False
+            item["identity_status"] = "conflicting_isin"
+            item["identity_key"] = None
             securities[index] = item
 
     securities.sort(
