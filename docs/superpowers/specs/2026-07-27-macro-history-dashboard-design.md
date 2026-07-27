@@ -104,4 +104,3 @@ GET /api/macro-history?range=3y&benchmark=SPY&asof=2026-07-24
 - 浏览器验证覆盖曲线可见、范围/基准/序列切换、日期锁定、证据更新和
   窄屏布局。
 - 全量测试通过后才更新中文 TODO 并合入 `main`。
-

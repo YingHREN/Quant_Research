@@ -92,4 +92,3 @@
 - [ ] 运行 `LOKY_MAX_CPU_COUNT=8 PYTHONWARNINGS=error python -m unittest discover -s tests -q`。
 - [ ] 将中文 TODO 对应项标记完成并记录验收事实。
 - [ ] 提交、合入 `main`，在 `main` 再跑全量测试并重启服务。
-
