@@ -93,7 +93,11 @@ from web.services.research_pool import (
     normalize_research_pool_ticker,
 )
 from web.services.supply_demand import attach_supply_demand_rows
-from web.services.intraday import IntradayStatusService
+from web.services.intraday import IntradaySnapshotService, IntradayStatusService
+from web.services.intraday_subscriptions import (
+    IntradaySubscriptionService,
+    SubscriptionLimitExceeded,
+)
 from web.services.scenarios import HistoricalScenarioProvider
 from web.services.update_jobs import (
     PriceProvider,
@@ -296,17 +300,24 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:
         scenario_provider = HistoricalScenarioProvider()
+    intraday_store = IntradayStore(flask_app.config["MARKET_DATA_DATABASE"])
     intraday_status_service = flask_app.config.get("INTRADAY_STATUS_SERVICE")
     if intraday_status_service is None:
         intraday_status_service = IntradayStatusService(
-            store=IntradayStore(
-                flask_app.config["MARKET_DATA_DATABASE"]
-            ),
+            store=intraday_store,
             stale_after_seconds=flask_app.config.get(
                 "INTRADAY_STATUS_STALE_AFTER_SECONDS",
                 30,
             ),
         )
+    intraday_subscription_service = IntradaySubscriptionService(
+        intraday_store,
+        status_service=intraday_status_service,
+    )
+    intraday_snapshot_service = IntradaySnapshotService(
+        intraday_store,
+        intraday_subscription_service,
+    )
 
     flask_app.extensions["dashboard_repository"] = repository
     flask_app.extensions["dashboard_update_manager"] = update_manager
@@ -333,6 +344,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         "dashboard_entry_signal_service"
     ] = entry_signal_service
     flask_app.extensions["dashboard_intraday_status_service"] = intraday_status_service
+    flask_app.extensions[
+        "dashboard_intraday_subscription_service"
+    ] = intraday_subscription_service
+    flask_app.extensions[
+        "dashboard_intraday_snapshot_service"
+    ] = intraday_snapshot_service
     flask_app.extensions[
         "dashboard_market_overview_service"
     ] = market_overview_service
@@ -836,6 +853,53 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     @flask_app.get("/api/market-data/status")
     def market_data_status():
         return _json_response(intraday_status_service.snapshot())
+
+    @flask_app.get("/api/market-data/subscriptions")
+    def market_data_subscriptions():
+        return _json_response(intraday_subscription_service.snapshot())
+
+    @flask_app.put("/api/market-data/subscriptions")
+    def replace_market_data_subscriptions():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("symbols"), list
+        ):
+            return _safe_error(
+                "invalid_subscription_request",
+                "symbols must be a JSON array",
+                400,
+            )
+        try:
+            result = intraday_subscription_service.replace(
+                payload["symbols"]
+            )
+        except SubscriptionLimitExceeded:
+            return _safe_error(
+                "subscription_limit_exceeded",
+                "At most 27 user symbols are supported",
+                409,
+            )
+        except ValueError:
+            return _safe_error(
+                "invalid_subscription_request",
+                "A subscription symbol is invalid",
+                400,
+            )
+        return _json_response(result)
+
+    @flask_app.get("/api/intraday/<ticker>")
+    def intraday_snapshot(ticker):
+        try:
+            window = int(request.args.get("window", "120"))
+            return _json_response(
+                intraday_snapshot_service.snapshot(ticker, window)
+            )
+        except (TypeError, ValueError):
+            return _safe_error(
+                "invalid_intraday_request",
+                "Ticker or window is invalid",
+                400,
+            )
 
     @flask_app.errorhandler(InvalidTicker)
     def invalid_ticker(_error):

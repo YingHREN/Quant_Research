@@ -558,6 +558,35 @@ class IntradayStore:
             size_unit=row["size_unit"],
         )
 
+    def read_latest_quote(self, provider, symbol):
+        normalized = SubscriptionRequest((symbol,), max_symbols=1).symbols[0]
+        with self._connect_readonly() as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM intraday_quotes "
+                "WHERE provider=? AND symbol=? "
+                "ORDER BY event_ts_ns DESC LIMIT 1",
+                (provider, normalized),
+            ).fetchone()
+        if row is None:
+            return None
+        return QuoteEvent(
+            provider=row["provider"],
+            symbol=row["symbol"],
+            event_ts=_parse_utc(row["event_ts"]),
+            received_ts=_parse_utc(row["received_ts"]),
+            bid_price=row["bid_price"],
+            bid_size=row["bid_size"],
+            ask_price=row["ask_price"],
+            ask_size=row["ask_size"],
+            source_sequence=row["source_sequence"],
+            session=row["session"],
+            event_ts_ns=row["event_ts_ns"],
+            trading_date=row["trading_date"],
+            size_unit=row["size_unit"],
+            lot_size=row["lot_size"],
+        )
+
     def record_capabilities(self, capabilities, recorded_at):
         self._require_utc(recorded_at, "recorded_at")
         with self._connect() as connection:
