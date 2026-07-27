@@ -328,6 +328,18 @@ def _default_registry():
         lambda context: _demand_confirmation(context["chart_row"]),
     )
     register(
+        "canslim_technical_gate_v1",
+        "bullish_structure",
+        80,
+        "canslim_technical_gate_v1",
+        "diagnostic_gate",
+        "production",
+        "close_confirmed",
+        "informational",
+        "model.canslimTechnicalGate",
+        lambda context: _canslim_technical_gate(context["chart_row"]),
+    )
+    register(
         "forecast_decision_policy",
         "decision",
         10,
@@ -698,6 +710,66 @@ def _early_reversal(row):
         "score": json_safe(score),
         "maximum_score": 100,
         "conditions": list(row.get("early_reversal_conditions") or ()),
+    }
+
+
+def _canslim_technical_gate(row):
+    gate = _mapping(row.get("canslim_technical_gate"))
+    state = gate.get("state")
+    conditions = _mapping(gate.get("conditions"))
+    available = state in {"pass", "fail"}
+    return {
+        "status": (
+            "active"
+            if state == "pass"
+            else "inactive"
+            if state == "fail"
+            else "unavailable"
+        ),
+        "state": state or "missing",
+        "score": json_safe(gate.get("passed_conditions")),
+        "maximum_score": json_safe(gate.get("condition_count") or 4),
+        "preferred_within_15pct": (
+            gate.get("preferred_within_15pct") is True
+        ),
+        "condition_states": {
+            key: _mapping(value).get("state", "missing")
+            for key, value in conditions.items()
+        },
+        "reason_codes": list(gate.get("reason_codes") or ()),
+        "unavailable_reason": (
+            None
+            if available
+            else next(
+                iter(gate.get("reason_codes") or ()),
+                "technical_gate_not_computed",
+            )
+        ),
+        "metrics": [
+            {
+                "label_key": "modelOutput.metric.distanceFromHigh252",
+                "value": json_safe(
+                    _mapping(gate.get("values")).get(
+                        "distance_from_high_252"
+                    )
+                ),
+                "format": "percent",
+            },
+            {
+                "label_key": "modelOutput.metric.ema10Slope5",
+                "value": json_safe(
+                    _mapping(gate.get("values")).get("ema10_slope_5")
+                ),
+                "format": "percent",
+            },
+            {
+                "label_key": "modelOutput.metric.ema20Slope5",
+                "value": json_safe(
+                    _mapping(gate.get("values")).get("ema20_slope_5")
+                ),
+                "format": "percent",
+            },
+        ],
     }
 
 

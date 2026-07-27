@@ -33,6 +33,7 @@ from web.forecasts.model_outputs import (
     build_model_outputs,
     default_model_output_registry,
 )
+from research.canslim_technical import evaluate_technical_gate
 from research.expanded_market_data import ExpandedMarketDataRepository
 from research.market_context import build_group_score_frame
 from research.risk_memory import (
@@ -78,6 +79,11 @@ from web.services.research_relative_strength import (
     ResearchRelativeStrengthService,
 )
 from web.services.research_universe import ResearchUniverseRepository
+from web.services.research_universe import (
+    InvalidResearchTicker,
+    ResearchUniverseDataError,
+    UnknownResearchTicker,
+)
 from web.services.supply_demand import attach_supply_demand_rows
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
@@ -251,6 +257,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             ),
             max_cache_size=flask_app.config.get("UNIVERSE_CACHE_SIZE", 4),
         )
+    research_universe_repository = getattr(
+        universe_service,
+        "_research_universe_repository",
+        None,
+    )
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:
         scenario_provider = HistoricalScenarioProvider()
@@ -365,7 +376,28 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     def stock(ticker):
         normalized_ticker = ticker.strip().upper()
         forecast_revision = getattr(forecast_service, "database_revision", None)
-        snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        try:
+            snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        except UnknownTicker as active_error:
+            if research_universe_repository is None:
+                raise
+            try:
+                research_snapshot = (
+                    research_universe_repository.load_detail_snapshot(
+                        normalized_ticker
+                    )
+                )
+            except InvalidResearchTicker as error:
+                raise InvalidTicker(str(error)) from error
+            except (UnknownResearchTicker, ResearchUniverseDataError):
+                raise active_error
+            return _json_response(
+                _research_stock_payload(
+                    normalized_ticker,
+                    research_snapshot,
+                    scenario_provider,
+                )
+            )
         history = snapshot.histories[normalized_ticker]
         if history.empty:
             raise MarketDataUnavailable()
@@ -432,6 +464,18 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             warnings.append("stale_ticker")
         if len(chart) < 200:
             warnings.append("insufficient_indicator_history")
+        technical_gate = evaluate_technical_gate(
+            history,
+            observation_date,
+            stale=bool(
+                selected_summary is not None
+                and (
+                    selected_summary.inactive
+                    or selected_summary.lag_days > 0
+                )
+            ),
+        )
+        chart[-1]["canslim_technical_gate"] = technical_gate
 
         try:
             forecast_arguments = (
@@ -475,6 +519,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             chart,
             _forecast_observation_dates(forecast_payload),
         )
+        _attach_technical_gate_rows(
+            chart,
+            history,
+            _forecast_observation_dates(forecast_payload),
+            stale_latest=technical_gate.get("state") == "missing",
+        )
         top_risk = _top_risk_payload(
             forecast_service,
             forecast_arguments,
@@ -487,6 +537,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         _attach_model_outputs(forecast_payload, chart, structures)
         payload = {
             "ticker": normalized_ticker,
+            "analysis_scope": "active_full",
+            "pool_membership": {"active": True, "research": False},
             "observation_date": observation_date,
             "summary": _stock_summary(chart, selected_summary),
             "chart": chart,
@@ -503,6 +555,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 "model_output_registry"
             ),
             "top_risk": top_risk,
+            "technical_gate": technical_gate,
         }
         return _json_response(payload)
 
@@ -580,6 +633,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
         macro_risk_service.attach_chart_rows(
             chart,
+            _forecast_observation_dates(payload),
+        )
+        _attach_technical_gate_rows(
+            chart,
+            history,
             _forecast_observation_dates(payload),
         )
         _attach_model_outputs(payload, chart)
@@ -710,6 +768,30 @@ def _forecast_observation_dates(payload):
     )
 
 
+def _attach_technical_gate_rows(
+    chart,
+    history,
+    observation_dates,
+    *,
+    stale_latest=False,
+):
+    rows = {
+        row.get("time"): row
+        for row in chart
+        if isinstance(row, dict) and isinstance(row.get("time"), str)
+    }
+    latest_date = chart[-1]["time"] if chart else None
+    for raw_date in set(observation_dates) | ({latest_date} if latest_date else set()):
+        row = rows.get(raw_date)
+        if row is None or "canslim_technical_gate" in row:
+            continue
+        row["canslim_technical_gate"] = evaluate_technical_gate(
+            history,
+            raw_date,
+            stale=bool(stale_latest and raw_date == latest_date),
+        )
+
+
 def _attach_model_outputs(payload, chart, structures=None):
     payload.setdefault(
         "feature_provenance_registry",
@@ -822,6 +904,72 @@ def _attach_market_bearish_risk(chart, ticker, histories):
 
 def _snapshot_dict(snapshot):
     return snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
+
+
+def _research_stock_payload(ticker, snapshot, scenario_provider):
+    history = snapshot.histories[ticker].sort_index()
+    if history.empty:
+        raise UnknownTicker(f"Ticker was not found: {ticker}")
+    observation_timestamp = pd.Timestamp(history.index[-1])
+    observation_date = iso_date(observation_timestamp)
+    benchmark = snapshot.histories.get("SPY")
+    if benchmark is not None and benchmark.empty:
+        benchmark = None
+    context = AnalysisContext(
+        ticker=ticker,
+        observation_date=observation_timestamp,
+        history=history,
+        benchmark_history=benchmark,
+    )
+    chart = build_chart_rows(context)
+    technical_gate = evaluate_technical_gate(
+        history,
+        observation_date,
+        stale=bool(snapshot.stale),
+    )
+    chart[-1]["canslim_technical_gate"] = technical_gate
+    top_risk = unavailable_top_risk_timeline(
+        "research_pool_diagnostic_only"
+    )
+    forecast_payload = unavailable_forecast_bundle(
+        reason=UnavailableReason.RESEARCH_POOL_DIAGNOSTIC_ONLY
+    )
+    structures = _structure_payload([], chart, top_risk)
+    _attach_model_outputs(forecast_payload, chart, structures)
+    summary = _stock_summary(chart, None)
+    summary["stale"] = bool(snapshot.stale)
+    warnings = ["research_pool_limited_analysis"]
+    if snapshot.stale:
+        warnings.append("stale_ticker")
+    if benchmark is None:
+        warnings.append("missing_benchmark")
+    if len(chart) < 200:
+        warnings.append("insufficient_indicator_history")
+    return {
+        "ticker": ticker,
+        "analysis_scope": "research_diagnostic",
+        "pool_membership": {"active": False, "research": True},
+        "observation_date": observation_date,
+        "summary": summary,
+        "chart": chart,
+        "structures": structures,
+        "factors": [],
+        "scenarios": scenario_provider.build(
+            history,
+            observation_timestamp,
+        ),
+        "warnings": warnings,
+        "forecasts": forecast_payload["forecasts"],
+        "forecast_evaluation": forecast_payload["forecast_evaluation"],
+        "feature_provenance_registry": forecast_payload.get(
+            "feature_provenance_registry"
+        ),
+        "model_output_registry": forecast_payload.get(
+            "model_output_registry"
+        ),
+        "top_risk": top_risk,
+        "technical_gate": technical_gate,
+    }
 
 
 def _stock_summary(chart, ticker_summary):

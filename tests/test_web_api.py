@@ -985,6 +985,9 @@ class WebApiTest(unittest.TestCase):
                 "feature_provenance_registry",
                 "model_output_registry",
                 "top_risk",
+                "analysis_scope",
+                "pool_membership",
+                "technical_gate",
             },
         )
         self.assertEqual(
@@ -1352,6 +1355,13 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(
             response.json["model_output_registry"]["version"],
             "model_output_registry_v3",
+        )
+        self.assertIn(
+            "canslim_technical_gate_v1",
+            {
+                model["key"]
+                for model in response.json["model_output_registry"]["models"]
+            },
         )
         ticker, dates, histories = self.app.config["FORECAST_SERVICE"].calls[-1]
         self.assertEqual(ticker, "AAA")
@@ -1941,6 +1951,71 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json["error"]["code"], "unknown_ticker")
         self.assertNotIn("/Users/", response.get_data(as_text=True))
+
+    def test_research_only_ticker_returns_bounded_diagnostic_detail(self):
+        research_history = price_history(periods=260, end="2026-07-21")
+
+        class ResearchRepository:
+            def revision(self):
+                return 9
+
+            def snapshot(self, asof=None, sessions=260):
+                return SimpleNamespace(
+                    status="unavailable",
+                    asof=asof,
+                    revision=9,
+                    members=(),
+                    histories={},
+                    reason="fixture",
+                )
+
+            def load_detail_snapshot(
+                self,
+                ticker,
+                asof=None,
+                benchmark_tickers=("SPY", "QQQ"),
+            ):
+                self.request = (ticker, asof, benchmark_tickers)
+                return SimpleNamespace(
+                    ticker=ticker,
+                    asof="2026-07-21",
+                    revision=9,
+                    histories={
+                        ticker: research_history,
+                        "SPY": price_history(
+                            periods=260,
+                            end="2026-07-21",
+                            offset=20,
+                        ),
+                    },
+                    stale=False,
+                )
+
+        research_repository = ResearchRepository()
+        response = create_app(
+            test_config(
+                RESEARCH_UNIVERSE_REPOSITORY=research_repository,
+            ),
+            self.repository,
+            self.manager,
+        ).test_client().get("/api/stocks/RESEARCH")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["analysis_scope"], "research_diagnostic")
+        self.assertEqual(
+            response.json["pool_membership"],
+            {"active": False, "research": True},
+        )
+        self.assertEqual(response.json["factors"], [])
+        self.assertIn("research_pool_limited_analysis", response.json["warnings"])
+        self.assertIn(
+            response.json["technical_gate"]["state"],
+            {"pass", "fail"},
+        )
+        self.assertEqual(
+            response.json["forecasts"]["model"]["unavailable_reason"],
+            "research_pool_diagnostic_only",
+        )
 
     def test_safe_invalid_ticker_error(self):
         response = self.client.get("/api/stocks/AAA%2Fetc")

@@ -169,6 +169,25 @@ def chart_row():
             "risk_aversion": {"score": 50.0, "coverage": 0.75},
         },
         "macro_risk_unavailable_reason": None,
+        "canslim_technical_gate": {
+            "state": "pass",
+            "passed_conditions": 4,
+            "condition_count": 4,
+            "version": "canslim_technical_gate_v1",
+            "preferred_within_15pct": True,
+            "reason_codes": [],
+            "conditions": {
+                "close_above_sma50": {"state": "pass"},
+                "ema10_above_ema20": {"state": "pass"},
+                "moving_average_slopes_positive": {"state": "pass"},
+                "within_20pct_of_52_week_high": {"state": "pass"},
+            },
+            "values": {
+                "distance_from_high_252": -0.08,
+                "ema10_slope_5": 0.03,
+                "ema20_slope_5": 0.02,
+            },
+        },
     }
 
 
@@ -330,6 +349,18 @@ class ModelOutputContractTest(unittest.TestCase):
         bullish = {
             item["key"]: item for item in outputs["bullish_structure"]
         }
+        self.assertEqual(
+            bullish["canslim_technical_gate_v1"]["state"],
+            "pass",
+        )
+        self.assertEqual(
+            bullish["canslim_technical_gate_v1"]["score"],
+            4,
+        )
+        self.assertNotIn(
+            "probability",
+            bullish["canslim_technical_gate_v1"],
+        )
         self.assertEqual(bullish["strict_vcp"]["status"], "inactive")
         self.assertEqual(bullish["tight_platform"]["status"], "active")
         self.assertEqual(

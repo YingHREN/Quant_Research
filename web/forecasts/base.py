@@ -34,6 +34,7 @@ class UnavailableReason(str, Enum):
     DEGENERATE_TARGET = "degenerate_target"
     MODEL_ERROR = "model_error"
     UPDATE_IN_PROGRESS = "update_in_progress"
+    RESEARCH_POOL_DIAGNOSTIC_ONLY = "research_pool_diagnostic_only"
 
 
 class EvaluationUnavailableReason(str, Enum):
