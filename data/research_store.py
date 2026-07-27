@@ -361,7 +361,7 @@ class ResearchPriceStore:
         observed_at = date.fromisoformat(
             str(observed_at or assignment.asof)
         ).isoformat()
-        if effective_to is not None and effective_to < effective_from:
+        if effective_to is not None and effective_to <= effective_from:
             raise ValueError("group assignment effective range is invalid")
 
         self.connection.execute(

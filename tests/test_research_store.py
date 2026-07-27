@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
+from data.group_assignments import GroupAssignment
 from data.point_in_time_universe import HistoricalMembership, SymbolChange
 from data.research_store import ResearchPriceStore, normalize_daily_rows
 
@@ -20,6 +21,37 @@ def daily(date, open_, high, low, close, adjusted_close, volume=1000):
 
 
 class ResearchStoreTest(unittest.TestCase):
+    def test_persist_group_assignment_rejects_zero_length_interval(self):
+        connection = sqlite3.connect(":memory:")
+        store = ResearchPriceStore(connection)
+        store.initialize()
+        connection.execute(
+            """
+            INSERT INTO security_master (ticker, name, observed_at, provider)
+            VALUES ('AAA', 'Example', '2026-07-24', 'fixture')
+            """
+        )
+        assignment = GroupAssignment(
+            ticker="AAA",
+            asof="2026-07-24",
+            sector_key="technology",
+            sector_benchmark="XLK",
+            theme_keys=(),
+            theme_benchmarks={},
+            primary_model_group="technology",
+            classification_state="classified",
+            source="sec_broad",
+            rule_version="sec_sic_v1",
+            confidence=1.0,
+        )
+
+        with self.assertRaisesRegex(ValueError, "effective range"):
+            store.persist_group_assignment(
+                assignment,
+                effective_from="2026-07-24",
+                effective_to="2026-07-24",
+            )
+
     def test_import_security_preserves_active_override_effective_interval(self):
         connection = sqlite3.connect(":memory:")
         store = ResearchPriceStore(connection)
