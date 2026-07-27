@@ -152,6 +152,102 @@ class ExpandedMarketDataRepository:
             }
         return result
 
+    def load_universe_members(self, *, universe_key, asof):
+        """Return members effective on one required observation date."""
+        universe_key = _validated_universe_key(universe_key)
+        cutoff = iso_date(asof)
+        if cutoff is None:
+            raise ValueError("asof is required")
+        query = """
+            SELECT ticker, effective_from, effective_to, selection_rule,
+                   source, source_snapshot_date, imported_at, is_delisted,
+                   security_name
+            FROM universe_memberships
+            WHERE universe_key = ?
+              AND effective_from <= ?
+              AND (effective_to IS NULL OR ? < effective_to)
+            ORDER BY ticker, effective_from
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                query,
+                (universe_key, cutoff, cutoff),
+            ).fetchall()
+        return {
+            str(ticker): {
+                "effective_from": str(effective_from),
+                "effective_to": (
+                    None if effective_to is None else str(effective_to)
+                ),
+                "selection_rule": str(selection_rule),
+                "source": None if source is None else str(source),
+                "source_snapshot_date": (
+                    None
+                    if source_snapshot_date is None
+                    else str(source_snapshot_date)
+                ),
+                "imported_at": (
+                    None if imported_at is None else str(imported_at)
+                ),
+                "is_delisted": (
+                    None if is_delisted is None else bool(is_delisted)
+                ),
+                "security_name": (
+                    None if security_name is None else str(security_name)
+                ),
+            }
+            for (
+                ticker,
+                effective_from,
+                effective_to,
+                selection_rule,
+                source,
+                source_snapshot_date,
+                imported_at,
+                is_delisted,
+                security_name,
+            ) in rows
+        }
+
+    def load_universe_members_by_date(
+        self,
+        *,
+        universe_key,
+        observation_dates,
+    ):
+        """Expand effective intervals for several dates using one SQL read."""
+        universe_key = _validated_universe_key(universe_key)
+        if isinstance(observation_dates, (str, bytes)):
+            raise TypeError("observation_dates must be a sequence")
+        dates = tuple(dict.fromkeys(iso_date(item) for item in observation_dates))
+        if not dates or any(item is None for item in dates):
+            raise ValueError("observation_dates must not be empty")
+        query = """
+            SELECT ticker, effective_from, effective_to
+            FROM universe_memberships
+            WHERE universe_key = ?
+              AND effective_from <= ?
+              AND (effective_to IS NULL OR effective_to > ?)
+            ORDER BY ticker, effective_from
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                query,
+                (universe_key, max(dates), min(dates)),
+            ).fetchall()
+        return {
+            observation_date: frozenset(
+                str(ticker)
+                for ticker, effective_from, effective_to in rows
+                if str(effective_from) <= observation_date
+                and (
+                    effective_to is None
+                    or observation_date < str(effective_to)
+                )
+            )
+            for observation_date in dates
+        }
+
 
 def _histories(rows):
     columns = (
@@ -205,3 +301,10 @@ def _validated_tickers(tickers):
     if any(not TICKER_RE.fullmatch(ticker) for ticker in checked):
         raise ValueError("tickers contain an unsupported symbol")
     return checked
+
+
+def _validated_universe_key(value):
+    universe_key = str(value or "").strip()
+    if not universe_key:
+        raise ValueError("universe_key is required")
+    return universe_key

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import unittest
 
+from data.point_in_time_universe import HistoricalMembership, SymbolChange
 from data.research_store import ResearchPriceStore, normalize_daily_rows
 
 
@@ -19,6 +20,212 @@ def daily(date, open_, high, low, close, adjusted_close, volume=1000):
 
 
 class ResearchStoreTest(unittest.TestCase):
+    def test_initialize_migrates_old_memberships_without_losing_rows(self):
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(
+            """
+            CREATE TABLE security_master (
+                ticker TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                security_type TEXT NOT NULL,
+                active INTEGER NOT NULL,
+                observed_at TEXT NOT NULL,
+                provider TEXT NOT NULL
+            );
+            CREATE TABLE universe_memberships (
+                universe_key TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                effective_from TEXT NOT NULL,
+                effective_to TEXT,
+                selection_rule TEXT NOT NULL,
+                PRIMARY KEY (universe_key, ticker, effective_from)
+            );
+            INSERT INTO security_master VALUES (
+                'AAA', 'Example', 'Common Stock', 1, '2026-07-24', 'fixture'
+            );
+            INSERT INTO universe_memberships VALUES (
+                'legacy_v1', 'AAA', '2026-07-24', NULL, 'legacy_v1'
+            );
+            """
+        )
+
+        ResearchPriceStore(connection).initialize()
+
+        columns = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(universe_memberships)"
+            )
+        }
+        self.assertTrue(
+            {
+                "source",
+                "source_snapshot_date",
+                "imported_at",
+                "is_delisted",
+                "security_name",
+            }.issubset(columns)
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT ticker FROM universe_memberships"
+            ).fetchall(),
+            [("AAA",)],
+        )
+
+    def test_replace_historical_memberships_is_atomic_and_idempotent(self):
+        connection = sqlite3.connect(":memory:")
+        store = ResearchPriceStore(connection)
+        store.initialize()
+        initial = (
+            HistoricalMembership(
+                ticker="AAPL",
+                security_name="Apple Inc",
+                effective_from="1982-11-30",
+                effective_to=None,
+                is_active_now=True,
+                is_delisted=False,
+            ),
+            HistoricalMembership(
+                ticker="TWTR",
+                security_name="Twitter Inc",
+                effective_from="2018-06-07",
+                effective_to="2022-10-28",
+                is_active_now=False,
+                is_delisted=True,
+            ),
+        )
+
+        first = store.replace_universe_memberships(
+            "sp500_historical_eodhd_v1",
+            initial,
+            snapshot_date="2026-07-27",
+            imported_at="2026-07-27T10:00:00Z",
+        )
+        second = store.replace_universe_memberships(
+            "sp500_historical_eodhd_v1",
+            initial,
+            snapshot_date="2026-07-27",
+            imported_at="2026-07-27T10:00:00Z",
+        )
+
+        self.assertEqual((first, second), (2, 2))
+        rows = connection.execute(
+            """
+            SELECT ticker, effective_from, effective_to, is_delisted, source
+            FROM universe_memberships
+            ORDER BY ticker
+            """
+        ).fetchall()
+        self.assertEqual(
+            rows,
+            [
+                ("AAPL", "1982-11-30", None, 0, "eodhd"),
+                ("TWTR", "2018-06-07", "2022-10-28", 1, "eodhd"),
+            ],
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT active FROM security_master WHERE ticker = 'TWTR'"
+            ).fetchone()[0],
+            0,
+        )
+
+        with self.assertRaises(ValueError):
+            store.replace_universe_memberships(
+                "sp500_historical_eodhd_v1",
+                (),
+                snapshot_date="2026-07-27",
+                imported_at="2026-07-27T10:00:00Z",
+            )
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) FROM universe_memberships"
+            ).fetchone()[0],
+            2,
+        )
+
+        connection.execute(
+            """
+            CREATE TRIGGER reject_bad_member
+            BEFORE INSERT ON universe_memberships
+            WHEN NEW.ticker = 'BAD'
+            BEGIN
+                SELECT RAISE(ABORT, 'rejected fixture');
+            END
+            """
+        )
+        failed = (
+            HistoricalMembership(
+                ticker="BAD",
+                security_name="Bad Fixture",
+                effective_from="2020-01-01",
+                effective_to=None,
+                is_active_now=False,
+                is_delisted=True,
+            ),
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            store.replace_universe_memberships(
+                "sp500_historical_eodhd_v1",
+                failed,
+                snapshot_date="2026-07-27",
+                imported_at="2026-07-27T10:00:00Z",
+            )
+        self.assertEqual(
+            connection.execute(
+                """
+                SELECT ticker FROM universe_memberships
+                WHERE universe_key = 'sp500_historical_eodhd_v1'
+                ORDER BY ticker
+                """
+            ).fetchall(),
+            [("AAPL",), ("TWTR",)],
+        )
+
+    def test_symbol_changes_are_idempotent_identity_hints(self):
+        connection = sqlite3.connect(":memory:")
+        store = ResearchPriceStore(connection)
+        store.initialize()
+        changes = (
+            SymbolChange(
+                old_symbol="FB",
+                new_symbol="META",
+                effective_date="2022-06-09",
+                exchange="US",
+                company_name="Meta Platforms Inc",
+            ),
+        )
+
+        self.assertEqual(
+            store.upsert_symbol_changes(
+                changes,
+                snapshot_date="2026-07-27",
+                imported_at="2026-07-27T10:00:00Z",
+            ),
+            1,
+        )
+        self.assertEqual(
+            store.upsert_symbol_changes(
+                changes,
+                snapshot_date="2026-07-27",
+                imported_at="2026-07-27T10:00:00Z",
+            ),
+            1,
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT old_symbol, new_symbol FROM security_symbol_changes"
+            ).fetchall(),
+            [("FB", "META")],
+        )
+        self.assertEqual(
+            connection.execute(
+                "SELECT COUNT(*) FROM daily_prices"
+            ).fetchone()[0],
+            0,
+        )
+
     def test_normalization_preserves_raw_prices_and_builds_adjusted_ohlc(self):
         rows, segments = normalize_daily_rows(
             [daily("2026-01-02", 98, 104, 96, 100, 25, 1234)]

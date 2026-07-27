@@ -9,6 +9,8 @@ import math
 from pathlib import Path
 import sqlite3
 
+from data.point_in_time_universe import HistoricalMembership, SymbolChange
+
 
 SCHEMA_VERSION = "research_prices_v1"
 ADJUSTMENT_METHOD = "eodhd_adjusted_close_ratio_v1"
@@ -182,6 +184,11 @@ class ResearchPriceStore:
                 market_cap REAL,
                 avg_volume_50d REAL,
                 avg_dollar_volume_50d REAL,
+                source TEXT,
+                source_snapshot_date TEXT,
+                imported_at TEXT,
+                is_delisted INTEGER,
+                security_name TEXT,
                 PRIMARY KEY (universe_key, ticker, effective_from)
             );
             CREATE TABLE IF NOT EXISTS daily_prices (
@@ -261,6 +268,17 @@ class ResearchPriceStore:
                 conflict_reason TEXT,
                 PRIMARY KEY (ticker, taxonomy, rule_version, asof)
             );
+            CREATE TABLE IF NOT EXISTS security_symbol_changes (
+                old_symbol TEXT NOT NULL,
+                new_symbol TEXT NOT NULL,
+                effective_date TEXT NOT NULL,
+                exchange TEXT NOT NULL,
+                company_name TEXT,
+                source TEXT NOT NULL,
+                source_snapshot_date TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                PRIMARY KEY (old_symbol, effective_date, source)
+            );
             CREATE TABLE IF NOT EXISTS import_runs (
                 run_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 schema_version TEXT NOT NULL,
@@ -274,6 +292,148 @@ class ResearchPriceStore:
             );
             """
         )
+        for name, declaration in (
+            ("source", "TEXT"),
+            ("source_snapshot_date", "TEXT"),
+            ("imported_at", "TEXT"),
+            ("is_delisted", "INTEGER"),
+            ("security_name", "TEXT"),
+        ):
+            self._ensure_column(
+                "universe_memberships",
+                name,
+                declaration,
+            )
+
+    def _ensure_column(self, table, name, declaration):
+        columns = {
+            str(row[1])
+            for row in self.connection.execute(f"PRAGMA table_info({table})")
+        }
+        if name not in columns:
+            self.connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
+            )
+
+    def replace_universe_memberships(
+        self,
+        universe_key,
+        records,
+        *,
+        snapshot_date,
+        imported_at,
+        source="eodhd",
+    ):
+        """Atomically replace one universe's audited membership intervals."""
+        universe_key = str(universe_key or "").strip()
+        source = str(source or "").strip()
+        snapshot_date = date.fromisoformat(str(snapshot_date)).isoformat()
+        imported_at = str(imported_at or "").strip()
+        records = tuple(records)
+        if not universe_key or not source or not imported_at:
+            raise ValueError("membership provenance must not be empty")
+        if not records:
+            raise ValueError("membership records must not be empty")
+        if any(not isinstance(row, HistoricalMembership) for row in records):
+            raise TypeError("membership records must be normalized")
+
+        with self.connection:
+            for row in records:
+                self.connection.execute(
+                    """
+                    INSERT INTO security_master
+                        (ticker, name, security_type, active, observed_at,
+                         provider)
+                    VALUES (?, ?, 'Common Stock', ?, ?, ?)
+                    ON CONFLICT(ticker) DO UPDATE SET
+                        name=excluded.name,
+                        active=excluded.active,
+                        observed_at=excluded.observed_at
+                    """,
+                    (
+                        row.ticker,
+                        row.security_name or row.ticker,
+                        int(row.is_active_now),
+                        snapshot_date,
+                        source,
+                    ),
+                )
+            self.connection.execute(
+                "DELETE FROM universe_memberships WHERE universe_key = ?",
+                (universe_key,),
+            )
+            self.connection.executemany(
+                """
+                INSERT INTO universe_memberships
+                    (universe_key, ticker, effective_from, effective_to,
+                     selection_rule, source, source_snapshot_date,
+                     imported_at, is_delisted, security_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        universe_key,
+                        row.ticker,
+                        row.effective_from,
+                        row.effective_to,
+                        universe_key,
+                        source,
+                        snapshot_date,
+                        imported_at,
+                        int(row.is_delisted),
+                        row.security_name,
+                    )
+                    for row in records
+                ],
+            )
+        return len(records)
+
+    def upsert_symbol_changes(
+        self,
+        records,
+        *,
+        snapshot_date,
+        imported_at,
+        source="eodhd",
+    ):
+        """Store symbol-change identity hints without joining price series."""
+        source = str(source or "").strip()
+        snapshot_date = date.fromisoformat(str(snapshot_date)).isoformat()
+        imported_at = str(imported_at or "").strip()
+        records = tuple(records)
+        if not source or not imported_at:
+            raise ValueError("symbol-change provenance must not be empty")
+        if any(not isinstance(row, SymbolChange) for row in records):
+            raise TypeError("symbol changes must be normalized")
+        with self.connection:
+            self.connection.executemany(
+                """
+                INSERT INTO security_symbol_changes
+                    (old_symbol, new_symbol, effective_date, exchange,
+                     company_name, source, source_snapshot_date, imported_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(old_symbol, effective_date, source) DO UPDATE SET
+                    new_symbol=excluded.new_symbol,
+                    exchange=excluded.exchange,
+                    company_name=excluded.company_name,
+                    source_snapshot_date=excluded.source_snapshot_date,
+                    imported_at=excluded.imported_at
+                """,
+                [
+                    (
+                        row.old_symbol,
+                        row.new_symbol,
+                        row.effective_date,
+                        row.exchange,
+                        row.company_name,
+                        source,
+                        snapshot_date,
+                        imported_at,
+                    )
+                    for row in records
+                ],
+            )
+        return len(records)
 
     def import_security(
         self,
