@@ -650,6 +650,8 @@ class WebApiTest(unittest.TestCase):
                 "factor_groups",
                 "classification_summary",
                 "relative_strength_summary",
+                "pool_summary",
+                "research_pool_status",
             },
         )
         self.assertEqual(response.json["asof"], "2026-07-21")
@@ -687,6 +689,8 @@ class WebApiTest(unittest.TestCase):
                 "rs_asof",
                 "rs_sample_count",
                 "rs_model_version",
+                "pool_membership",
+                "technical_gate",
             },
         )
         self.assertEqual(

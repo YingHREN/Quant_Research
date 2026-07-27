@@ -12,6 +12,10 @@ from threading import RLock
 import pandas as pd
 
 from factors.compute import tight_platform
+from research.canslim_technical import (
+    evaluate_technical_gate,
+    unavailable_technical_gate,
+)
 from research.vcp import detect_vcp
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
@@ -20,7 +24,7 @@ from web.services.analysis import AnalysisContext
 UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-UNIVERSE_ALGORITHM_VERSION = "universe_summary_v4"
+UNIVERSE_ALGORITHM_VERSION = "universe_summary_v5"
 
 
 class UniverseSnapshotService:
@@ -32,6 +36,8 @@ class UniverseSnapshotService:
         factor_registry,
         classification_service=None,
         relative_strength_service=None,
+        research_universe_repository=None,
+        technical_gate_evaluator=evaluate_technical_gate,
         revision_getter=lambda: 0,
         max_cache_size=4,
     ):
@@ -45,6 +51,8 @@ class UniverseSnapshotService:
         self._factor_registry = factor_registry
         self._classification_service = classification_service
         self._relative_strength_service = relative_strength_service
+        self._research_universe_repository = research_universe_repository
+        self._technical_gate_evaluator = technical_gate_evaluator
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
         self._cache = OrderedDict()
@@ -59,7 +67,17 @@ class UniverseSnapshotService:
         freshness = self._repository.freshness()
         asof = freshness.get("latest_date")
         revision = int(self._revision_getter())
-        key = (revision, asof, UNIVERSE_ALGORITHM_VERSION)
+        research_revision = (
+            self._research_universe_repository.revision()
+            if self._research_universe_repository is not None
+            else None
+        )
+        key = (
+            revision,
+            research_revision,
+            asof,
+            UNIVERSE_ALGORITHM_VERSION,
+        )
 
         with self._lock:
             cached = self._cache.get(key)
@@ -76,6 +94,14 @@ class UniverseSnapshotService:
                 histories,
                 self._factor_registry,
             )
+            research_snapshot = self._build_research_snapshot(asof)
+            rows, pool_summary = merge_research_pool(
+                rows,
+                histories,
+                research_snapshot,
+                asof,
+                self._technical_gate_evaluator,
+            )
             classifications = self._build_classifications(
                 [row["ticker"] for row in rows]
             )
@@ -88,6 +114,8 @@ class UniverseSnapshotService:
                 "asof": asof,
                 "freshness": freshness,
                 "tickers": rows,
+                "pool_summary": pool_summary,
+                "research_pool_status": _research_status(research_snapshot),
                 "factor_groups": factor_groups(self._factor_registry),
                 "classification_summary": {
                     key: deepcopy(value)
@@ -105,6 +133,14 @@ class UniverseSnapshotService:
             while len(self._cache) > self._max_cache_size:
                 self._cache.popitem(last=False)
             return deepcopy(payload)
+
+    def _build_research_snapshot(self, asof):
+        if self._research_universe_repository is None:
+            return None
+        try:
+            return self._research_universe_repository.snapshot(asof, sessions=260)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
 
     def _build_classifications(self, tickers):
         if self._classification_service is None:
@@ -213,6 +249,131 @@ def build_structure_summary(history):
         "tight_platform": platform_active,
         "near_pivot": near_pivot,
         "shape_state": shape_state,
+    }
+
+
+def merge_research_pool(
+    active_rows,
+    active_histories,
+    research_snapshot,
+    asof,
+    technical_gate_evaluator=evaluate_technical_gate,
+):
+    """Merge lightweight research diagnostics without running active-only models."""
+    by_ticker = {row["ticker"]: row for row in active_rows}
+    for row in active_rows:
+        row["pool_membership"] = {"active": True, "research": False}
+        history = active_histories.get(row["ticker"])
+        row["technical_gate"] = _evaluate_gate(
+            technical_gate_evaluator,
+            history,
+            asof,
+            stale=row.get("data_status") != "current",
+        )
+
+    research_members = ()
+    research_histories = {}
+    if research_snapshot is not None and research_snapshot.status == "available":
+        research_members = research_snapshot.members
+        research_histories = research_snapshot.histories
+
+    research_tickers = {member.ticker for member in research_members}
+    overlap_count = len(research_tickers.intersection(by_ticker))
+    for member in research_members:
+        existing = by_ticker.get(member.ticker)
+        if existing is not None:
+            existing["pool_membership"]["research"] = True
+            if existing.get("data_status") != "current" and not member.stale:
+                existing["technical_gate"] = _evaluate_gate(
+                    technical_gate_evaluator,
+                    research_histories.get(member.ticker),
+                    asof,
+                    stale=False,
+                )
+            continue
+        history = research_histories.get(member.ticker)
+        row = _research_only_row(
+            member,
+            history,
+            asof,
+            technical_gate_evaluator,
+        )
+        active_rows.append(row)
+        by_ticker[member.ticker] = row
+
+    active_rows.sort(key=lambda row: row["ticker"])
+    return active_rows, {
+        "active_count": sum(
+            bool(row["pool_membership"]["active"]) for row in active_rows
+        ),
+        "research_count": len(research_tickers),
+        "overlap_count": overlap_count,
+    }
+
+
+def _research_only_row(member, history, asof, technical_gate_evaluator):
+    latest_date = member.latest_date
+    lag_days = (
+        max(
+            0,
+            (pd.Timestamp(asof) - pd.Timestamp(latest_date)).days,
+        )
+        if asof is not None and latest_date is not None
+        else 0
+    )
+    stale = bool(member.stale)
+    return {
+        "ticker": member.ticker,
+        "latest_date": latest_date,
+        "lag_days": lag_days,
+        "inactive": False,
+        "fresh": not stale,
+        "stale": stale,
+        "data_status": "stale" if stale else "current",
+        "name": member.name,
+        "exchange": member.exchange,
+        "strict_vcp": None,
+        "tight_platform": None,
+        "near_pivot": None,
+        "shape_state": "unavailable",
+        "momentum_percentile": None,
+        "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
+        "momentum_percentile_unit": "percentile_0_100",
+        "volatility": None,
+        "volatility_factor_key": UNIVERSE_VOLATILITY_FACTOR_KEY,
+        "volatility_unit": "annualized_percent",
+        "pool_membership": {"active": False, "research": True},
+        "technical_gate": _evaluate_gate(
+            technical_gate_evaluator,
+            history,
+            asof,
+            stale=stale,
+        ),
+    }
+
+
+def _evaluate_gate(evaluator, history, asof, stale):
+    if history is None or history.empty:
+        return unavailable_technical_gate(asof, "history_unavailable")
+    try:
+        return evaluator(history, asof, stale=stale)
+    except (KeyError, TypeError, ValueError):
+        return unavailable_technical_gate(asof, "evaluation_failed")
+
+
+def _research_status(snapshot):
+    if snapshot is None:
+        return {
+            "status": "unavailable",
+            "asof": None,
+            "revision": None,
+            "reason": "not_configured_or_unavailable",
+        }
+    return {
+        "status": snapshot.status,
+        "asof": snapshot.asof,
+        "revision": snapshot.revision,
+        "reason": snapshot.reason,
     }
 
 

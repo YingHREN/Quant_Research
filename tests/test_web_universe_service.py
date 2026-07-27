@@ -144,6 +144,49 @@ class FakeRelativeStrengthService:
         }
 
 
+class FakeResearchUniverseRepository:
+    def __init__(self, available=True):
+        self.available = available
+        self.calls = []
+        self.histories = {
+            "AAA": _history(),
+            "BBB": _history(),
+            "SPY": _history(),
+        }
+
+    def revision(self):
+        return 17
+
+    def snapshot(self, asof=None, sessions=260):
+        self.calls.append((asof, sessions))
+        if not self.available:
+            return SimpleNamespace(
+                status="unavailable",
+                asof=asof,
+                revision=17,
+                members=(),
+                histories={},
+                reason="database_unavailable",
+            )
+        return SimpleNamespace(
+            status="available",
+            asof=asof,
+            revision=17,
+            members=tuple(
+                SimpleNamespace(
+                    ticker=ticker,
+                    latest_date=history.index[-1].date().isoformat(),
+                    stale=False,
+                    name=f"{ticker} Inc.",
+                    exchange="NASDAQ",
+                )
+                for ticker, history in self.histories.items()
+            ),
+            histories=self.histories,
+            reason=None,
+        )
+
+
 def _registry():
     return FactorRegistry(
         [
@@ -295,6 +338,59 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         )
         self.assertTrue(
             all(row["rs_rating"] is None for row in payload["tickers"])
+        )
+
+    def test_build_merges_active_and_research_pools_without_duplicate_rows(self):
+        repository = FakeRepository()
+        research_repository = FakeResearchUniverseRepository()
+        service = UniverseSnapshotService(
+            repository,
+            _registry(),
+            research_universe_repository=research_repository,
+        )
+
+        payload = service.build()
+
+        self.assertEqual(
+            payload["pool_summary"],
+            {"active_count": 2, "research_count": 3, "overlap_count": 2},
+        )
+        self.assertEqual(payload["research_pool_status"]["status"], "available")
+        by_ticker = {row["ticker"]: row for row in payload["tickers"]}
+        self.assertEqual(set(by_ticker), {"AAA", "BBB", "SPY"})
+        self.assertEqual(
+            by_ticker["AAA"]["pool_membership"],
+            {"active": True, "research": True},
+        )
+        self.assertEqual(
+            by_ticker["BBB"]["pool_membership"],
+            {"active": False, "research": True},
+        )
+        self.assertEqual(by_ticker["BBB"]["shape_state"], "unavailable")
+        self.assertIn(by_ticker["BBB"]["technical_gate"]["state"], {"pass", "fail"})
+        self.assertEqual(research_repository.calls, [("2026-07-21", 260)])
+
+    def test_unavailable_research_pool_preserves_active_rows(self):
+        service = UniverseSnapshotService(
+            FakeRepository(),
+            _registry(),
+            research_universe_repository=FakeResearchUniverseRepository(
+                available=False
+            ),
+        )
+
+        payload = service.build()
+
+        self.assertEqual(payload["research_pool_status"]["status"], "unavailable")
+        self.assertEqual(
+            payload["pool_summary"],
+            {"active_count": 2, "research_count": 0, "overlap_count": 0},
+        )
+        self.assertTrue(
+            all(
+                row["pool_membership"] == {"active": True, "research": False}
+                for row in payload["tickers"]
+            )
         )
 
 

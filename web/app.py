@@ -77,6 +77,7 @@ from web.services.research_classification import ResearchClassificationService
 from web.services.research_relative_strength import (
     ResearchRelativeStrengthService,
 )
+from web.services.research_universe import ResearchUniverseRepository
 from web.services.supply_demand import attach_supply_demand_rows
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
@@ -230,11 +231,19 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             relative_strength_service = ResearchRelativeStrengthService(
                 flask_app.config["RESEARCH_DATABASE"]
             )
+        research_universe_repository = flask_app.config.get(
+            "RESEARCH_UNIVERSE_REPOSITORY"
+        )
+        if research_universe_repository is None:
+            research_universe_repository = ResearchUniverseRepository(
+                flask_app.config["RESEARCH_DATABASE"]
+            )
         universe_service = UniverseSnapshotService(
             repository,
             factor_registry,
             classification_service=classification_service,
             relative_strength_service=relative_strength_service,
+            research_universe_repository=research_universe_repository,
             revision_getter=lambda: getattr(
                 forecast_service,
                 "database_revision",
@@ -267,6 +276,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions[
         "dashboard_research_relative_strength_service"
     ] = getattr(universe_service, "_relative_strength_service", None)
+    flask_app.extensions[
+        "dashboard_research_universe_repository"
+    ] = getattr(universe_service, "_research_universe_repository", None)
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions[
