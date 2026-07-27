@@ -11,6 +11,7 @@ from urllib.error import HTTPError
 from zipfile import ZipFile
 
 from run_delisted_identity_coverage import (
+    _coverage_gate,
     _download_url_to_path,
     collect_artifact,
     collect_provider_sample,
@@ -595,6 +596,22 @@ class CommandLineTests(unittest.TestCase):
 
 
 class ReportTests(unittest.TestCase):
+    def test_authorization_failure_blocks_backfill_gate(self):
+        decision = _coverage_gate(
+            {
+                "confirmation_rate": {
+                    "value": 0.9,
+                },
+                "confirmation_sources": {
+                    "provider_assisted": 10,
+                    "sec_only": 0,
+                },
+            },
+            {"authorization_error": 1},
+        )
+
+        self.assertEqual(decision, "provider_access_blocked")
+
     def test_reports_are_deterministic_machine_readable_and_secret_free(self):
         result = {
             "catalog_sha256": "a" * 64,

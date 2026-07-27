@@ -706,6 +706,10 @@ def run_coverage_pilot(
         header_result,
         usage,
     )
+    experiment_decision = _coverage_gate(
+        summary,
+        provider_result["status_counts"],
+    )
     return {
         "catalog_sha256": catalog_sha256,
         "sample_sha256": sample_sha256,
@@ -713,6 +717,8 @@ def run_coverage_pilot(
         "sample_count": len(sample),
         "decision_counts": dict(sorted(decision_counts.items())),
         "provider_status_counts": provider_result["status_counts"],
+        "sec_strategy": sec_strategy,
+        "experiment_decision": experiment_decision,
         "sic_status_counts": header_result["status_counts"],
         "sic_observation_count": len(header_result["observations"]),
         "reference_integrity": integrity,
@@ -722,10 +728,14 @@ def run_coverage_pilot(
             "sic_interval": INTERVAL_RULE_VERSION,
         },
         "cache_hashes": {
-            "sec_submissions": sec_artifact["sha256"],
+            (
+                "sec_submissions"
+                if sec_strategy == "bulk"
+                else "sec_targeted_entities"
+            ): sec_artifact["sha256"],
         },
         "protected_database_hashes": {
-            str(Path(path)): _sha256_file(path)
+            Path(path).name: _sha256_file(path)
             for path in protected_db_paths
         },
         "summary": summary,
@@ -741,6 +751,11 @@ def write_coverage_reports(prefix, result):
         "catalog_sha256": result.get("catalog_sha256"),
         "sample_sha256": result.get("sample_sha256"),
         "sample_version": result.get("sample_version"),
+        "sec_strategy": result.get("sec_strategy"),
+        "experiment_decision": result.get("experiment_decision"),
+        "provider_status_counts": dict(sorted(
+            (result.get("provider_status_counts") or {}).items()
+        )),
         "rule_versions": dict(sorted(
             (result.get("rule_versions") or {}).items()
         )),
@@ -809,6 +824,15 @@ def write_coverage_reports(prefix, result):
         f"- 已拒绝：{counts.get('rejected', 0)}",
         f"- 未解决：{counts.get('unresolved', 0)}",
         f"- 确认率：{rate_text}",
+        (
+            "- 实验门槛结论："
+            f"`{safe['experiment_decision'] or 'not_evaluated'}`"
+        ),
+        (
+            "- 供应商请求状态："
+            f"`{json.dumps(safe['provider_status_counts'], sort_keys=True)}`"
+        ),
+        f"- SEC 采集策略：`{safe['sec_strategy']}`",
         "",
         "## 证据边界",
         "",
@@ -816,6 +840,10 @@ def write_coverage_reports(prefix, result):
         "- EODHD 行业字段只作为当前快照，不回填历史分类。",
         "- SIC 仅从 SEC 文件头提取，并按可获得时间生效。",
         "- 原始供应商响应、认证 URL 和 API 密钥不进入报告。",
+        (
+            "- 当门槛结论为 `provider_access_blocked` 时，"
+            "覆盖率与全量成本投影不能用于决定回填。"
+        ),
         "",
         "## 完整性",
         "",
@@ -824,6 +852,17 @@ def write_coverage_reports(prefix, result):
         (
             "- Reference DB："
             f"`{json.dumps(safe['reference_integrity'], sort_keys=True)}`"
+        ),
+        "- 受保护价格数据库 SHA-256：",
+        *[
+            f"  - `{name}`：`{digest}`"
+            for name, digest in safe[
+                "protected_database_hashes"
+            ].items()
+        ],
+        (
+            "- 规则版本："
+            f"`{json.dumps(safe['rule_versions'], sort_keys=True)}`"
         ),
         "",
     ]
@@ -836,6 +875,19 @@ def write_coverage_reports(prefix, result):
         "json": str(json_path),
         "csv": str(csv_path),
     }
+
+
+def _coverage_gate(summary, provider_status_counts):
+    if int(provider_status_counts.get("authorization_error") or 0) > 0:
+        return "provider_access_blocked"
+    rate = (summary.get("confirmation_rate") or {}).get("value")
+    sources = summary.get("confirmation_sources") or {}
+    if rate is not None and rate >= 0.5:
+        if int(sources.get("provider_assisted") or 0) > 0:
+            return "full_backfill_recommended"
+        if int(sources.get("sec_only") or 0) > 0:
+            return "sec_only_backfill_recommended"
+    return "identity_quality_insufficient"
 
 
 def _verified_manifest(artifact_path, manifest_path):
