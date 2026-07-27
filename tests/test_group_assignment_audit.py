@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from build_research_db import build_database
+from data.market_behavior import MarketBehaviorResult
 from data.research_store import ResearchPriceStore
 from web.market_groups import REFERENCE_TICKERS
 
@@ -111,6 +112,39 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
         self.assertEqual(
             connection.execute("SELECT COUNT(*) FROM group_assignments").fetchone()[0],
             1,
+        )
+
+    def test_behavior_fallback_persists_only_the_final_assignment(self):
+        behavior = MarketBehaviorResult(
+            sector_key="financials",
+            benchmark_ticker="XLF",
+            residual_correlation=0.8,
+            residual_beta=1.1,
+            relative_return_63d=0.1,
+            common_days=252,
+            confidence=0.9,
+            agrees_with_sec=False,
+            conflict_reason="fixture behavior fallback",
+            rule_version="market_behavior_v1",
+            asof="2026-07-24",
+        )
+
+        with patch(
+            "build_research_db.classify_market_behavior",
+            return_value=behavior,
+        ):
+            self.build()
+
+        connection = sqlite3.connect(self.output_path)
+        self.assertEqual(
+            connection.execute(
+                """
+                SELECT rule_version, sector_key, classification_state
+                FROM group_assignments
+                WHERE ticker = 'ZZZZ'
+                """
+            ).fetchall(),
+            [("market_behavior_v1", "financials", "classified")],
         )
 
     def test_build_rejects_missing_standard_reference_etf_before_publication(self):

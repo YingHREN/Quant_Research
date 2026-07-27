@@ -99,6 +99,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     load_json_list(raw_root / "dividends" / f"{ticker}.json"),
                     snapshot_date=snapshot_date,
                     imported_at=imported_at,
+                    include_group_assignment=False,
                 )
                 summaries.append(summary)
             except Exception as exc:
