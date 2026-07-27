@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research.expanded_market_data import ExpandedMarketDataRepository
+from research.expanded_market_data import (
+    ExpandedMarketDataRepository,
+    ExpandedMarketDataUnavailable,
+)
 
 
 class ExpandedMarketDataRepositoryTest(unittest.TestCase):
@@ -201,6 +204,34 @@ class ExpandedMarketDataRepositoryTest(unittest.TestCase):
 
         self.assertEqual(set(histories), {"AAA"})
         self.assertEqual(histories["AAA"].index[-1].date().isoformat(), "2026-01-02")
+
+    def test_cache_token_changes_when_database_file_changes(self):
+        repository = ExpandedMarketDataRepository(self.database)
+        before = repository.cache_token()
+        stat = self.database.stat()
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                """
+                UPDATE daily_prices
+                SET adjusted_close = 206
+                WHERE ticker = 'AAA' AND date = '2026-01-05'
+                """
+            )
+        self.database.touch()
+        if self.database.stat().st_mtime_ns == stat.st_mtime_ns:
+            self.database.touch()
+
+        after = repository.cache_token()
+
+        self.assertNotEqual(before, after)
+
+    def test_missing_database_raises_typed_unavailability(self):
+        repository = ExpandedMarketDataRepository(
+            Path(self.temporary.name) / "missing.db"
+        )
+
+        with self.assertRaises(ExpandedMarketDataUnavailable):
+            repository.load_universe_histories(tickers=("SPY",))
 
     def test_loads_latest_classification_per_taxonomy(self):
         repository = ExpandedMarketDataRepository(self.database)

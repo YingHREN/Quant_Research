@@ -17,6 +17,10 @@ from web.contracts import iso_date
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 
 
+class ExpandedMarketDataUnavailable(RuntimeError):
+    """Raised when the expanded research database cannot be read."""
+
+
 class ExpandedMarketDataRepository:
     """Load the latest identity segment without mutating research storage."""
 
@@ -25,14 +29,27 @@ class ExpandedMarketDataRepository:
 
     @contextmanager
     def _connect(self):
-        connection = sqlite3.connect(
-            f"{self.database.resolve().as_uri()}?mode=ro",
-            uri=True,
-        )
+        connection = None
         try:
+            connection = sqlite3.connect(
+                f"{self.database.resolve().as_uri()}?mode=ro",
+                uri=True,
+            )
             yield connection
+        except (OSError, sqlite3.Error) as error:
+            raise ExpandedMarketDataUnavailable(
+                "expanded research market data is unavailable"
+            ) from error
         finally:
-            connection.close()
+            if connection is not None:
+                connection.close()
+
+    def cache_token(self):
+        try:
+            stat = self.database.stat()
+        except OSError:
+            return ("research_prices", "unavailable")
+        return ("research_prices", stat.st_mtime_ns, stat.st_size)
 
     def load_universe_histories(
         self,
