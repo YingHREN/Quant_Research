@@ -100,4 +100,4 @@
 - [x] 更新中文 TODO，只关闭已获得真实证据的历史成员子项。
 - [x] 运行 `LOKY_MAX_CPU_COUNT=8 PYTHONWARNINGS=error venv/bin/python -m unittest discover -s tests -q`。
 - [x] 运行 `git diff --check` 并核对无 token、数据库 WAL/SHM 或临时文件进入提交。
-- [ ] 合入 main，合并后再次运行完整测试。
+- [x] 合入 main，合并后再次运行完整测试。
