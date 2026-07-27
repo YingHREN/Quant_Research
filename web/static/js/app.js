@@ -488,6 +488,36 @@ function renderStockHeader(payload) {
       locale,
     ),
   );
+  const membership = payload.pool_membership || {};
+  const pool = membership.active && membership.research
+    ? "both"
+    : membership.research ? "research" : "active";
+  setText(elements.securityPoolState, t(`universe.pool.${pool}`, {}, locale));
+  elements.securityPoolState.dataset.tone = pool === "research" ? "watch" : "neutral";
+  const gate = payload.technical_gate || {};
+  const gateState = ["pass", "fail", "missing"].includes(gate.state)
+    ? gate.state
+    : "missing";
+  setText(
+    elements.securityGateState,
+    Number.isFinite(gate.passed_conditions)
+      ? t(
+        "universe.gate.score",
+        {
+          passed: gate.passed_conditions,
+          total: gate.condition_count ?? 4,
+        },
+        locale,
+      )
+      : t(`universe.gate.${gateState}`, {}, locale),
+  );
+  elements.securityGateState.dataset.tone = gateState === "pass"
+    ? "current"
+    : gateState === "fail" ? "danger" : "unavailable";
+  elements.securityGateState.setAttribute(
+    "title",
+    t("universe.gate.explanation", {}, locale),
+  );
   renderTopRiskBadge(payload.top_risk, elements.topRiskState, locale);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
@@ -821,6 +851,8 @@ function captureElements() {
     observationDate: byId("observation-date"),
     securityState: byId("security-state"),
     securityRsState: byId("security-rs-state"),
+    securityPoolState: byId("security-pool-state"),
+    securityGateState: byId("security-gate-state"),
     topRiskState: byId("top-risk-state"),
     securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),

@@ -101,6 +101,7 @@
             <option value="latest_date" data-i18n="universe.sort.freshness">Data freshness</option>
             <option value="momentum_percentile" data-i18n="universe.sort.momentum">Momentum percentile</option>
             <option value="rs_rating" data-i18n="universe.sort.rs">横截面 RS</option>
+            <option value="technical_gate_score" data-i18n="universe.sort.technicalGate">技术门槛得分</option>
             <option value="shape_state" data-i18n="universe.sort.shape">Shape state</option>
             <option value="volatility" data-i18n="universe.sort.volatility">Volatility</option>
           </select>
@@ -113,6 +114,11 @@
 
       <fieldset class="filter-set">
         <legend data-i18n="universe.filters.legend">Filters</legend>
+        <label><input type="checkbox" data-filter="activePool"> <span data-i18n="universe.filters.activePool">Active pool</span></label>
+        <label><input type="checkbox" data-filter="researchOnly"> <span data-i18n="universe.filters.researchOnly">Research-only pool</span></label>
+        <label><input type="checkbox" data-filter="gatePass"> <span data-i18n="universe.filters.gatePass">Technical gate passed</span></label>
+        <label><input type="checkbox" data-filter="gateFail"> <span data-i18n="universe.filters.gateFail">Technical gate failed</span></label>
+        <label><input type="checkbox" data-filter="gateMissing"> <span data-i18n="universe.filters.gateMissing">Technical gate unavailable</span></label>
         <label><input type="checkbox" data-filter="strictVcp"> <span data-i18n="universe.filters.strictVcp">Bullish breakout setup (Strict VCP)</span></label>
         <label><input type="checkbox" data-filter="tightPlatform"> <span data-i18n="universe.filters.tightPlatform">Bullish breakout setup (tight platform)</span></label>
         <label><input type="checkbox" data-filter="nearPivot"> <span data-i18n="universe.filters.nearPivot">Near pivot</span></label>
@@ -123,6 +129,9 @@
       </fieldset>
       <p class="filter-note" data-i18n="universe.rs.disclaimer">
         横截面 RS 为本站公开公式排名，不是 IBD 专有 RS Rating。
+      </p>
+      <p class="filter-note" data-i18n="universe.gate.explanation">
+        技术门槛检查价格高于 SMA50、EMA10 高于 EMA20、两条均线向上及距 52 周高点不超过 20%；它不是完整 CAN SLIM 或买入信号。
       </p>
 
       <p id="universe-status" class="inline-status" role="status" aria-live="polite" data-i18n="universe.loading">
@@ -145,6 +154,10 @@
               <span id="security-state" class="state-badge" data-i18n="security.state.waiting">Waiting</span>
               <span id="security-rs-state" class="state-badge" data-tone="unavailable"
                     data-i18n="universe.rs.unavailable">RS 不可用</span>
+              <span id="security-pool-state" class="state-badge" data-tone="neutral"
+                    data-i18n="universe.pool.active">主动</span>
+              <span id="security-gate-state" class="state-badge" data-tone="unavailable"
+                    data-i18n="universe.gate.missing">门槛缺失</span>
               <span id="top-risk-state" class="state-badge top-risk-badge" data-tone="unavailable"
                     data-i18n="topRisk.badge.unavailable">Top risk unavailable</span>
             </div>

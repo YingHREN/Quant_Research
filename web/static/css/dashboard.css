@@ -208,6 +208,9 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   align-items: center;
   justify-content: flex-end;
 }
+.state-badge[data-tone="current"] { border-color: #257c71; color: var(--accent); }
+.state-badge[data-tone="watch"] { border-color: #8a6a2b; color: var(--warning); }
+.state-badge[data-tone="danger"] { border-color: #7c3947; color: var(--danger); }
 .top-risk-badge {
   min-width: 8.5rem;
   text-align: center;
@@ -281,6 +284,20 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   font-weight: 500;
 }
 .ticker-rs { color: var(--accent); font-weight: 750; }
+.ticker-pool,
+.ticker-gate {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 0.62rem;
+  line-height: 1.2;
+}
+.ticker-pool[data-pool="research"] { color: #8ec5ff; border-color: #315f82; }
+.ticker-pool[data-pool="both"] { color: var(--accent); border-color: #257c71; }
+.ticker-gate[data-state="pass"] { color: var(--accent); border-color: #257c71; }
+.ticker-gate[data-state="fail"] { color: var(--danger); border-color: #7c3947; }
+.ticker-gate[data-state="missing"] { color: var(--muted); }
 .filter-note { margin: 8px 0 0; color: var(--muted); font-size: .68rem; line-height: 1.45; }
 .ticker-state[data-state="inactive"] { color: var(--warning); }
 .ticker-state[data-state="stale"] { color: var(--warning); }

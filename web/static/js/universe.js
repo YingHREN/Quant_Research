@@ -47,6 +47,24 @@ export function filterTickers(rows, query = "", filters = {}) {
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
     if (filters.inactive && !(row.inactive || row.stale)) return false;
+    const membership = row.pool_membership ?? row.poolMembership ?? {
+      active: true,
+      research: false,
+    };
+    const selectedPools = [];
+    if (filters.activePool) selectedPools.push(Boolean(membership.active));
+    if (filters.researchOnly) {
+      selectedPools.push(Boolean(membership.research && !membership.active));
+    }
+    if (selectedPools.length && !selectedPools.some(Boolean)) return false;
+    const gateState = row.technical_gate?.state
+      ?? row.technicalGate?.state
+      ?? "missing";
+    const selectedGateStates = [];
+    if (filters.gatePass) selectedGateStates.push(gateState === "pass");
+    if (filters.gateFail) selectedGateStates.push(gateState === "fail");
+    if (filters.gateMissing) selectedGateStates.push(gateState === "missing");
+    if (selectedGateStates.length && !selectedGateStates.some(Boolean)) return false;
     const rsThreshold = filters.rs90 ? 90 : filters.rs80 ? 80 : null;
     if (
       rsThreshold !== null
@@ -68,6 +86,12 @@ export function filterTickers(rows, query = "", filters = {}) {
 function sortableValue(row, key) {
   if (key === "shape_state") {
     return row.shape_state ?? row.shapeState ?? "";
+  }
+  if (key === "technical_gate_score") {
+    const gate = row.technical_gate ?? row.technicalGate;
+    return Number.isFinite(gate?.passed_conditions)
+      ? gate.passed_conditions
+      : null;
   }
   return row[key] ?? null;
 }
@@ -117,6 +141,30 @@ function sectorLabel(sectorKey, locale) {
   return localized === key ? String(sectorKey).replaceAll("_", " ") : localized;
 }
 
+function poolState(row) {
+  const membership = row.pool_membership ?? row.poolMembership ?? {
+    active: true,
+    research: false,
+  };
+  if (membership.active && membership.research) return "both";
+  if (membership.research) return "research";
+  return "active";
+}
+
+function gateState(row) {
+  const gate = row.technical_gate ?? row.technicalGate ?? {};
+  const state = ["pass", "fail", "missing"].includes(gate.state)
+    ? gate.state
+    : "missing";
+  return {
+    state,
+    passed: Number.isFinite(gate.passed_conditions)
+      ? gate.passed_conditions
+      : null,
+    total: Number.isFinite(gate.condition_count) ? gate.condition_count : 4,
+  };
+}
+
 export function describeTickerState(row = {}, locale = getLocale()) {
   return {
     status: t(
@@ -161,6 +209,27 @@ export function renderUniverse(container, rows, options = {}) {
     const description = describeTickerState(row, locale);
     const state = appendText(headline, "ticker-state", description.status);
     state.dataset.state = row.inactive ? "inactive" : row.stale ? "stale" : "current";
+    const pool = poolState(row);
+    const poolBadge = appendText(
+      headline,
+      "ticker-pool",
+      t(`universe.pool.${pool}`, {}, locale),
+    );
+    poolBadge.dataset.pool = pool;
+    const gate = gateState(row);
+    const gateBadge = appendText(
+      headline,
+      "ticker-gate",
+      gate.passed == null
+        ? t(`universe.gate.${gate.state}`, {}, locale)
+        : t(
+          "universe.gate.score",
+          { passed: gate.passed, total: gate.total },
+          locale,
+        ),
+    );
+    gateBadge.dataset.state = gate.state;
+    gateBadge.title = t("universe.gate.explanation", {}, locale);
     appendText(headline, "ticker-shape", description.shape);
 
     const metadata = document.createElement("span");

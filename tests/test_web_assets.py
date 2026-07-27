@@ -369,18 +369,24 @@ class WebAssetTest(unittest.TestCase):
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, stale: false, strict_vcp: true, tight_platform: false,
                 near_pivot: true, momentum_percentile: 92, volatility: 18, rs_rating: 95,
+                pool_membership: {{active: true, research: true}},
+                technical_gate: {{state: 'pass', passed_conditions: 4, condition_count: 4}},
                 sector_classification: {{state: 'agree',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'technology'}}}}}},
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, stale: true, strict_vcp: false, tight_platform: true,
                 near_pivot: false, momentum_percentile: 71, volatility: 24, rs_rating: 84,
+                pool_membership: {{active: true, research: false}},
+                technical_gate: {{state: 'fail', passed_conditions: 2, condition_count: 4}},
                 sector_classification: {{state: 'conflict',
                   sec: {{sector_key: 'technology'}},
                   market_behavior: {{sector_key: 'financials'}}}}}},
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
                 near_pivot: true, momentum_percentile: null, volatility: null, rs_rating: null,
+                pool_membership: {{active: false, research: true}},
+                technical_gate: {{state: 'missing', passed_conditions: 0, condition_count: 4}},
                 sector_classification: {{state: 'unclassified',
                   sec: null, market_behavior: null}}}}
             ];
@@ -412,9 +418,25 @@ class WebAssetTest(unittest.TestCase):
             const behaviorUnclassified = filterTickers(rows, '', {{
               sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
             }}).map(row => row.ticker);
+            const activePool = filterTickers(rows, '', {{activePool: true}})
+              .map(row => row.ticker);
+            const researchOnly = filterTickers(rows, '', {{researchOnly: true}})
+              .map(row => row.ticker);
+            const eitherPool = filterTickers(
+              rows, '', {{activePool: true, researchOnly: true}}
+            ).map(row => row.ticker);
+            const gatePass = filterTickers(rows, '', {{gatePass: true}})
+              .map(row => row.ticker);
+            const gateFail = filterTickers(rows, '', {{gateFail: true}})
+              .map(row => row.ticker);
+            const gateMissing = filterTickers(rows, '', {{gateMissing: true}})
+              .map(row => row.ticker);
+            const gateSorted = sortTickers(rows, 'technical_gate_score', 'desc')
+              .map(row => row.ticker);
             console.log(JSON.stringify({{
               searched, filtered, eitherShape, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
-              behaviorFinancials, behaviorUnclassified,
+              behaviorFinancials, behaviorUnclassified, activePool, researchOnly, eitherPool,
+              gatePass, gateFail, gateMissing, gateSorted,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
             }}));
@@ -440,6 +462,13 @@ class WebAssetTest(unittest.TestCase):
                 "secTechnology": ["MSFT", "AAPL"],
                 "behaviorFinancials": ["AAPL"],
                 "behaviorUnclassified": ["OLD"],
+                "activePool": ["MSFT", "AAPL"],
+                "researchOnly": ["OLD"],
+                "eitherPool": ["MSFT", "AAPL", "OLD"],
+                "gatePass": ["MSFT"],
+                "gateFail": ["AAPL"],
+                "gateMissing": ["OLD"],
+                "gateSorted": ["MSFT", "AAPL", "OLD"],
                 "aaplBehavior": "financials",
                 "unchanged": True,
             },
@@ -567,6 +596,10 @@ class WebAssetTest(unittest.TestCase):
         for key in (
             "header.latestDate",
             "universe.filters.strictVcp",
+            "universe.filters.activePool",
+            "universe.filters.researchOnly",
+            "universe.filters.gatePass",
+            "universe.gate.explanation",
             "security.state.stale",
             "chart.range.3m",
             "factor.title",
@@ -577,6 +610,8 @@ class WebAssetTest(unittest.TestCase):
         for marker in (
             'data-i18n="header.latestDate"',
             'data-i18n="universe.filters.strictVcp"',
+            'data-i18n="universe.filters.activePool"',
+            'data-i18n="universe.filters.gatePass"',
             'data-i18n="factor.title"',
             'data-i18n="scenario.disclaimer"',
             'data-i18n-aria-label="chart.priceAria"',

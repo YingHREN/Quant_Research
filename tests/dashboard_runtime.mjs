@@ -87,6 +87,7 @@ function byClass(node, className) {
 const ids = [
   "universe-list", "universe-count", "universe-status", "universe-retry",
   "universe-search", "sort-key",
+  "security-pool-state", "security-gate-state",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
   "market-date", "market-coverage", "selected-ticker", "selected-close",
   "selected-change", "observation-date", "security-state", "research-status", "stock-retry",
