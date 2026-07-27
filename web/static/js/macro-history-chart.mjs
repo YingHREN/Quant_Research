@@ -125,10 +125,13 @@ function addLine(chart, title, color, options = {}) {
   });
 }
 
-function numericData(rows, getter) {
-  return rows.flatMap((row) => {
-    const value = Number(getter(row));
-    return Number.isFinite(value) ? [{ time: row.time, value }] : [];
+export function chartSeriesData(rows, getter) {
+  return rows.map((row) => {
+    const raw = getter(row);
+    const value = raw == null ? Number.NaN : Number(raw);
+    return Number.isFinite(value)
+      ? { time: row.time, value }
+      : { time: row.time };
   });
 }
 
@@ -358,7 +361,7 @@ export function createMacroHistoryCharts({
       title: tr(`market.macro.history.series.${selectedSeries}`),
     });
     macroSeries.setData(
-      numericData(
+      chartSeriesData(
         payload.rows || [],
         (row) => row.series?.[selectedSeries]?.value,
       ),
@@ -472,15 +475,15 @@ export function createMacroHistoryCharts({
       const rows = payload.rows || [];
       selection.replaceRows(rows);
       populateSeries();
-      totalSeries.setData(numericData(rows, (row) => row.score));
+      totalSeries.setData(chartSeriesData(rows, (row) => row.score));
       for (const key of COMPONENTS) {
         componentSeries[key].setData(
-          numericData(rows, (row) => row.components?.[key]?.score),
+          chartSeriesData(rows, (row) => row.components?.[key]?.score),
         );
       }
       benchmarkSeries.applyOptions({ title: payload.benchmark || "SPY" });
       benchmarkSeries.setData(
-        numericData(rows, (row) => row.benchmark_normalized),
+        chartSeriesData(rows, (row) => row.benchmark_normalized),
       );
       updateContextSeries();
       scoreChart.timeScale().fitContent();

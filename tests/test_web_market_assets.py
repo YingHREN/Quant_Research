@@ -40,7 +40,16 @@ class MarketAssetTest(unittest.TestCase):
             ROOT / "web/static/js/macro-history-chart.mjs"
         ).resolve()
         script = f"""
-          import {{ createSelectionState }} from {module.as_uri()!r};
+          import {{
+            chartSeriesData,
+            createSelectionState,
+          }} from {module.as_uri()!r};
+          const gaps = chartSeriesData([
+            {{ time: "2026-06-30", value: null }},
+            {{ time: "2026-07-01", value: 25 }},
+          ], row => row.value);
+          if (Object.hasOwn(gaps[0], "value")) process.exit(1);
+          if (gaps[1].value !== 25) process.exit(5);
           const selection = createSelectionState([
             {{ time: "2026-07-01" }},
             {{ time: "2026-07-02" }},
