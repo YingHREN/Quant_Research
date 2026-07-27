@@ -121,6 +121,50 @@ class FakeClassificationService:
         }
 
 
+def _sndk_assignment():
+    return {
+        "state": "assigned",
+        "ticker": "SNDK",
+        "rule_version": "security_group_overrides_v1",
+        "effective_from": "2025-02-24",
+        "effective_to": "9999-12-31",
+        "observed_at": "2026-07-21",
+        "sector_key": "technology",
+        "sector_benchmark": "XLK",
+        "theme_keys": ["semiconductor"],
+        "theme_benchmarks": {"semiconductor": ["SOXX", "SMH"]},
+        "primary_model_group": "semiconductor",
+        "classification_state": "classified",
+        "source": "manual_override",
+        "confidence": 1.0,
+        "override_reason": "flash memory and storage semiconductor exposure",
+    }
+
+
+class FakeGroupingClassificationService(FakeClassificationService):
+    def build(self, tickers):
+        payload = super().build(tickers)
+        for ticker, classification in payload["by_ticker"].items():
+            classification["group_assignment"] = (
+                _sndk_assignment()
+                if ticker == "SNDK"
+                else {
+                    "state": "missing",
+                    "reason": "no_assignment_effective_at_asof",
+                }
+            )
+        payload.update(
+            {
+                "group_assignment_status": "available",
+                "group_assignment_asof": "2026-07-21",
+                "group_assignment_revision": 41,
+                "group_assignment_coverage": 0.5,
+                "group_assignment_review_count": 0,
+            }
+        )
+        return payload
+
+
 class FakeRelativeStrengthService:
     def __init__(self):
         self.calls = []
@@ -302,6 +346,71 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         self.assertEqual(
             set(classifications.calls[0]),
             set(repository.histories),
+        )
+
+    def test_build_exposes_the_repository_group_assignment_on_each_row(self):
+        repository = FakeRepository()
+        repository.histories = {
+            "SNDK": _history(),
+            "NBIS": _history(),
+            "SPY": _history(),
+        }
+        service = UniverseSnapshotService(
+            repository,
+            _registry(),
+            classification_service=FakeGroupingClassificationService(),
+        )
+
+        payload = service.build()
+
+        by_ticker = {row["ticker"]: row for row in payload["tickers"]}
+        self.assertEqual(by_ticker["SNDK"]["group_assignment"], _sndk_assignment())
+        self.assertEqual(
+            {
+                key: by_ticker["SNDK"]["group_assignment"][key]
+                for key in (
+                    "sector_key",
+                    "sector_benchmark",
+                    "theme_keys",
+                    "theme_benchmarks",
+                    "primary_model_group",
+                )
+            },
+            {
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {"semiconductor": ["SOXX", "SMH"]},
+                "primary_model_group": "semiconductor",
+            },
+        )
+        self.assertEqual(
+            by_ticker["NBIS"]["group_assignment"],
+            {
+                "state": "missing",
+                "reason": "no_assignment_effective_at_asof",
+            },
+        )
+        self.assertNotIn(
+            "group_assignment",
+            by_ticker["SNDK"]["sector_classification"],
+        )
+
+    def test_unavailable_classification_keeps_a_stable_assignment_reason(self):
+        payload = UniverseSnapshotService(
+            FakeRepository(),
+            _registry(),
+        ).build()
+
+        self.assertTrue(
+            all(
+                row["group_assignment"]
+                == {
+                    "state": "missing",
+                    "reason": "assignment_repository_unavailable",
+                }
+                for row in payload["tickers"]
+            )
         )
 
     def test_build_merges_precomputed_relative_strength(self):

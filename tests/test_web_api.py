@@ -201,6 +201,10 @@ class FakeResearchClassificationService:
                     "state": "unclassified",
                     "sec": None,
                     "market_behavior": None,
+                    "group_assignment": {
+                        "state": "missing",
+                        "reason": "no_assignment_effective_at_asof",
+                    },
                 }
                 for ticker in tickers
             },
@@ -678,6 +682,30 @@ class SndkGroupAssignmentRepository:
         }
 
 
+class SndkResearchClassificationService(FakeResearchClassificationService):
+    def build(self, tickers):
+        payload = super().build(tickers)
+        if "SNDK" in payload["by_ticker"]:
+            payload["by_ticker"]["SNDK"]["group_assignment"] = sndk_assignment()
+        payload.update(
+            {
+                "group_assignment_status": "available",
+                "group_assignment_asof": "2026-07-21",
+                "group_assignment_revision": 41,
+                "group_assignment_coverage": (
+                    1.0 / len(tuple(tickers)) if tickers else 1.0
+                ),
+                "group_assignment_review_count": 0,
+            }
+        )
+        return payload
+
+
+class UnavailableGroupAssignmentRepository:
+    def build(self, tickers, asof=None):
+        raise OSError("fixture repository unavailable")
+
+
 def sndk_top_risk_histories():
     index = pd.bdate_range(end="2026-07-24", periods=260)
 
@@ -828,6 +856,7 @@ class WebApiTest(unittest.TestCase):
                 "volatility_factor_key",
                 "volatility_unit",
                 "sector_classification",
+                "group_assignment",
                 "rs_rating",
                 "rs_asof",
                 "rs_sample_count",
@@ -856,6 +885,79 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertFalse(
             any(call[0] == "load_history" for call in self.repository.calls)
+        )
+
+    def test_group_assignment_contract_matches_universe_and_stock_detail(self):
+        repository = FakeRepository()
+        repository.histories["SNDK"] = price_history(offset=30)
+        assignment_repository = SndkGroupAssignmentRepository()
+        app = create_app(
+            test_config(
+                RESEARCH_CLASSIFICATION_SERVICE=(
+                    SndkResearchClassificationService()
+                ),
+                GROUP_ASSIGNMENT_REPOSITORY=assignment_repository,
+            ),
+            repository,
+            self.manager,
+        )
+        client = app.test_client()
+
+        universe = client.get("/api/universe")
+        detail = client.get("/api/stocks/SNDK")
+
+        self.assertEqual(universe.status_code, 200)
+        self.assertEqual(detail.status_code, 200)
+        universe_row = next(
+            row
+            for row in universe.json["tickers"]
+            if row["ticker"] == "SNDK"
+        )
+        self.assertEqual(
+            universe_row["group_assignment"],
+            detail.json["group_assignment"],
+        )
+        self.assertEqual(
+            {
+                key: detail.json["group_assignment"][key]
+                for key in (
+                    "sector_key",
+                    "sector_benchmark",
+                    "theme_keys",
+                    "theme_benchmarks",
+                    "primary_model_group",
+                )
+            },
+            {
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {"semiconductor": ["SOXX", "SMH"]},
+                "primary_model_group": "semiconductor",
+            },
+        )
+
+    def test_assignment_repository_failure_does_not_break_stock_chart(self):
+        app = create_app(
+            test_config(
+                GROUP_ASSIGNMENT_REPOSITORY=(
+                    UnavailableGroupAssignmentRepository()
+                )
+            ),
+            self.repository,
+            self.manager,
+        )
+
+        response = app.test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json["chart"])
+        self.assertEqual(
+            response.json["group_assignment"],
+            {
+                "state": "missing",
+                "reason": "assignment_repository_unavailable",
+            },
         )
 
     def test_cache_status_returns_safe_service_telemetry(self):
@@ -1134,6 +1236,7 @@ class WebApiTest(unittest.TestCase):
                 "pool_membership",
                 "technical_gate",
                 "market_gate",
+                "group_assignment",
             },
         )
         self.assertEqual(

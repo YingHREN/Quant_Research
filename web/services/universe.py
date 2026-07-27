@@ -395,7 +395,7 @@ def _research_status(snapshot):
 def merge_sector_classifications(rows, payload):
     by_ticker = payload.get("by_ticker", {})
     for row in rows:
-        row["sector_classification"] = deepcopy(
+        classification = deepcopy(
             by_ticker.get(
                 row["ticker"],
                 {
@@ -405,6 +405,11 @@ def merge_sector_classifications(rows, payload):
                 },
             )
         )
+        row["group_assignment"] = classification.pop(
+            "group_assignment",
+            _missing_group_assignment("assignment_repository_unavailable"),
+        )
+        row["sector_classification"] = classification
     return rows
 
 
@@ -434,10 +439,17 @@ def _unavailable_classifications(tickers):
                 "state": "unclassified",
                 "sec": None,
                 "market_behavior": None,
+                "group_assignment": _missing_group_assignment(
+                    "assignment_repository_unavailable"
+                ),
             }
             for ticker in tickers
         },
     }
+
+
+def _missing_group_assignment(reason):
+    return {"state": "missing", "reason": reason}
 
 
 def _unavailable_relative_strength(tickers):

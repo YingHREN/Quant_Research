@@ -484,17 +484,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             )
             forecast_payload = None
             top_risk = None
-            research_assignments = None
-            research_assignment_revision = None
+            (
+                research_assignments,
+                research_assignment_revision,
+            ) = _load_assignment_snapshot(
+                group_assignment_repository,
+                research_snapshot.histories,
+                research_snapshot.asof,
+            )
             if research_member:
-                (
-                    research_assignments,
-                    research_assignment_revision,
-                ) = _load_assignment_snapshot(
-                    group_assignment_repository,
-                    research_snapshot.histories,
-                    research_snapshot.asof,
-                )
                 research_forecast_arguments = (
                     normalized_ticker,
                     tuple(
@@ -731,6 +729,10 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "top_risk": top_risk,
             "technical_gate": technical_gate,
             "market_gate": market_gate,
+            "group_assignment": _assignment_for_ticker(
+                assignments,
+                normalized_ticker,
+            ),
         }
         return _json_response(
             apply_stock_research_pool_membership(
@@ -1087,11 +1089,20 @@ def _optional_number(value):
 
 
 def _load_assignment_snapshot(repository, tickers, asof):
+    normalized_tickers = tuple(
+        sorted(
+            {
+                str(ticker).strip().upper()
+                for ticker in tickers
+                if str(ticker).strip()
+            }
+        )
+    )
     builder = getattr(repository, "build", None)
     if not callable(builder):
         return None, None
     try:
-        payload = builder(tickers, asof=asof)
+        payload = builder(normalized_tickers, asof=asof)
     except Exception:
         return None, None
     if (
@@ -1101,6 +1112,18 @@ def _load_assignment_snapshot(repository, tickers, asof):
     ):
         return None, None
     return payload["by_ticker"], payload.get("revision")
+
+
+def _missing_group_assignment(reason):
+    return {"state": "missing", "reason": reason}
+
+
+def _assignment_for_ticker(assignments, ticker):
+    if isinstance(assignments, Mapping):
+        assignment = assignments.get(ticker)
+        if isinstance(assignment, Mapping):
+            return dict(assignment)
+    return _missing_group_assignment("assignment_repository_unavailable")
 
 
 def _assignment_options(assignments, assignment_revision):
@@ -1327,6 +1350,7 @@ def _research_stock_payload(
         "top_risk": top_risk,
         "technical_gate": technical_gate,
         "market_gate": market_gate,
+        "group_assignment": _assignment_for_ticker(assignments, ticker),
     }
 
 
