@@ -52,8 +52,9 @@ def audit_database(database_path, *, asof=None):
 
     active = set(active_tickers)
     rows = tuple(row for row in rows if row["ticker"] in active)
-    conflicts = _range_conflicts(rows)
-    current_by_ticker = _current_assignments(rows, observation_date)
+    valid_rows, conflicts = _validated_interval_rows(rows)
+    conflicts.extend(_range_conflicts(valid_rows))
+    current_by_ticker = _current_assignments(valid_rows, observation_date)
     selected = {
         ticker: candidates[-1]
         for ticker, candidates in current_by_ticker.items()
@@ -76,7 +77,7 @@ def audit_database(database_path, *, asof=None):
         )
         for theme in themes:
             theme_counts[theme] = theme_counts.get(theme, 0) + 1
-        conflicts.extend(_state_conflicts(ticker, row))
+        conflicts.extend(_state_conflicts(ticker, row, themes))
 
     assigned = len(selected)
     total = len(active_tickers)
@@ -171,6 +172,48 @@ def _current_assignments(rows, asof):
     for candidates in current.values():
         candidates.sort(key=lambda row: (row["effective_from"], row["rule_version"]))
     return current
+
+
+def _validated_interval_rows(rows):
+    valid_rows = []
+    findings = []
+    for row in rows:
+        parsed = {}
+        for field in ("effective_from", "effective_to"):
+            value = row[field]
+            if field == "effective_to" and value is None:
+                parsed[field] = None
+                continue
+            try:
+                parsed[field] = date.fromisoformat(str(value))
+            except (TypeError, ValueError):
+                findings.append(
+                    {
+                        "actual": value,
+                        "field": field,
+                        "kind": "invalid_effective_date",
+                        "rule_version": row["rule_version"],
+                        "ticker": row["ticker"],
+                    }
+                )
+        if len(parsed) != 2:
+            continue
+        if (
+            parsed["effective_to"] is not None
+            and parsed["effective_from"] >= parsed["effective_to"]
+        ):
+            findings.append(
+                {
+                    "effective_from": row["effective_from"],
+                    "effective_to": row["effective_to"],
+                    "kind": "invalid_effective_range",
+                    "rule_version": row["rule_version"],
+                    "ticker": row["ticker"],
+                }
+            )
+            continue
+        valid_rows.append(row)
+    return tuple(valid_rows), findings
 
 
 def _range_conflicts(rows):
@@ -338,12 +381,44 @@ def _benchmark_findings(ticker, row, themes, theme_benchmarks):
     return findings
 
 
-def _state_conflicts(ticker, row):
+def _state_conflicts(ticker, row, themes):
+    findings = []
     explicit_review = row["sector_key"] == REVIEW_SECTOR_KEY
-    review_state = row["classification_state"] == "needs_review"
-    if explicit_review == review_state:
-        return []
-    return [{"kind": "inconsistent_review_state", "ticker": ticker}]
+    expected_state = "needs_review" if explicit_review else "classified"
+    if row["classification_state"] != expected_state:
+        findings.append(
+            {
+                "actual": row["classification_state"],
+                "expected": expected_state,
+                "kind": "invalid_classification_state",
+                "ticker": ticker,
+            }
+        )
+    if explicit_review:
+        if themes:
+            findings.append(
+                {
+                    "actual": themes,
+                    "expected": [],
+                    "kind": "review_has_themes",
+                    "ticker": ticker,
+                }
+            )
+        expected_primary = REVIEW_SECTOR_KEY
+        allowed_primary = {expected_primary}
+    else:
+        allowed_primary = {row["sector_key"], *themes}
+        expected_primary = sorted(allowed_primary)
+    if row["primary_model_group"] not in allowed_primary:
+        findings.append(
+            {
+                "actual": row["primary_model_group"],
+                "expected": expected_primary,
+                "kind": "invalid_primary_model_group",
+                "ticker": ticker,
+            }
+        )
+    return findings
 
 
 def _sorted_unique(findings):

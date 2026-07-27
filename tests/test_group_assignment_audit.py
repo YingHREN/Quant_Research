@@ -212,6 +212,85 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
         )
         self.assertTrue(strict_failure(result))
 
+    def test_audit_rejects_bogus_classified_state_and_primary_model_group(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE security_master SET active = 0 WHERE ticker = 'MISSING'"
+        )
+        connection.execute(
+            """
+            UPDATE group_assignments
+            SET classification_state = 'bogus_state',
+                primary_model_group = 'bogus_model_group'
+            WHERE ticker = 'CHIP'
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertIn(
+            {
+                "actual": "bogus_state",
+                "expected": "classified",
+                "kind": "invalid_classification_state",
+                "ticker": "CHIP",
+            },
+            result["conflicts"],
+        )
+        self.assertIn(
+            {
+                "actual": "bogus_model_group",
+                "expected": ["semiconductor", "technology"],
+                "kind": "invalid_primary_model_group",
+                "ticker": "CHIP",
+            },
+            result["conflicts"],
+        )
+        self.assertTrue(strict_failure(result))
+
+    def test_audit_rejects_themes_and_non_review_primary_group_on_review_row(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE security_master SET active = 0 WHERE ticker = 'MISSING'"
+        )
+        connection.execute(
+            """
+            UPDATE group_assignments
+            SET theme_keys_json = '["software"]',
+                theme_benchmarks_json = '{"software":["IGV","XSW"]}',
+                primary_model_group = 'software'
+            WHERE ticker = 'REVIEW'
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertIn(
+            {
+                "actual": ["software"],
+                "expected": [],
+                "kind": "review_has_themes",
+                "ticker": "REVIEW",
+            },
+            result["conflicts"],
+        )
+        self.assertIn(
+            {
+                "actual": "software",
+                "expected": "unclassified_review",
+                "kind": "invalid_primary_model_group",
+                "ticker": "REVIEW",
+            },
+            result["conflicts"],
+        )
+        self.assertTrue(strict_failure(result))
+
     def test_audit_reports_overlapping_ranges_but_allows_touching_ranges(self):
         connection = sqlite3.connect(self.database)
         connection.executemany(
@@ -257,6 +336,73 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_audit_rejects_malformed_and_non_positive_historical_ranges(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE security_master SET active = 0 WHERE ticker = 'MISSING'"
+        )
+        connection.executemany(
+            """
+            INSERT INTO group_assignments
+                (ticker, rule_version, effective_from, effective_to, observed_at,
+                 sector_key, sector_benchmark, theme_keys_json,
+                 theme_benchmarks_json, primary_model_group,
+                 classification_state, source, confidence, override_reason)
+            VALUES
+                ('CHIP', ?, ?, ?, '2026-07-24', 'technology', 'XLK',
+                 '["semiconductor"]', '{"semiconductor":["SOXX","SMH"]}',
+                 'semiconductor', 'classified', 'fixture', 1.0, NULL)
+            """,
+            [
+                ("malformed_from_v1", "2024-99-99", "2024-12-31"),
+                ("malformed_to_v1", "2024-01-01", "not-a-date"),
+                ("zero_range_v1", "2025-01-01", "2025-01-01"),
+                ("negative_range_v1", "2025-03-01", "2025-02-01"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertEqual(result["missing"], {"count": 0, "tickers": []})
+        self.assertIn(
+            {
+                "actual": "2024-99-99",
+                "field": "effective_from",
+                "kind": "invalid_effective_date",
+                "rule_version": "malformed_from_v1",
+                "ticker": "CHIP",
+            },
+            result["conflicts"],
+        )
+        self.assertIn(
+            {
+                "actual": "not-a-date",
+                "field": "effective_to",
+                "kind": "invalid_effective_date",
+                "rule_version": "malformed_to_v1",
+                "ticker": "CHIP",
+            },
+            result["conflicts"],
+        )
+        for rule_version, start, finish in (
+            ("zero_range_v1", "2025-01-01", "2025-01-01"),
+            ("negative_range_v1", "2025-03-01", "2025-02-01"),
+        ):
+            self.assertIn(
+                {
+                    "effective_from": start,
+                    "effective_to": finish,
+                    "kind": "invalid_effective_range",
+                    "rule_version": rule_version,
+                    "ticker": "CHIP",
+                },
+                result["conflicts"],
+            )
+        self.assertTrue(strict_failure(result))
 
     def test_strict_cli_prints_deterministic_json_and_exits_nonzero(self):
         command = [
