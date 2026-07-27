@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from threading import RLock
 
+from web.services.group_assignments import GroupAssignmentRepository
+
 
 TAXONOMIES = ("sec", "market_behavior")
 
@@ -32,8 +34,12 @@ class ResearchClassificationService:
         self._max_cache_size = max_cache_size
         self._cache = OrderedDict()
         self._lock = RLock()
+        self._group_assignments = GroupAssignmentRepository(
+            self.database_path,
+            max_cache_size=max_cache_size,
+        )
 
-    def build(self, tickers):
+    def build(self, tickers, asof=None):
         normalized = tuple(
             sorted(
                 {
@@ -46,8 +52,13 @@ class ResearchClassificationService:
         try:
             revision = self.database_path.stat().st_mtime_ns
         except OSError:
-            return _unavailable_payload(normalized)
-        key = (revision, normalized)
+            payload = _unavailable_payload(normalized)
+            _merge_assignments(
+                payload,
+                self._group_assignments.build(normalized, asof=asof),
+            )
+            return payload
+        key = (revision, normalized, asof)
         with self._lock:
             cached = self._cache.get(key)
             if cached is not None:
@@ -56,7 +67,9 @@ class ResearchClassificationService:
         try:
             payload = self._read(normalized)
         except (OSError, sqlite3.Error, ValueError):
-            return _unavailable_payload(normalized)
+            payload = _unavailable_payload(normalized)
+        assignment_payload = self._group_assignments.build(normalized, asof=asof)
+        _merge_assignments(payload, assignment_payload)
         with self._lock:
             self._cache[key] = deepcopy(payload)
             self._cache.move_to_end(key)
@@ -195,3 +208,13 @@ def _unavailable_payload(tickers):
         "sector_counts": {},
         "by_ticker": {ticker: _unclassified() for ticker in tickers},
     }
+
+
+def _merge_assignments(payload, assignments):
+    payload["group_assignment_status"] = assignments["status"]
+    payload["group_assignment_asof"] = assignments["asof"]
+    payload["group_assignment_revision"] = assignments["revision"]
+    payload["group_assignment_coverage"] = assignments["coverage"]
+    payload["group_assignment_review_count"] = assignments["review_count"]
+    for ticker, classification in payload["by_ticker"].items():
+        classification["group_assignment"] = assignments["by_ticker"][ticker]
