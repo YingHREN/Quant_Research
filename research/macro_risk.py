@@ -70,12 +70,13 @@ def build_macro_history_rows(observations, dates):
             for value in dates
         }
     )
+    prepared = _prepare_observations(observations)
     rows = []
     for date in normalized_dates:
         cutoff = _cutoff(date)
-        frame = _normalize_observations(observations, cutoff)
+        frame = _available_observations(prepared, cutoff)
         values, metadata = _derived_values(frame)
-        risk = build_macro_risk(frame, cutoff)
+        risk = _build_macro_risk_from_values(values, metadata, cutoff)
         series = {}
         for key in HISTORY_SERIES:
             value = values.get(key)
@@ -107,6 +108,10 @@ def build_macro_risk(observations, asof):
     cutoff = _cutoff(asof)
     frame = _normalize_observations(observations, cutoff)
     values, metadata = _derived_values(frame)
+    return _build_macro_risk_from_values(values, metadata, cutoff)
+
+
+def _build_macro_risk_from_values(values, metadata, cutoff):
     evidence = []
     available_weight = 0.0
     triggered_weight = 0.0
@@ -232,6 +237,13 @@ def unavailable_macro_risk(reason="macro_data_unavailable", asof=None):
 
 
 def _normalize_observations(observations, cutoff):
+    return _available_observations(
+        _prepare_observations(observations),
+        cutoff,
+    )
+
+
+def _prepare_observations(observations):
     frame = pd.DataFrame(observations).copy()
     required = {
         "series_id",
@@ -263,12 +275,17 @@ def _normalize_observations(observations, cutoff):
         & frame["observation_date"].notna()
         & frame["available_at"].notna()
         & frame["value"].notna()
-        & (frame["available_at"] <= cutoff)
     ].copy()
-    frame = frame.sort_values(
+    return frame.sort_values(
         ["series_id", "observation_date", "available_at", "realtime_start"]
     )
-    return frame.drop_duplicates(
+
+
+def _available_observations(frame, cutoff):
+    if frame.empty:
+        return frame.copy()
+    available = frame.loc[frame["available_at"] <= cutoff]
+    return available.drop_duplicates(
         ["series_id", "observation_date"],
         keep="last",
     )
