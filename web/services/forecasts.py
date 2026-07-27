@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Mapping
 from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import blake2b
@@ -124,6 +125,7 @@ class ForecastService:
         self._artifact_risk_context = None
         self._artifact_coverage = None
         self._artifact_fingerprints = None
+        self._artifact_assignment_identity = None
         self._last_cache_access = "miss"
         self._build_started_at = None
         self._build_finished_at = None
@@ -167,7 +169,16 @@ class ForecastService:
             )
             return base
 
-    def build(self, ticker, chart_dates, histories, *, expected_revision=None):
+    def build(
+        self,
+        ticker,
+        chart_dates,
+        histories,
+        *,
+        assignments=None,
+        assignment_revision=None,
+        expected_revision=None,
+    ):
         """Return a fresh JSON-ready bundle without mutating input histories."""
         ticker = _required_identity_value(ticker, "ticker")
         dates = _chart_dates(chart_dates)
@@ -183,15 +194,22 @@ class ForecastService:
         last_date = dates[-1] if dates else None
         coverage, fingerprints = _history_snapshot_metadata(histories)
         market_signature = _market_signature(coverage, fingerprints)
+        assignments, assignment_identity = _assignment_inputs(
+            assignments,
+            assignment_revision,
+        )
         with self._lock:
             self._check_expected_revision(expected_revision)
             _frame, provider, evaluations, risk_context = self._revision_artifacts(
                 histories,
                 coverage,
                 fingerprints,
+                assignments,
+                assignment_identity,
             )
             key = (
                 self._database_revision,
+                *assignment_identity,
                 ticker,
                 first_date,
                 last_date,
@@ -216,7 +234,14 @@ class ForecastService:
                 self._cache.popitem(last=False)
             return deepcopy(bundle)
 
-    def prewarm(self, histories, *, expected_revision=None):
+    def prewarm(
+        self,
+        histories,
+        *,
+        assignments=None,
+        assignment_revision=None,
+        expected_revision=None,
+    ):
         """Build or restore revision-wide artifacts without forecasting a ticker."""
         if not isinstance(histories, dict):
             try:
@@ -224,12 +249,18 @@ class ForecastService:
             except (TypeError, ValueError) as exc:
                 raise TypeError("histories must be a mapping") from exc
         coverage, fingerprints = _history_snapshot_metadata(histories)
+        assignments, assignment_identity = _assignment_inputs(
+            assignments,
+            assignment_revision,
+        )
         with self._lock:
             self._check_expected_revision(expected_revision)
             frame, _provider, evaluations, risk_context = self._revision_artifacts(
                 histories,
                 coverage,
                 fingerprints,
+                assignments,
+                assignment_identity,
             )
             return {
                 "database_revision": self._database_revision,
@@ -244,6 +275,8 @@ class ForecastService:
         chart_dates,
         histories,
         *,
+        assignments=None,
+        assignment_revision=None,
         expected_revision=None,
     ):
         """Return cached TOPRISK transitions for one chart date range."""
@@ -257,6 +290,10 @@ class ForecastService:
         if ticker not in histories:
             raise ValueError("histories must contain the requested ticker")
         coverage, fingerprints = _history_snapshot_metadata(histories)
+        assignments, assignment_identity = _assignment_inputs(
+            assignments,
+            assignment_revision,
+        )
         with self._lock:
             self._check_expected_revision(expected_revision)
             _frame, _provider, _evaluations, risk_context = (
@@ -264,6 +301,8 @@ class ForecastService:
                     histories,
                     coverage,
                     fingerprints,
+                    assignments,
+                    assignment_identity,
                 )
             )
             return serialize_top_risk_timeline(
@@ -284,6 +323,7 @@ class ForecastService:
             self._artifact_risk_context = None
             self._artifact_coverage = None
             self._artifact_fingerprints = None
+            self._artifact_assignment_identity = None
             self._last_cache_access = "miss"
 
     def _compute(
@@ -358,8 +398,21 @@ class ForecastService:
             "forecast_evaluation": evaluations,
         }
 
-    def _revision_artifacts(self, histories, coverage, fingerprints):
-        same_revision = self._artifact_revision == self._database_revision
+    def _revision_artifacts(
+        self,
+        histories,
+        coverage,
+        fingerprints,
+        assignments,
+        assignment_identity,
+    ):
+        same_database_revision = (
+            self._artifact_revision == self._database_revision
+        )
+        same_assignment = (
+            self._artifact_assignment_identity == assignment_identity
+        )
+        same_revision = same_database_revision and same_assignment
         richer_snapshot = same_revision and _coverage_extends(
             coverage, self._artifact_coverage
         )
@@ -376,9 +429,13 @@ class ForecastService:
                 self._artifact_evaluations,
                 self._artifact_risk_context,
             )
-        if richer_snapshot or corrected_snapshot:
+        if (
+            richer_snapshot
+            or corrected_snapshot
+            or (same_database_revision and not same_assignment)
+        ):
             self._cache.clear()
-        identity = self._artifact_identity()
+        identity = self._artifact_identity(*assignment_identity)
         market_signature = _market_signature(coverage, fingerprints)
         artifact = self._load_persistent_artifact(identity, market_signature)
         if artifact is not None:
@@ -391,6 +448,7 @@ class ForecastService:
                 artifact.risk_context,
                 coverage,
                 fingerprints,
+                assignment_identity,
             )
             self._last_cache_access = "disk_hit"
             return (
@@ -404,7 +462,11 @@ class ForecastService:
         try:
             frame = attach_forward_targets(build_feature_frame(histories))
             provider = self._provider_factory(frame)
-            risk_context = build_forecast_risk_context(histories)
+            risk_context = (
+                build_forecast_risk_context(histories)
+                if assignments is None
+                else build_forecast_risk_context(histories, assignments)
+            )
             _validate_provider_identity(provider, self.model_key, self.model_version)
             if self._evaluator is None:
                 evaluations = _unavailable_evaluations(
@@ -428,6 +490,7 @@ class ForecastService:
             risk_context,
             coverage,
             fingerprints,
+            assignment_identity,
         )
         self._save_persistent_artifact(
             identity,
@@ -452,12 +515,18 @@ class ForecastService:
                 "forecast revision changed after the market-data snapshot"
             )
 
-    def _artifact_identity(self):
+    def _artifact_identity(
+        self,
+        assignment_revision,
+        assignment_fingerprint,
+    ):
         return ForecastArtifactIdentity(
             model_key=self.model_key,
             model_version=self.model_version,
             feature_version=FORECAST_FEATURE_VERSION,
             risk_context_version=FORECAST_RISK_CONTEXT_VERSION,
+            assignment_revision=assignment_revision,
+            assignment_fingerprint=assignment_fingerprint,
         )
 
     def _load_persistent_artifact(self, identity, market_signature):
@@ -487,6 +556,7 @@ class ForecastService:
         risk_context,
         coverage,
         fingerprints,
+        assignment_identity,
     ):
         self._artifact_revision = self._database_revision
         self._artifact_frame = frame
@@ -495,6 +565,63 @@ class ForecastService:
         self._artifact_risk_context = risk_context
         self._artifact_coverage = coverage
         self._artifact_fingerprints = fingerprints
+        self._artifact_assignment_identity = assignment_identity
+
+
+def _assignment_inputs(assignments, assignment_revision):
+    payload_revision = None
+    if assignments is None:
+        normalized = None
+    elif not isinstance(assignments, Mapping):
+        raise TypeError("assignments must be a mapping or None")
+    elif "by_ticker" in assignments:
+        by_ticker = assignments.get("by_ticker")
+        if not isinstance(by_ticker, Mapping):
+            raise TypeError("assignment payload by_ticker must be a mapping")
+        normalized = deepcopy(dict(by_ticker))
+        payload_revision = assignments.get("revision")
+    else:
+        normalized = deepcopy(dict(assignments))
+
+    if assignment_revision is None:
+        assignment_revision = payload_revision
+    elif (
+        payload_revision is not None
+        and _assignment_revision_value(assignment_revision)
+        != _assignment_revision_value(payload_revision)
+    ):
+        raise ValueError("assignment revision does not match assignment payload")
+
+    revision_value = _assignment_revision_value(assignment_revision)
+    try:
+        canonical = json.dumps(
+            normalized,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise TypeError("assignments must be JSON-serializable") from exc
+    fingerprint = blake2b(canonical, digest_size=32).hexdigest()
+    return normalized, (revision_value, fingerprint)
+
+
+def _assignment_revision_value(value):
+    if value is None:
+        return "none"
+    if isinstance(value, str):
+        if not value:
+            raise ValueError("assignment_revision must not be empty")
+        return value
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise TypeError("assignment_revision must be JSON-serializable") from exc
 
 
 def _point_in_time_risk_row(risk_context, ticker, asof_date):

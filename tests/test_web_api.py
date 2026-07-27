@@ -24,6 +24,8 @@ from web.services.entry_signals import EntrySignalService
 from web.factors.registry import FactorRegistry
 from web.forecasts.base import ForecastEvaluation, ForecastResult, UnavailableReason
 from web.forecasts.dataset import build_feature_frame
+from web.forecasts.decision import build_forecast_risk_context
+from web.market_groups import REFERENCE_TICKERS
 from web.services.forecasts import ForecastRevisionChanged, ForecastService
 from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.forecast_warmup import ForecastCacheWarmer
@@ -32,6 +34,7 @@ from web.services.market_data import (
     MarketDataUnavailable,
     UnknownTicker,
 )
+from web.services.research_universe import ResearchUniverseRepository
 from web.services.update_jobs import UpdateAlreadyRunning, UpdateJobManager
 
 
@@ -594,6 +597,63 @@ class FakeRelativeStrengthService:
                 for ticker in tickers
             },
         }
+
+
+def sndk_assignment():
+    return {
+        "state": "assigned",
+        "ticker": "SNDK",
+        "rule_version": "group_override_v1",
+        "effective_from": "2026-01-01",
+        "effective_to": None,
+        "observed_at": "2026-07-24",
+        "sector_key": "technology",
+        "sector_benchmark": "XLK",
+        "theme_keys": ["semiconductor"],
+        "theme_benchmarks": {"semiconductor": ["SOXX", "SMH"]},
+        "primary_model_group": "semiconductor",
+        "classification_state": "classified",
+        "source": "manual_override",
+        "confidence": 1.0,
+        "override_reason": "flash memory and storage semiconductor exposure",
+    }
+
+
+class SndkGroupAssignmentRepository:
+    revision = 41
+
+    def __init__(self):
+        self.calls = []
+
+    def build(self, tickers, asof=None):
+        normalized = tuple(sorted(set(tickers)))
+        self.calls.append((normalized, asof))
+        by_ticker = {
+            ticker: {
+                "state": "missing",
+                "reason": "no_assignment_effective_at_asof",
+            }
+            for ticker in normalized
+        }
+        if "SNDK" in by_ticker:
+            by_ticker["SNDK"] = sndk_assignment()
+        return {
+            "status": "available",
+            "asof": asof,
+            "revision": self.revision,
+            "coverage": 1.0 / len(normalized) if normalized else 1.0,
+            "review_count": 0,
+            "by_ticker": by_ticker,
+        }
+
+
+def local_research_database():
+    checkout = Path(__file__).resolve().parents[1]
+    candidates = (
+        checkout / "data" / "research_prices.db",
+        checkout.parent.parent / "data" / "research_prices.db",
+    )
+    return next((path for path in candidates if path.is_file()), None)
 
 
 class FakeMacroRiskService:
@@ -1545,6 +1605,114 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(service.calls[0][3], 7)
 
+    def test_active_stock_shares_assignment_snapshot_with_forecast_and_top_risk(self):
+        assignment = {
+            "state": "assigned",
+            "ticker": "AAA",
+            "sector_key": "technology",
+            "sector_benchmark": "XLK",
+            "theme_keys": [],
+            "theme_benchmarks": {},
+            "primary_model_group": "technology",
+        }
+
+        class AssignmentRepository:
+            def __init__(self):
+                self.by_ticker = None
+
+            def build(self, tickers, asof=None):
+                self.by_ticker = {
+                    ticker: (
+                        assignment
+                        if ticker == "AAA"
+                        else {
+                            "state": "missing",
+                            "reason": "no_assignment_effective_at_asof",
+                        }
+                    )
+                    for ticker in tickers
+                }
+                return {
+                    "status": "available",
+                    "asof": asof,
+                    "revision": 29,
+                    "coverage": 0.25,
+                    "review_count": 0,
+                    "by_ticker": self.by_ticker,
+                }
+
+        class AssignmentAwareService(InjectedForecastService):
+            database_revision = 7
+
+            def __init__(self):
+                super().__init__()
+                self.build_options = None
+                self.timeline_options = None
+
+            def build(
+                self,
+                ticker,
+                chart_dates,
+                histories,
+                *,
+                assignments=None,
+                assignment_revision=None,
+                expected_revision=None,
+            ):
+                self.build_options = (
+                    assignments,
+                    assignment_revision,
+                    expected_revision,
+                )
+                return super().build(ticker, chart_dates, histories)
+
+            def build_top_risk_timeline(
+                self,
+                ticker,
+                chart_dates,
+                histories,
+                *,
+                assignments=None,
+                assignment_revision=None,
+                expected_revision=None,
+            ):
+                self.timeline_options = (
+                    assignments,
+                    assignment_revision,
+                    expected_revision,
+                )
+                return {
+                    "status": "unavailable",
+                    "unavailable_reason": "not_available",
+                    "events": [],
+                    "latest": None,
+                }
+
+        repository = FakeRepository()
+        repository.histories["QQQ"] = price_history(offset=5)
+        repository.histories["XLK"] = price_history(offset=10)
+        assignments = AssignmentRepository()
+        service = AssignmentAwareService()
+        response = create_app(
+            {
+                "TESTING": True,
+                "FORECAST_SERVICE": service,
+                "GROUP_ASSIGNMENT_REPOSITORY": assignments,
+            },
+            repository,
+            self.manager,
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(service.build_options[0], assignments.by_ticker)
+        self.assertIs(service.timeline_options[0], assignments.by_ticker)
+        self.assertEqual(service.build_options[1:], (29, 7))
+        self.assertEqual(service.timeline_options[1:], (29, 7))
+        self.assertNotEqual(
+            response.json["chart"][-1]["market_bearish_turn_state"],
+            "unavailable",
+        )
+
     def test_stock_suppresses_forecast_if_update_starts_during_snapshot(self):
         manager = StatefulFakeManager()
         repository = FakeRepository()
@@ -2115,6 +2283,111 @@ class WebApiTest(unittest.TestCase):
             "up",
         )
 
+    def test_joined_sndk_top_risk_uses_one_point_in_time_assignment_snapshot(self):
+        database = local_research_database()
+        if database is None:
+            self.skipTest("local SNDK research history is unavailable")
+
+        class MembershipStore:
+            def resolve(self, ticker, default=False):
+                return ticker == "SNDK"
+
+            def set_membership(self, ticker, included):
+                return bool(included)
+
+        research_repository = ResearchUniverseRepository(database)
+        assignments = SndkGroupAssignmentRepository()
+        forecast_service = ForecastService(
+            provider_factory=FakeForecastFactory(),
+            evaluator=fake_forecast_evaluation,
+            max_forecast_dates=1,
+        )
+        client = create_app(
+            test_config(
+                RESEARCH_UNIVERSE_REPOSITORY=research_repository,
+                RESEARCH_POOL_MEMBERSHIP_STORE=MembershipStore(),
+                RESEARCH_FORECAST_SERVICE=forecast_service,
+                GROUP_ASSIGNMENT_REPOSITORY=assignments,
+            ),
+            self.repository,
+            self.manager,
+        ).test_client()
+
+        latest = client.get("/api/stocks/SNDK")
+        historical = client.get(
+            "/api/stocks/SNDK/forecasts/2026-06-26"
+        )
+
+        self.assertEqual(latest.status_code, 200)
+        self.assertEqual(latest.json["top_risk"]["status"], "available")
+        events = latest.json["top_risk"]["events"]
+        self.assertIn(
+            {
+                "time": "2026-06-26",
+                "type": "top_risk_watch",
+                "score": 63.25,
+                "state": "watch",
+            },
+            events,
+        )
+        june_26 = next(
+            row
+            for row in latest.json["chart"]
+            if row["time"] == "2026-06-26"
+        )
+        self.assertNotEqual(
+            june_26["market_bearish_turn_state"],
+            "unavailable",
+        )
+        self.assertEqual(historical.status_code, 200)
+        self.assertEqual(
+            historical.json["forecasts"]["by_date"]["2026-06-26"]["20"][
+                "direction"
+            ],
+            "neutral",
+        )
+        self.assertIn(
+            (tuple(sorted(REFERENCE_TICKERS + ("SNDK",))), "2026-06-26"),
+            assignments.calls,
+        )
+
+        snapshot = research_repository.load_detail_snapshot(
+            "SNDK",
+            benchmark_tickers=REFERENCE_TICKERS,
+        )
+        context = build_forecast_risk_context(
+            snapshot.histories,
+            {"SNDK": sndk_assignment()},
+        ).xs("SNDK", level="ticker")
+        expected_states = {
+            "2026-06-16": "watch",
+            "2026-06-26": "watch",
+            "2026-06-29": "fading",
+            "2026-06-30": "fading",
+            "2026-07-01": "fading",
+            "2026-07-02": "confirmed",
+        }
+        self.assertEqual(
+            {
+                raw_date: context.loc[
+                    raw_date,
+                    "high_level_distribution_state",
+                ]
+                for raw_date in expected_states
+            },
+            expected_states,
+        )
+        self.assertTrue(
+            all(
+                context.loc[
+                    raw_date,
+                    "high_level_distribution_score",
+                ]
+                > 0.0
+                for raw_date in ("2026-06-29", "2026-06-30", "2026-07-01")
+            )
+        )
+
     def test_user_can_join_and_exit_research_pool_without_removing_catalog_row(self):
         class MembershipStore:
             def __init__(self):
@@ -2578,27 +2851,102 @@ class ForecastServiceTest(unittest.TestCase):
         self.assertEqual(payload["forecasts"]["model"]["key"], "fake_direction")
         self.assertEqual(len(factory.providers), 1)
 
-    def test_cache_key_is_exact_five_field_versioned_identity(self):
+    def test_cache_key_includes_assignment_revision_and_fingerprint(self):
         service = ForecastService(
             provider_factory=FakeForecastFactory(),
             evaluator=fake_forecast_evaluation,
             max_cache_size=2,
         )
 
-        service.build("AAA", self.chart_dates, self.histories)
+        service.build(
+            "AAA",
+            self.chart_dates,
+            self.histories,
+            assignments={},
+            assignment_revision=17,
+        )
 
         cache_key = next(iter(service._cache))
-        self.assertEqual(len(cache_key), 5)
+        self.assertEqual(len(cache_key), 7)
         self.assertEqual(
-            cache_key,
+            cache_key[:2],
+            (service.database_revision, "17"),
+        )
+        self.assertRegex(cache_key[2], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            cache_key[3:],
             (
-                service.database_revision,
                 "AAA",
                 pd.Timestamp(self.chart_dates[0]),
                 pd.Timestamp(self.chart_dates[-1]),
                 service.model_version,
             ),
         )
+
+    def test_assignment_revision_change_rebuilds_memory_and_persistent_artifacts(self):
+        assignments = {
+            "AAA": {
+                "state": "assigned",
+                "ticker": "AAA",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            store = ForecastArtifactStore(
+                Path(temporary) / "analysis_cache.db",
+                max_entries=4,
+            )
+            first_service = ForecastService(
+                provider_factory=FakeForecastFactory(),
+                artifact_store=store,
+            )
+            second_service = ForecastService(
+                provider_factory=FakeForecastFactory(),
+                artifact_store=store,
+            )
+
+            with mock.patch(
+                "web.services.forecasts.build_forecast_risk_context",
+                wraps=build_forecast_risk_context,
+            ) as risk_builder:
+                first_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                    assignments=assignments,
+                    assignment_revision=11,
+                )
+                first_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                    assignments=assignments,
+                    assignment_revision=11,
+                )
+                first_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                    assignments=assignments,
+                    assignment_revision=12,
+                )
+                second_service.build(
+                    "AAA",
+                    self.chart_dates,
+                    self.histories,
+                    assignments=assignments,
+                    assignment_revision=11,
+                )
+            self.assertEqual(risk_builder.call_count, 2)
+            self.assertEqual(store.entry_count(), 2)
+            self.assertEqual(
+                second_service.cache_status()["last_access"],
+                "disk_hit",
+            )
 
     def test_cache_is_bounded_exact_and_invalidated_by_revision(self):
         factory = FakeForecastFactory()
