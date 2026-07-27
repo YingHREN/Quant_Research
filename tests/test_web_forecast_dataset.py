@@ -833,6 +833,7 @@ class ForecastContractTest(unittest.TestCase):
                 "degenerate_target",
                 "model_error",
                 "update_in_progress",
+                "research_pool_diagnostic_only",
             },
         )
         with self.assertRaisesRegex(ValueError, "unavailable_reason"):
