@@ -478,10 +478,18 @@
     `reports/delisted-history-staging-import.{md,json}`。
   - [ ] 历史 SEC/行业分类与真实点时成员区间仍待回填；交易首末日期不得解释
     为指数成员区间，向下风险专家继续保持研究状态且无线上否决权。
-    - [ ] 按
+    - [x] 按
       `docs/superpowers/specs/2026-07-27-delisted-point-in-time-identity-industry-design.md`
       完成退市证券身份与历史行业覆盖率实验：SEC 历史 SIC、供应商最后快照和
       价格行为板块必须分开保存，ticker-only 与冲突 ISIN 不得自动连接 CIK。
+      2026-07-27 固定抽取 275 只（强 ISIN 100、ticker-only 100、冲突 ISIN
+      75），实现隔离参考库、可恢复缓存、SEC 批量/定向两种采集路径、保守身份
+      裁决和 `available_at` SIC 区间。真实定向试验的 275 次退市 Fundamentals
+      请求全部返回授权错误，未获得 CIK、未发起 SEC 定向请求，275 只均保持
+      `unresolved`，门槛结论为 `provider_access_blocked`；不得据此声称 SEC
+      覆盖不足或启动全量回填。参考库 `integrity_check=ok`、外键错误为 0，
+      三个价格数据库 SHA-256 前后不变。证据见
+      `reports/delisted-identity-industry-coverage.{md,json,csv}`。
     - [ ] 覆盖实验通过身份误连、时间泄漏、成本和可续跑门槛后，再全量建立
       CIK 身份裁决和 `available_at` 驱动的 SIC 半开区间；第一次观察以前保持
       未知，禁止当前行业向前填充。
