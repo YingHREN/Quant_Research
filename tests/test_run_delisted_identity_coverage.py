@@ -15,6 +15,7 @@ from run_delisted_identity_coverage import (
     collect_sec_header_sample,
     main,
     run_coverage_pilot,
+    write_coverage_reports,
 )
 
 
@@ -111,6 +112,16 @@ class CollectProviderSampleTests(unittest.TestCase):
             {"ticker": "AAA", "link_status": "unresolved"},
             {"ticker": "BBB", "link_status": "unresolved"},
             {"ticker": "CCC", "link_status": "confirmed"},
+            {
+                "ticker": "DDD",
+                "link_status": "review_required",
+                "provider_isin": "US999",
+            },
+            {
+                "ticker": "EEE",
+                "link_status": "review_required",
+                "provider_isin": None,
+            },
         ]
         calls = []
 
@@ -161,10 +172,13 @@ class CollectProviderSampleTests(unittest.TestCase):
                 fetcher=second_fetch,
             )
 
-        self.assertEqual(calls, ["AAA", "BBB"])
-        self.assertEqual(first["status_counts"], {"quota_exhausted": 1, "success": 1})
+        self.assertEqual(calls, ["AAA", "BBB", "DDD"])
+        self.assertEqual(
+            first["status_counts"],
+            {"quota_exhausted": 1, "success": 2},
+        )
         self.assertEqual(second_calls, ["AAA"])
-        self.assertEqual(second["status_counts"], {"success": 2})
+        self.assertEqual(second["status_counts"], {"success": 3})
         self.assertNotIn("fake-secret-token", repr(first))
         self.assertNotIn("fake-secret-token", repr(second))
 
@@ -424,6 +438,130 @@ class CommandLineTests(unittest.TestCase):
             },
         )
         self.assertNotIn("do-not-print", output)
+
+
+class ReportTests(unittest.TestCase):
+    def test_reports_are_deterministic_machine_readable_and_secret_free(self):
+        result = {
+            "catalog_sha256": "a" * 64,
+            "sample_sha256": "b" * 64,
+            "sample_version": "sample-v1",
+            "rule_versions": {"identity": "rule-v1", "sic": "sic-v1"},
+            "cache_hashes": {"sec_submissions": "c" * 64},
+            "protected_database_hashes": {"data/prices.db": "d" * 64},
+            "reference_integrity": {
+                "integrity_check": "ok",
+                "foreign_key_errors": 0,
+            },
+            "summary": {
+                "sample_count": 2,
+                "decision_counts": {
+                    "confirmed": 1,
+                    "rejected": 0,
+                    "review_required": 1,
+                    "unresolved": 0,
+                },
+                "confirmation_rate": {
+                    "numerator": 1,
+                    "denominator": 2,
+                    "value": 0.5,
+                    "reason": None,
+                },
+                "identity_panels": {
+                    "ticker_only": {
+                        "sample_count": 2,
+                        "decision_counts": {
+                            "confirmed": 1,
+                            "rejected": 0,
+                            "review_required": 1,
+                            "unresolved": 0,
+                        },
+                        "confirmation_rate": {
+                            "numerator": 1,
+                            "denominator": 2,
+                            "value": 0.5,
+                            "reason": None,
+                        },
+                    }
+                },
+                "confirmation_sources": {
+                    "provider_assisted": 0,
+                    "sec_only": 1,
+                },
+                "reason_counts": {"ticker_only_match": 1},
+                "reason_examples": {"ticker_only_match": ["BBB"]},
+                "sic": {
+                    "available_ciks": 1,
+                    "observation_count": 1,
+                    "status_counts": {"success": 1},
+                    "earliest_available_at": "2020-01-01T00:00:00Z",
+                    "latest_available_at": "2020-01-01T00:00:00Z",
+                },
+                "usage": {
+                    "sec_requests": 1,
+                    "provider_requests": 0,
+                    "provider_api_units": 0,
+                    "download_bytes": 123,
+                    "runtime_seconds": 1.0,
+                    "projection_panels": {},
+                },
+            },
+            "decisions": (
+                {
+                    "ticker": "AAA",
+                    "cik": "0000000001",
+                    "link_status": "confirmed",
+                    "decision_rule": "dated_former_name_overlap",
+                    "reason_codes": [],
+                    "supporting_evidence": [
+                        {
+                            "url": (
+                                "https://provider.invalid/?api_token="
+                                "fake-secret-token"
+                            )
+                        }
+                    ],
+                },
+                {
+                    "ticker": "BBB",
+                    "cik": None,
+                    "link_status": "review_required",
+                    "decision_rule": "ticker_only_match",
+                    "reason_codes": ["ticker_only_match"],
+                    "conflicting_evidence": [
+                        {"secret": "fake-secret-token"}
+                    ],
+                },
+            ),
+        }
+
+        with tempfile.TemporaryDirectory() as first_dir:
+            first = write_coverage_reports(
+                Path(first_dir) / "coverage",
+                result,
+            )
+            first_bytes = {
+                suffix: Path(path).read_bytes()
+                for suffix, path in first.items()
+            }
+        with tempfile.TemporaryDirectory() as second_dir:
+            second = write_coverage_reports(
+                Path(second_dir) / "coverage",
+                result,
+            )
+            second_bytes = {
+                suffix: Path(path).read_bytes()
+                for suffix, path in second.items()
+            }
+
+        self.assertEqual(first_bytes, second_bytes)
+        parsed = json.loads(first_bytes["json"])
+        self.assertEqual(parsed["summary"]["sample_count"], 2)
+        self.assertIn(b"ticker,identity_panel,cik", first_bytes["csv"])
+        for payload in first_bytes.values():
+            self.assertNotIn(b"fake-secret-token", payload)
+            self.assertNotIn(b"api_token=", payload)
+            self.assertNotIn(b"provider.invalid", payload)
 
 
 if __name__ == "__main__":

@@ -3,25 +3,30 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 from io import BytesIO
+from io import StringIO
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import tempfile
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 from zipfile import BadZipFile, ZipFile
 
 from research.delisted_identity_coverage import (
+    ADJUDICATION_VERSION,
     DEFAULT_QUOTAS,
     SAMPLE_VERSION,
     adjudicate_identity,
     normalize_provider_evidence,
     select_coverage_sample,
+    summarize_coverage,
 )
 from research.delisted_reference_store import DelistedReferenceStore
 from research.sec_identity_archive import (
@@ -30,6 +35,8 @@ from research.sec_identity_archive import (
     iter_submission_records,
 )
 from research.sec_industry_history import (
+    INTERVAL_RULE_VERSION,
+    PARSER_VERSION,
     build_sic_intervals,
     parse_sec_submission_header,
 )
@@ -108,7 +115,13 @@ def collect_provider_sample(
     eligible = []
     seen = set()
     for row in decisions:
-        if str(row.get("link_status") or "") != "unresolved":
+        status = str(row.get("link_status") or "")
+        has_isin = bool(
+            str(row.get("provider_isin") or "").strip()
+        )
+        if status != "unresolved" and not (
+            status == "review_required" and has_isin
+        ):
             continue
         ticker = str(row.get("ticker") or "").strip().upper()
         if not _TICKER_RE.fullmatch(ticker):
@@ -320,8 +333,10 @@ def run_coverage_pilot(
     provider_fetcher=None,
     token=None,
     offline=False,
+    protected_db_paths=(),
 ):
     """Run the identity portion of the fixed-sample coverage pilot."""
+    started_at = time.monotonic()
     catalog_path = Path(catalog_path)
     raw_root = Path(raw_root)
     raw_root.mkdir(parents=True, exist_ok=True)
@@ -353,7 +368,7 @@ def run_coverage_pilot(
         and (sec_cache_root / "manifest.json").exists()
     ):
         raise ValueError("offline SEC submissions cache is missing")
-    collect_artifact(
+    sec_artifact = collect_artifact(
         "sec_submissions",
         sec_cache_root,
         fetcher=sec_fetcher,
@@ -367,7 +382,11 @@ def run_coverage_pilot(
         candidates = find_sec_candidates(row, sec_index)
         candidates_by_ticker[row["ticker"]] = candidates
         initial_decisions.append(
-            adjudicate_identity(row, candidates, ())
+            {
+                **adjudicate_identity(row, candidates, ()),
+                "identity_panel": row["identity_panel"],
+                "provider_isin": row.get("provider_isin"),
+            }
         )
 
     provider_result = {
@@ -404,11 +423,14 @@ def run_coverage_pilot(
             f"{snapshot_date}T00:00:00Z",
         )
         final_decisions.append(
-            adjudicate_identity(
+            {
+                **adjudicate_identity(
                 row,
                 candidates_by_ticker[row["ticker"]],
                 evidence,
-            )
+                ),
+                "identity_panel": row["identity_panel"],
+            }
         )
         provider_snapshots.append(
             {
@@ -462,16 +484,196 @@ def run_coverage_pilot(
     for row in final_decisions:
         status = row["link_status"]
         decision_counts[status] = decision_counts.get(status, 0) + 1
+    for index, (sample_row, decision) in enumerate(
+        zip(sample, final_decisions)
+    ):
+        if "identity_panel" not in decision:
+            final_decisions[index] = {
+                **decision,
+                "identity_panel": sample_row["identity_panel"],
+            }
+    elapsed = time.monotonic() - started_at
+    provider_requests = int(provider_result.get("requested") or 0)
+    sec_header_requests = sum(
+        1
+        for row in header_result["statuses"]
+        if not row.get("reused")
+    )
+    raw_bytes = sum(
+        path.stat().st_size
+        for path in raw_root.rglob("*")
+        if path.is_file()
+    )
+    population_by_panel = {}
+    for row in catalog:
+        if row.get("backfill_eligible"):
+            panel = str(row.get("identity_status") or "")
+            population_by_panel[panel] = (
+                population_by_panel.get(panel, 0) + 1
+            )
+    sample_by_panel = {}
+    for row in sample:
+        panel = row["identity_panel"]
+        sample_by_panel[panel] = sample_by_panel.get(panel, 0) + 1
+    projections = {}
+    for panel, sample_count in sorted(sample_by_panel.items()):
+        population_count = population_by_panel.get(panel, 0)
+        scale = (
+            population_count / sample_count
+            if sample_count
+            else 0
+        )
+        projections[panel] = {
+            "sample_count": sample_count,
+            "population_count": population_count,
+            "projected_storage_bytes": round(raw_bytes * scale),
+            "projected_runtime_seconds": elapsed * scale,
+        }
+    usage = {
+        "sec_requests": (
+            (0 if sec_artifact["reused"] else 1) + sec_header_requests
+        ),
+        "provider_requests": provider_requests,
+        "provider_api_units": provider_requests * 10,
+        "download_bytes": raw_bytes,
+        "runtime_seconds": elapsed,
+        "projection_panels": projections,
+    }
+    summary = summarize_coverage(
+        sample,
+        final_decisions,
+        header_result,
+        usage,
+    )
     return {
         "catalog_sha256": catalog_sha256,
         "sample_sha256": sample_sha256,
+        "sample_version": SAMPLE_VERSION,
         "sample_count": len(sample),
         "decision_counts": dict(sorted(decision_counts.items())),
         "provider_status_counts": provider_result["status_counts"],
         "sic_status_counts": header_result["status_counts"],
         "sic_observation_count": len(header_result["observations"]),
         "reference_integrity": integrity,
+        "rule_versions": {
+            "identity": ADJUDICATION_VERSION,
+            "sic_parser": PARSER_VERSION,
+            "sic_interval": INTERVAL_RULE_VERSION,
+        },
+        "cache_hashes": {
+            "sec_submissions": sec_artifact["sha256"],
+        },
+        "protected_database_hashes": {
+            str(Path(path)): _sha256_file(path)
+            for path in protected_db_paths
+        },
+        "summary": summary,
         "decisions": tuple(final_decisions),
+    }
+
+
+def write_coverage_reports(prefix, result):
+    """Write deterministic, redacted Markdown, JSON, and CSV reports."""
+    prefix = Path(prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
+    safe = {
+        "catalog_sha256": result.get("catalog_sha256"),
+        "sample_sha256": result.get("sample_sha256"),
+        "sample_version": result.get("sample_version"),
+        "rule_versions": dict(sorted(
+            (result.get("rule_versions") or {}).items()
+        )),
+        "cache_hashes": dict(sorted(
+            (result.get("cache_hashes") or {}).items()
+        )),
+        "protected_database_hashes": dict(sorted(
+            (result.get("protected_database_hashes") or {}).items()
+        )),
+        "reference_integrity": result.get("reference_integrity"),
+        "summary": result.get("summary"),
+    }
+    json_path = prefix.with_suffix(".json")
+    markdown_path = prefix.with_suffix(".md")
+    csv_path = prefix.with_suffix(".csv")
+    _atomic_write(json_path, _canonical_json_bytes(safe))
+
+    decisions = sorted(
+        result.get("decisions") or (),
+        key=lambda row: str(row.get("ticker") or ""),
+    )
+    stream = StringIO(newline="")
+    writer = csv.writer(stream, lineterminator="\n")
+    writer.writerow(
+        [
+            "ticker",
+            "identity_panel",
+            "cik",
+            "link_status",
+            "decision_rule",
+            "reason_codes",
+        ]
+    )
+    for row in decisions:
+        writer.writerow(
+            [
+                row.get("ticker") or "",
+                row.get("identity_panel") or "",
+                row.get("cik") or "",
+                row.get("link_status") or "",
+                row.get("decision_rule") or "",
+                "|".join(sorted(row.get("reason_codes") or ())),
+            ]
+        )
+    _atomic_write(csv_path, stream.getvalue().encode("utf-8"))
+
+    summary = safe["summary"] or {}
+    counts = summary.get("decision_counts") or {}
+    rate = summary.get("confirmation_rate") or {}
+    rate_text = (
+        "不可用"
+        if rate.get("value") is None
+        else f"{100 * rate['value']:.1f}%"
+    )
+    lines = [
+        "# 退市证券身份与历史行业覆盖率",
+        "",
+        "本报告只评估身份链接与点时 SIC 可恢复性；"
+        "不执行价格回填，也不改变模型或 UI。",
+        "",
+        "## 总览",
+        "",
+        f"- 固定样本：{summary.get('sample_count', 0)}",
+        f"- 已确认：{counts.get('confirmed', 0)}",
+        f"- 需复核：{counts.get('review_required', 0)}",
+        f"- 已拒绝：{counts.get('rejected', 0)}",
+        f"- 未解决：{counts.get('unresolved', 0)}",
+        f"- 确认率：{rate_text}",
+        "",
+        "## 证据边界",
+        "",
+        "- 当前 ticker 或名称相似本身不能确认历史身份。",
+        "- EODHD 行业字段只作为当前快照，不回填历史分类。",
+        "- SIC 仅从 SEC 文件头提取，并按可获得时间生效。",
+        "- 原始供应商响应、认证 URL 和 API 密钥不进入报告。",
+        "",
+        "## 完整性",
+        "",
+        f"- Catalog SHA-256：`{safe['catalog_sha256']}`",
+        f"- Sample SHA-256：`{safe['sample_sha256']}`",
+        (
+            "- Reference DB："
+            f"`{json.dumps(safe['reference_integrity'], sort_keys=True)}`"
+        ),
+        "",
+    ]
+    _atomic_write(
+        markdown_path,
+        ("\n".join(lines) + "\n").encode("utf-8"),
+    )
+    return {
+        "md": str(markdown_path),
+        "json": str(json_path),
+        "csv": str(csv_path),
     }
 
 
@@ -641,6 +843,14 @@ def _canonical_json_bytes(value):
     ).encode("utf-8")
 
 
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _edge_sample(rows, count):
     if count <= 0 or not rows:
         return []
@@ -663,6 +873,13 @@ def main(argv=None):
     parser.add_argument("--delisted-db", required=True)
     parser.add_argument("--reference-db", required=True)
     parser.add_argument("--raw-root", required=True)
+    parser.add_argument("--report-prefix")
+    parser.add_argument(
+        "--protected-db",
+        action="append",
+        default=[],
+        help="Price database to hash before reporting; may be repeated.",
+    )
     parser.add_argument("--snapshot-date", default="2026-07-27")
     parser.add_argument("--offline", action="store_true")
     arguments = parser.parse_args(argv)
@@ -675,7 +892,13 @@ def main(argv=None):
         snapshot_date=arguments.snapshot_date,
         token=os.environ.get("EODHD_API_TOKEN"),
         offline=arguments.offline,
+        protected_db_paths=arguments.protected_db,
     )
+    if arguments.report_prefix:
+        result["report_paths"] = write_coverage_reports(
+            arguments.report_prefix,
+            result,
+        )
     printable = {
         key: value
         for key, value in result.items()

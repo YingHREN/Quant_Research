@@ -5,6 +5,7 @@ from research.delisted_identity_coverage import (
     adjudicate_identity,
     normalize_provider_evidence,
     select_coverage_sample,
+    summarize_coverage,
 )
 
 
@@ -409,6 +410,131 @@ class AdjudicateIdentityTests(unittest.TestCase):
         self.assertEqual(
             json.dumps(first, sort_keys=True),
             json.dumps(second, sort_keys=True),
+        )
+
+
+class SummarizeCoverageTests(unittest.TestCase):
+    def test_reports_exact_panel_sources_collisions_sic_and_usage(self):
+        sample = [
+            {"ticker": "AAA", "identity_panel": "strong_isin"},
+            {"ticker": "BBB", "identity_panel": "ticker_only"},
+            {"ticker": "CCC", "identity_panel": "ticker_only"},
+            {"ticker": "DDD", "identity_panel": "conflicting_isin"},
+        ]
+        decisions = [
+            {
+                "ticker": "AAA",
+                "link_status": "confirmed",
+                "decision_rule": "isin_cik_plus_exact_name",
+                "reason_codes": [],
+            },
+            {
+                "ticker": "BBB",
+                "link_status": "confirmed",
+                "decision_rule": "dated_former_name_overlap",
+                "reason_codes": [],
+            },
+            {
+                "ticker": "CCC",
+                "link_status": "review_required",
+                "decision_rule": "competing_ciks",
+                "reason_codes": ["competing_ciks"],
+            },
+            {
+                "ticker": "DDD",
+                "link_status": "rejected",
+                "decision_rule": "security_type_contradiction",
+                "reason_codes": ["security_type_contradiction"],
+            },
+        ]
+        sic_audits = {
+            "observations": [
+                {
+                    "cik": "0000000001",
+                    "available_at": "2018-01-02T10:00:00Z",
+                },
+                {
+                    "cik": "0000000001",
+                    "available_at": "2020-01-02T10:00:00Z",
+                },
+            ],
+            "statuses": [
+                {"status": "success"},
+                {"status": "not_found"},
+            ],
+        }
+        usage = {
+            "sec_requests": 3,
+            "provider_requests": 2,
+            "provider_api_units": 20,
+            "download_bytes": 1000,
+            "runtime_seconds": 4.5,
+            "projection_panels": {
+                "ticker_only": {
+                    "sample_count": 2,
+                    "population_count": 20,
+                    "projected_storage_bytes": 10000,
+                    "projected_runtime_seconds": 45.0,
+                }
+            },
+        }
+
+        summary = summarize_coverage(
+            sample,
+            decisions,
+            sic_audits,
+            usage,
+        )
+
+        self.assertEqual(
+            summary["decision_counts"],
+            {
+                "confirmed": 2,
+                "rejected": 1,
+                "review_required": 1,
+                "unresolved": 0,
+            },
+        )
+        self.assertEqual(
+            summary["identity_panels"]["ticker_only"]["decision_counts"],
+            {
+                "confirmed": 1,
+                "rejected": 0,
+                "review_required": 1,
+                "unresolved": 0,
+            },
+        )
+        self.assertEqual(
+            summary["confirmation_sources"],
+            {"provider_assisted": 1, "sec_only": 1},
+        )
+        self.assertEqual(summary["reason_counts"]["competing_ciks"], 1)
+        self.assertEqual(
+            summary["sic"],
+            {
+                "available_ciks": 1,
+                "observation_count": 2,
+                "status_counts": {"not_found": 1, "success": 1},
+                "earliest_available_at": "2018-01-02T10:00:00Z",
+                "latest_available_at": "2020-01-02T10:00:00Z",
+            },
+        )
+        self.assertEqual(summary["usage"]["provider_api_units"], 20)
+        projection = summary["usage"]["projection_panels"]["ticker_only"]
+        self.assertEqual(projection["source_sample_count"], 2)
+        self.assertEqual(projection["population_count"], 20)
+
+    def test_empty_sample_rates_are_explicitly_unavailable(self):
+        summary = summarize_coverage([], [], {}, {})
+
+        self.assertEqual(
+            summary["confirmation_rate"],
+            {
+                "numerator": 0,
+                "denominator": 0,
+                "value": None,
+                "reason": "no_eligible_rows",
+            },
         )
 
 

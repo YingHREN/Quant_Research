@@ -13,6 +13,12 @@ DEFAULT_QUOTAS = {
     "conflicting_isin": 75,
 }
 ADJUDICATION_VERSION = "delisted_identity_adjudication_v1"
+LINK_STATUSES = (
+    "confirmed",
+    "rejected",
+    "review_required",
+    "unresolved",
+)
 
 
 def select_coverage_sample(catalog, history, quotas=None):
@@ -241,6 +247,159 @@ def normalize_provider_evidence(payload, observed_at):
     return tuple(
         sorted(rows, key=lambda row: (row["isin"], row["cik"]))
     )
+
+
+def summarize_coverage(sample, decisions, sic_audits, usage):
+    """Aggregate fixed-sample coverage without mixing identity panels."""
+    sample_rows = tuple(sample)
+    decision_rows = tuple(decisions)
+    sample_by_ticker = _unique_rows(sample_rows, "sample")
+    decisions_by_ticker = _unique_rows(decision_rows, "decision")
+    if set(sample_by_ticker) != set(decisions_by_ticker):
+        raise ValueError("sample and decision ticker sets must match")
+
+    panel_counts = {}
+    total_counts = _empty_status_counts()
+    source_counts = {"provider_assisted": 0, "sec_only": 0}
+    reason_counts = {}
+    reason_examples = {}
+    for ticker in sorted(sample_by_ticker):
+        sample_row = sample_by_ticker[ticker]
+        decision = decisions_by_ticker[ticker]
+        panel = str(sample_row.get("identity_panel") or "unknown")
+        status = str(decision.get("link_status") or "")
+        if status not in LINK_STATUSES:
+            raise ValueError(f"unsupported link status: {status}")
+        panel_summary = panel_counts.setdefault(
+            panel,
+            {
+                "sample_count": 0,
+                "decision_counts": _empty_status_counts(),
+            },
+        )
+        panel_summary["sample_count"] += 1
+        panel_summary["decision_counts"][status] += 1
+        total_counts[status] += 1
+        if status == "confirmed":
+            rule = str(decision.get("decision_rule") or "")
+            source = (
+                "provider_assisted"
+                if rule == "isin_cik_plus_exact_name"
+                else "sec_only"
+            )
+            source_counts[source] += 1
+        for raw_reason in decision.get("reason_codes") or ():
+            reason = str(raw_reason)
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            examples = reason_examples.setdefault(reason, [])
+            if len(examples) < 5:
+                examples.append(ticker)
+
+    for panel_summary in panel_counts.values():
+        panel_summary["confirmation_rate"] = _rate(
+            panel_summary["decision_counts"]["confirmed"],
+            panel_summary["sample_count"],
+        )
+
+    sic_audits = dict(sic_audits or {})
+    observations = tuple(sic_audits.get("observations") or ())
+    statuses = tuple(sic_audits.get("statuses") or ())
+    available_dates = sorted(
+        str(row.get("available_at"))
+        for row in observations
+        if row.get("available_at")
+    )
+    sic_status_counts = {}
+    for row in statuses:
+        status = str(row.get("status") or "unknown")
+        sic_status_counts[status] = sic_status_counts.get(status, 0) + 1
+    sic_summary = {
+        "available_ciks": len(
+            {
+                str(row.get("cik"))
+                for row in observations
+                if row.get("cik")
+            }
+        ),
+        "observation_count": len(observations),
+        "status_counts": dict(sorted(sic_status_counts.items())),
+        "earliest_available_at": (
+            available_dates[0] if available_dates else None
+        ),
+        "latest_available_at": (
+            available_dates[-1] if available_dates else None
+        ),
+    }
+
+    normalized_usage = dict(usage or {})
+    projections = normalized_usage.pop("projection_panels", {}) or {}
+    normalized_usage["projection_panels"] = {
+        str(panel): {
+            "source_sample_count": int(
+                values.get("sample_count") or 0
+            ),
+            "population_count": int(
+                values.get("population_count") or 0
+            ),
+            "projected_storage_bytes": int(
+                values.get("projected_storage_bytes") or 0
+            ),
+            "projected_runtime_seconds": float(
+                values.get("projected_runtime_seconds") or 0
+            ),
+        }
+        for panel, values in sorted(projections.items())
+    }
+
+    return {
+        "sample_count": len(sample_rows),
+        "decision_counts": total_counts,
+        "confirmation_rate": _rate(
+            total_counts["confirmed"],
+            len(sample_rows),
+        ),
+        "identity_panels": dict(sorted(panel_counts.items())),
+        "confirmation_sources": source_counts,
+        "reason_counts": dict(sorted(reason_counts.items())),
+        "reason_examples": {
+            reason: tuple(examples)
+            for reason, examples in sorted(reason_examples.items())
+        },
+        "sic": sic_summary,
+        "usage": normalized_usage,
+    }
+
+
+def _unique_rows(rows, label):
+    indexed = {}
+    for row in rows:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker:
+            raise ValueError(f"{label} ticker is required")
+        if ticker in indexed:
+            raise ValueError(f"duplicate {label} ticker: {ticker}")
+        indexed[ticker] = row
+    return indexed
+
+
+def _empty_status_counts():
+    return {status: 0 for status in LINK_STATUSES}
+
+
+def _rate(numerator, denominator):
+    if denominator == 0:
+        return {
+            "numerator": numerator,
+            "denominator": denominator,
+            "value": None,
+            "reason": "no_eligible_rows",
+        }
+    return {
+        "numerator": numerator,
+        "denominator": denominator,
+        "value": numerator / denominator,
+        "reason": None,
+    }
 
 
 def _canonical_json(value):
