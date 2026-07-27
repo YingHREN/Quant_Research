@@ -234,12 +234,32 @@ function groupingReference(label, benchmarks) {
   return references.length ? `${label} / ${references.join("+")}` : label;
 }
 
-function groupingLine(className, label, tooltip, value) {
+function groupingExplanation(label, explanation, locale) {
+  const details = document.createElement("details");
+  details.className = "grouping-explanation";
+  const trigger = document.createElement("summary");
+  trigger.textContent = "?";
+  trigger.setAttribute(
+    "aria-label",
+    t("grouping.explain", { label }, locale),
+  );
+  const content = document.createElement("small");
+  content.className = "classification-source";
+  content.textContent = explanation;
+  details.append(trigger, content);
+  return details;
+}
+
+function groupingLine(className, label, explanation, value, locale) {
   const line = document.createElement("div");
   line.className = className;
-  line.textContent = value;
-  line.setAttribute("title", tooltip);
+  const text = document.createElement("span");
+  text.textContent = value;
   line.setAttribute("aria-label", `${label}: ${value}`);
+  line.append(
+    text,
+    groupingExplanation(label, explanation, locale),
+  );
   return line;
 }
 
@@ -255,11 +275,15 @@ export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
     const unavailable = document.createElement("strong");
     unavailable.className = "classification-sector";
     unavailable.textContent = t("grouping.unavailable", {}, locale);
-    unavailable.setAttribute(
-      "title",
-      t("grouping.unavailableTooltip", {}, locale),
+    const unavailableLabel = t("grouping.unavailable", {}, locale);
+    card.append(
+      unavailable,
+      groupingExplanation(
+        unavailableLabel,
+        t("grouping.unavailableTooltip", {}, locale),
+        locale,
+      ),
     );
-    card.append(unavailable);
     if (assignment?.reason) {
       const reason = document.createElement("small");
       reason.className = "classification-source";
@@ -280,6 +304,7 @@ export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
       t("grouping.sector", {}, locale),
       t("grouping.sectorTooltip", {}, locale),
       groupingReference(sector, assignment.sector_benchmark),
+      locale,
     ),
   );
 
@@ -297,6 +322,7 @@ export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
           theme,
           assignment.theme_benchmarks?.[themeKey],
         ),
+        locale,
       ),
     );
   });
@@ -313,6 +339,7 @@ export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
         { group: groupingLabel(primaryKey, primaryKind, locale) },
         locale,
       ),
+      locale,
     ),
   );
 
@@ -347,8 +374,14 @@ export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
       ? String(assignment.classification_state || "—").replaceAll("_", " ")
       : localizedState,
   );
-  metadata.setAttribute("title", t("grouping.statusTooltip", {}, locale));
-  card.append(metadata);
+  card.append(
+    metadata,
+    groupingExplanation(
+      t("grouping.status", {}, locale),
+      t("grouping.statusTooltip", {}, locale),
+      locale,
+    ),
+  );
 
   if (assignment.override_reason) {
     const reason = document.createElement("small");

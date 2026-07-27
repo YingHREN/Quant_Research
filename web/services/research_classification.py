@@ -25,7 +25,12 @@ def _unclassified():
 class ResearchClassificationService:
     """Read small metadata tables without touching research price history."""
 
-    def __init__(self, database_path, max_cache_size=2):
+    def __init__(
+        self,
+        database_path,
+        max_cache_size=2,
+        group_assignment_repository=None,
+    ):
         if isinstance(max_cache_size, bool) or not isinstance(max_cache_size, int):
             raise TypeError("max_cache_size must be an integer")
         if max_cache_size <= 0:
@@ -34,9 +39,13 @@ class ResearchClassificationService:
         self._max_cache_size = max_cache_size
         self._cache = OrderedDict()
         self._lock = RLock()
-        self._group_assignments = GroupAssignmentRepository(
-            self.database_path,
-            max_cache_size=max_cache_size,
+        self._group_assignments = (
+            GroupAssignmentRepository(
+                self.database_path,
+                max_cache_size=max_cache_size,
+            )
+            if group_assignment_repository is None
+            else group_assignment_repository
         )
 
     def build(self, tickers, asof=None):

@@ -36,6 +36,7 @@ class UniverseSnapshotService:
         repository,
         factor_registry,
         classification_service=None,
+        group_assignment_repository=None,
         relative_strength_service=None,
         research_universe_repository=None,
         technical_gate_evaluator=evaluate_technical_gate,
@@ -51,6 +52,7 @@ class UniverseSnapshotService:
         self._repository = repository
         self._factor_registry = factor_registry
         self._classification_service = classification_service
+        self._group_assignment_repository = group_assignment_repository
         self._relative_strength_service = relative_strength_service
         self._research_universe_repository = research_universe_repository
         self._technical_gate_evaluator = technical_gate_evaluator
@@ -104,12 +106,15 @@ class UniverseSnapshotService:
                 asof,
                 self._technical_gate_evaluator,
             )
-            classifications = self._build_classifications(
-                [row["ticker"] for row in rows]
-            )
+            tickers = [row["ticker"] for row in rows]
+            classifications = self._build_classifications(tickers, asof)
             merge_sector_classifications(rows, classifications)
+            assignments = self._build_group_assignments(tickers, asof)
+            if assignments is not None:
+                merge_group_assignments(rows, assignments)
+                merge_group_assignment_summary(classifications, assignments)
             relative_strength = self._build_relative_strength(
-                [row["ticker"] for row in rows]
+                tickers
             )
             merge_relative_strength(rows, relative_strength)
             for row in rows:
@@ -157,13 +162,30 @@ class UniverseSnapshotService:
         except (OSError, RuntimeError, TypeError, ValueError):
             return None
 
-    def _build_classifications(self, tickers):
+    def _build_classifications(self, tickers, asof):
         if self._classification_service is None:
             return _unavailable_classifications(tickers)
         try:
-            return self._classification_service.build(tickers)
+            return self._classification_service.build(tickers, asof=asof)
         except (OSError, RuntimeError, TypeError, ValueError):
             return _unavailable_classifications(tickers)
+
+    def _build_group_assignments(self, tickers, asof):
+        if self._group_assignment_repository is None:
+            return None
+        try:
+            payload = self._group_assignment_repository.build(
+                tickers,
+                asof=asof,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return _unavailable_group_assignments(tickers, asof)
+        if (
+            not isinstance(payload, dict)
+            or not isinstance(payload.get("by_ticker"), dict)
+        ):
+            return _unavailable_group_assignments(tickers, asof)
+        return payload
 
     def _build_relative_strength(self, tickers):
         if self._relative_strength_service is None:
@@ -413,6 +435,32 @@ def merge_sector_classifications(rows, payload):
     return rows
 
 
+def merge_group_assignments(rows, payload):
+    by_ticker = payload.get("by_ticker", {})
+    for row in rows:
+        row["group_assignment"] = deepcopy(
+            by_ticker.get(
+                row["ticker"],
+                _missing_group_assignment(
+                    "no_assignment_effective_at_asof"
+                ),
+            )
+        )
+    return rows
+
+
+def merge_group_assignment_summary(classifications, assignments):
+    for target, source in (
+        ("group_assignment_status", "status"),
+        ("group_assignment_asof", "asof"),
+        ("group_assignment_revision", "revision"),
+        ("group_assignment_coverage", "coverage"),
+        ("group_assignment_review_count", "review_count"),
+    ):
+        classifications[target] = deepcopy(assignments.get(source))
+    return classifications
+
+
 def merge_relative_strength(rows, payload):
     by_ticker = payload.get("by_ticker", {})
     for row in rows:
@@ -450,6 +498,22 @@ def _unavailable_classifications(tickers):
 
 def _missing_group_assignment(reason):
     return {"state": "missing", "reason": reason}
+
+
+def _unavailable_group_assignments(tickers, asof):
+    return {
+        "status": "unavailable",
+        "asof": asof,
+        "revision": None,
+        "coverage": 0.0,
+        "review_count": 0,
+        "by_ticker": {
+            ticker: _missing_group_assignment(
+                "assignment_repository_unavailable"
+            )
+            for ticker in tickers
+        },
+    }
 
 
 def _unavailable_relative_strength(tickers):

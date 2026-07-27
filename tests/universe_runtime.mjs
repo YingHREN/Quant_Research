@@ -48,6 +48,10 @@ function descendants(node) {
   return node.children.flatMap((child) => [child, ...descendants(child)]);
 }
 
+function explanations(node) {
+  return descendants(node).filter((child) => child.tagName === "DETAILS");
+}
+
 const { renderGroupAssignmentCard } = await import(appUri);
 globalThis.document = {
   createElement(tagName) {
@@ -78,10 +82,19 @@ assert.match(zh, /主要模型分组.*半导体/);
 assert.match(zh, /来源.*manual_override/);
 assert.match(zh, /置信度 92%/);
 assert.match(zh, /待复核/);
+const zhExplanations = explanations(zhCard);
+assert.ok(zhExplanations.length >= 4);
+assert.ok(
+  zhExplanations.some((node) => /宽泛行业/.test(textTree(node))),
+);
 assert.ok(
   descendants(zhCard).some(
-    (node) => /宽泛行业/.test(node.attributes.title || ""),
+    (node) => node.tagName === "SUMMARY"
+      && /解释宽泛行业/.test(node.attributes["aria-label"] || ""),
   ),
+);
+assert.ok(
+  descendants(zhCard).every((node) => !node.attributes.title),
 );
 
 const enCard = renderGroupAssignmentCard(sndk, "en");
@@ -91,9 +104,16 @@ assert.match(en, /Semiconductor \/ SOXX\+SMH/);
 assert.match(en, /Primary model group.*Semiconductor/);
 assert.match(en, /Needs review/);
 assert.ok(
+  explanations(enCard).some((node) => /Broad sector/.test(textTree(node))),
+);
+assert.ok(
   descendants(enCard).some(
-    (node) => /Broad sector/.test(node.attributes.title || ""),
+    (node) => node.tagName === "SUMMARY"
+      && /Explain Broad sector/.test(node.attributes["aria-label"] || ""),
   ),
+);
+assert.ok(
+  descendants(enCard).every((node) => !node.attributes.title),
 );
 
 const nbis = renderGroupAssignmentCard(
@@ -121,3 +141,9 @@ const missing = renderGroupAssignmentCard(
 );
 assert.match(textTree(missing), /分组不可用/);
 assert.equal(missing.dataset.state, "missing");
+assert.ok(
+  descendants(missing).some(
+    (node) => node.tagName === "SUMMARY"
+      && /解释分组不可用/.test(node.attributes["aria-label"] || ""),
+  ),
+);

@@ -247,6 +247,13 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 4096,
             )
         )
+    group_assignment_repository = flask_app.config.get(
+        "GROUP_ASSIGNMENT_REPOSITORY"
+    )
+    if group_assignment_repository is None:
+        group_assignment_repository = GroupAssignmentRepository(
+            flask_app.config["RESEARCH_DATABASE"]
+        )
     universe_service = flask_app.config.get("UNIVERSE_SERVICE")
     if universe_service is None:
         classification_service = flask_app.config.get(
@@ -254,7 +261,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
         if classification_service is None:
             classification_service = ResearchClassificationService(
-                flask_app.config["RESEARCH_DATABASE"]
+                flask_app.config["RESEARCH_DATABASE"],
+                group_assignment_repository=group_assignment_repository,
             )
         relative_strength_service = flask_app.config.get(
             "RESEARCH_RELATIVE_STRENGTH_SERVICE"
@@ -274,6 +282,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             repository,
             factor_registry,
             classification_service=classification_service,
+            group_assignment_repository=group_assignment_repository,
             relative_strength_service=relative_strength_service,
             research_universe_repository=research_universe_repository,
             revision_getter=lambda: getattr(
@@ -296,13 +305,6 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             None
             if flask_app.config.get("TESTING")
             else flask_app.config["RESEARCH_POOL_MEMBERSHIP_DATABASE"]
-        )
-    group_assignment_repository = flask_app.config.get(
-        "GROUP_ASSIGNMENT_REPOSITORY"
-    )
-    if group_assignment_repository is None:
-        group_assignment_repository = GroupAssignmentRepository(
-            flask_app.config["RESEARCH_DATABASE"]
         )
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:

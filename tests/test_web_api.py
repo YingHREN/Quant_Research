@@ -187,7 +187,7 @@ class FalseyRepository(FakeRepository):
 
 
 class FakeResearchClassificationService:
-    def build(self, tickers):
+    def build(self, tickers, asof=None):
         return {
             "status": "available",
             "asof": "2026-07-24",
@@ -682,22 +682,45 @@ class SndkGroupAssignmentRepository:
         }
 
 
-class SndkResearchClassificationService(FakeResearchClassificationService):
-    def build(self, tickers):
-        payload = super().build(tickers)
+def software_assignment():
+    assignment = sndk_assignment()
+    assignment.update(
+        {
+            "theme_keys": ["software"],
+            "theme_benchmarks": {"software": ["IGV", "XSW"]},
+            "primary_model_group": "software",
+            "source": "mismatched_classification_fixture",
+        }
+    )
+    return assignment
+
+
+class MismatchedResearchClassificationService(
+    FakeResearchClassificationService
+):
+    def __init__(self):
+        self.calls = []
+
+    def build(self, tickers, asof=None):
+        normalized = tuple(sorted(tickers))
+        self.calls.append((normalized, asof))
+        payload = super().build(normalized, asof=asof)
         if "SNDK" in payload["by_ticker"]:
-            payload["by_ticker"]["SNDK"]["group_assignment"] = sndk_assignment()
-        payload.update(
-            {
-                "group_assignment_status": "available",
-                "group_assignment_asof": "2026-07-21",
-                "group_assignment_revision": 41,
-                "group_assignment_coverage": (
-                    1.0 / len(tuple(tickers)) if tickers else 1.0
-                ),
-                "group_assignment_review_count": 0,
-            }
-        )
+            payload["by_ticker"]["SNDK"]["group_assignment"] = (
+                software_assignment()
+            )
+        return payload
+
+
+class EffectiveBoundaryGroupAssignmentRepository(
+    SndkGroupAssignmentRepository
+):
+    def build(self, tickers, asof=None):
+        payload = super().build(tickers, asof=asof)
+        if "SNDK" in payload["by_ticker"] and (
+            asof is None or asof >= "2026-07-22"
+        ):
+            payload["by_ticker"]["SNDK"] = software_assignment()
         return payload
 
 
@@ -890,12 +913,11 @@ class WebApiTest(unittest.TestCase):
     def test_group_assignment_contract_matches_universe_and_stock_detail(self):
         repository = FakeRepository()
         repository.histories["SNDK"] = price_history(offset=30)
-        assignment_repository = SndkGroupAssignmentRepository()
+        assignment_repository = EffectiveBoundaryGroupAssignmentRepository()
+        classification_service = MismatchedResearchClassificationService()
         app = create_app(
             test_config(
-                RESEARCH_CLASSIFICATION_SERVICE=(
-                    SndkResearchClassificationService()
-                ),
+                RESEARCH_CLASSIFICATION_SERVICE=classification_service,
                 GROUP_ASSIGNMENT_REPOSITORY=assignment_repository,
             ),
             repository,
@@ -935,6 +957,52 @@ class WebApiTest(unittest.TestCase):
                 "theme_benchmarks": {"semiconductor": ["SOXX", "SMH"]},
                 "primary_model_group": "semiconductor",
             },
+        )
+        self.assertEqual(
+            classification_service.calls,
+            [
+                (
+                    tuple(sorted(repository.histories)),
+                    "2026-07-21",
+                )
+            ],
+        )
+        self.assertEqual(
+            [
+                call
+                for call in assignment_repository.calls
+                if "SNDK" in call[0]
+            ],
+            [
+                (tuple(sorted(repository.histories)), "2026-07-21"),
+                (tuple(sorted(repository.histories)), "2026-07-21"),
+            ],
+        )
+
+    def test_default_services_share_the_configured_assignment_repository(self):
+        assignment_repository = SndkGroupAssignmentRepository()
+        app = create_app(
+            test_config(
+                RESEARCH_CLASSIFICATION_SERVICE=None,
+                GROUP_ASSIGNMENT_REPOSITORY=assignment_repository,
+            ),
+            self.repository,
+            self.manager,
+        )
+
+        self.assertIs(
+            app.extensions["dashboard_group_assignment_repository"],
+            assignment_repository,
+        )
+        self.assertIs(
+            app.extensions["dashboard_universe_service"]._group_assignment_repository,
+            assignment_repository,
+        )
+        self.assertIs(
+            app.extensions[
+                "dashboard_research_classification_service"
+            ]._group_assignments,
+            assignment_repository,
         )
 
     def test_assignment_repository_failure_does_not_break_stock_chart(self):

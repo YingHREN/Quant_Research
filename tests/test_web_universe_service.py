@@ -79,8 +79,8 @@ class FakeClassificationService:
     def __init__(self):
         self.calls = []
 
-    def build(self, tickers):
-        self.calls.append(tuple(tickers))
+    def build(self, tickers, asof=None):
+        self.calls.append((tuple(tickers), asof))
         return {
             "status": "available",
             "asof": "2026-07-24",
@@ -142,8 +142,8 @@ def _sndk_assignment():
 
 
 class FakeGroupingClassificationService(FakeClassificationService):
-    def build(self, tickers):
-        payload = super().build(tickers)
+    def build(self, tickers, asof=None):
+        payload = super().build(tickers, asof=asof)
         for ticker, classification in payload["by_ticker"].items():
             classification["group_assignment"] = (
                 _sndk_assignment()
@@ -163,6 +163,33 @@ class FakeGroupingClassificationService(FakeClassificationService):
             }
         )
         return payload
+
+
+class FakeGroupAssignmentRepository:
+    def __init__(self):
+        self.calls = []
+
+    def build(self, tickers, asof=None):
+        normalized = tuple(sorted(tickers))
+        self.calls.append((normalized, asof))
+        return {
+            "status": "available",
+            "asof": asof,
+            "revision": 41,
+            "coverage": 1.0 / len(normalized) if normalized else 1.0,
+            "review_count": 0,
+            "by_ticker": {
+                ticker: (
+                    _sndk_assignment()
+                    if ticker == "SNDK"
+                    else {
+                        "state": "missing",
+                        "reason": "no_assignment_effective_at_asof",
+                    }
+                )
+                for ticker in normalized
+            },
+        }
 
 
 class FakeRelativeStrengthService:
@@ -344,9 +371,10 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         )
         self.assertEqual(len(classifications.calls), 1)
         self.assertEqual(
-            set(classifications.calls[0]),
+            set(classifications.calls[0][0]),
             set(repository.histories),
         )
+        self.assertEqual(classifications.calls[0][1], "2026-07-21")
 
     def test_build_exposes_the_repository_group_assignment_on_each_row(self):
         repository = FakeRepository()
@@ -355,10 +383,12 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
             "NBIS": _history(),
             "SPY": _history(),
         }
+        assignments = FakeGroupAssignmentRepository()
         service = UniverseSnapshotService(
             repository,
             _registry(),
             classification_service=FakeGroupingClassificationService(),
+            group_assignment_repository=assignments,
         )
 
         payload = service.build()
@@ -394,6 +424,10 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         self.assertNotIn(
             "group_assignment",
             by_ticker["SNDK"]["sector_classification"],
+        )
+        self.assertEqual(
+            assignments.calls,
+            [(("NBIS", "SNDK", "SPY"), "2026-07-21")],
         )
 
     def test_unavailable_classification_keeps_a_stable_assignment_reason(self):
