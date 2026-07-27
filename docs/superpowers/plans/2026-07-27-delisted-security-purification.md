@@ -126,28 +126,28 @@ git commit -m "data: audit delisted catalog conflicts"
 - Consumes: `build_delisted_catalog`, `summarize_delisted_catalog`
 - Produces: `build_catalog_files(input_path, output_catalog, manifest_path, report_json, report_markdown, observed_at) -> dict`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 临时目录写五行 fixture，验证净化目录、manifest、JSON/Markdown 报告、输入和
 输出 SHA-256、字节稳定目录、原子替换后无 `.tmp`，且任意传入的假 token
 不会出现在产物。
 
-- [ ] **Step 2: 运行测试确认接口缺失**
+- [x] **Step 2: 运行测试确认接口缺失**
 
 Expected: FAIL，无法导入运行器。
 
-- [ ] **Step 3: 实现运行器**
+- [x] **Step 3: 实现运行器**
 
 运行时间只写 manifest；净化目录不含时间戳。报告 JSON 只含 schema、规则、
 哈希和汇总，不复制完整 securities。Markdown 用中文表格展示分类、原因和
 身份覆盖，并明确“不是指数成员区间”。
 
-- [ ] **Step 4: 重跑目标与相关测试**
+- [x] **Step 4: 重跑目标与相关测试**
 
 Run:
 `PYTHONWARNINGS=error ../../venv/bin/python -m unittest tests.test_build_delisted_security_catalog tests.test_delisted_security_catalog tests.test_delisted_history_pilot -q`
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add build_delisted_security_catalog.py tests/test_build_delisted_security_catalog.py
