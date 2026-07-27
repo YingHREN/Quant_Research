@@ -84,15 +84,44 @@ def iter_submission_records(path):
             }
 
 
-def build_identity_index(records):
+def build_identity_index(records, sample_rows=None):
     """Build deterministic exact-name and current-ticker lookup indexes."""
+    target_names = None
+    target_tickers = None
+    if sample_rows is not None:
+        sample_rows = tuple(sample_rows)
+        target_names = {
+            normalize_legal_name(row.get("name"))
+            for row in sample_rows
+            if normalize_legal_name(row.get("name"))
+        }
+        target_tickers = {
+            str(row.get("ticker") or "").strip().upper()
+            for row in sample_rows
+            if str(row.get("ticker") or "").strip()
+        }
     by_cik = {}
     by_name = defaultdict(list)
     by_ticker = defaultdict(list)
+    seen_ciks = set()
     for record in records:
         cik = str(record["cik"])
-        if cik in by_cik:
+        if cik in seen_ciks:
             raise ValueError(f"duplicate CIK record: {cik}")
+        seen_ciks.add(cik)
+        if target_names is not None:
+            record_names = {
+                record["normalized_name"],
+                *(
+                    row["normalized_name"]
+                    for row in record["former_names"]
+                ),
+            }
+            if not (
+                record_names.intersection(target_names)
+                or set(record["tickers"]).intersection(target_tickers)
+            ):
+                continue
         by_cik[cik] = record
         if record["normalized_name"]:
             by_name[record["normalized_name"]].append(

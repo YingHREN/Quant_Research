@@ -1,4 +1,5 @@
 from io import BytesIO
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from urllib.error import HTTPError
 from zipfile import ZipFile
 
 from run_delisted_identity_coverage import (
+    _download_url_to_path,
     collect_artifact,
     collect_provider_sample,
     collect_sec_header_sample,
@@ -104,6 +106,48 @@ class CollectArtifactTests(unittest.TestCase):
                 )
 
             self.assertFalse((root / "submissions.zip").exists())
+
+    def test_stream_download_resumes_a_partial_file(self):
+        class Response:
+            status = 206
+            headers = {"Content-Range": "bytes 3-5/6"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, size):
+                if getattr(self, "done", False):
+                    return b""
+                self.done = True
+                return b"def"
+
+        requests = []
+
+        def opener(request, timeout):
+            requests.append(request)
+            return Response()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "artifact.part"
+            path.write_bytes(b"abc")
+            result = _download_url_to_path(
+                "https://example.invalid/archive.zip",
+                {"User-Agent": "research test@example.com"},
+                path,
+                opener=opener,
+            )
+
+            self.assertEqual(path.read_bytes(), b"abcdef")
+
+        self.assertEqual(requests[0].headers["Range"], "bytes=3-")
+        self.assertEqual(result["byte_count"], 6)
+        self.assertEqual(
+            result["sha256"],
+            hashlib.sha256(b"abcdef").hexdigest(),
+        )
 
 
 class CollectProviderSampleTests(unittest.TestCase):

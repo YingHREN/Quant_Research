@@ -136,6 +136,41 @@ class SecIdentityArchiveTests(unittest.TestCase):
             [["current_ticker"], ["current_ticker"]],
         )
 
+    def test_sample_filtered_index_retains_only_possible_matches(self):
+        records = [
+            {
+                "cik": "0000000123",
+                "name": "Target Inc",
+                "normalized_name": "TARGET",
+                "tickers": ("NEW",),
+                "exchanges": ("NASDAQ",),
+                "sic": "3674",
+                "sic_description": "Semiconductors",
+                "former_names": (),
+                "recent_filings": (),
+                "filing_files": (),
+            },
+            {
+                "cik": "0000000456",
+                "name": "Unrelated Inc",
+                "normalized_name": "UNRELATED",
+                "tickers": ("NOPE",),
+                "exchanges": ("NYSE",),
+                "sic": "7372",
+                "sic_description": "Software",
+                "former_names": (),
+                "recent_filings": (),
+                "filing_files": (),
+            },
+        ]
+
+        index = build_identity_index(
+            records,
+            sample_rows=[{"ticker": "OLD", "name": "Target Inc"}],
+        )
+
+        self.assertEqual(set(index["by_cik"]), {"0000000123"})
+
     def test_rejects_duplicate_cik_records(self):
         record = {
             "cik": "0000000123",

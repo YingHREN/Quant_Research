@@ -69,20 +69,33 @@ def collect_artifact(name, cache_root, fetcher=None):
         if not user_agent:
             raise ValueError("SEC_USER_AGENT is required")
         headers["User-Agent"] = user_agent
-        fetcher = _fetch_url
-    payload = fetcher(
-        SEC_SUBMISSIONS_URL,
-        headers,
-    )
-    if not isinstance(payload, bytes) or not payload:
-        raise ValueError("artifact response must be non-empty bytes")
-    _validate_sec_submissions_zip(payload)
-    digest = hashlib.sha256(payload).hexdigest()
-    _atomic_write(artifact_path, payload)
+        partial_path = artifact_path.with_suffix(
+            artifact_path.suffix + ".part"
+        )
+        download = _download_url_to_path(
+            SEC_SUBMISSIONS_URL,
+            headers,
+            partial_path,
+        )
+        _validate_sec_submissions_path(partial_path)
+        os.replace(partial_path, artifact_path)
+        digest = download["sha256"]
+        byte_count = download["byte_count"]
+    else:
+        payload = fetcher(
+            SEC_SUBMISSIONS_URL,
+            headers,
+        )
+        if not isinstance(payload, bytes) or not payload:
+            raise ValueError("artifact response must be non-empty bytes")
+        _validate_sec_submissions_zip(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        byte_count = len(payload)
+        _atomic_write(artifact_path, payload)
     manifest = {
         "artifact_name": name,
         "sha256": digest,
-        "byte_count": len(payload),
+        "byte_count": byte_count,
         "status": "verified",
     }
     _atomic_write(
@@ -374,7 +387,8 @@ def run_coverage_pilot(
         fetcher=sec_fetcher,
     )
     sec_index = build_identity_index(
-        iter_submission_records(raw_root / "sec" / "submissions.zip")
+        iter_submission_records(raw_root / "sec" / "submissions.zip"),
+        sample_rows=sample,
     )
     candidates_by_ticker = {}
     initial_decisions = []
@@ -714,6 +728,36 @@ def _fetch_url(url, headers):
         return response.read()
 
 
+def _download_url_to_path(url, headers, path, opener=urlopen):
+    """Stream a remote artifact to a resumable partial file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    offset = path.stat().st_size if path.exists() else 0
+    request_headers = dict(headers)
+    if offset:
+        request_headers["Range"] = f"bytes={offset}-"
+    request = Request(url, headers=request_headers)
+    with opener(request, timeout=90) as response:
+        status = int(getattr(response, "status", 200))
+        append = offset > 0 and status == 206
+        mode = "ab" if append else "wb"
+        with path.open(mode) as handle:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                handle.write(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+    if not path.exists() or path.stat().st_size == 0:
+        raise ValueError("artifact response must be non-empty bytes")
+    return {
+        "byte_count": path.stat().st_size,
+        "sha256": _sha256_file(path),
+        "resumed": append,
+    }
+
+
 def _fetch_eodhd_fundamentals(ticker, token):
     if not str(token or ""):
         raise ValueError("EODHD_API_TOKEN is required")
@@ -917,6 +961,25 @@ def main(argv=None):
 def _validate_sec_submissions_zip(payload):
     try:
         with ZipFile(BytesIO(payload)) as archive:
+            names = [
+                name
+                for name in archive.namelist()
+                if name.startswith("CIK") and name.endswith(".json")
+            ]
+            if not names:
+                raise ValueError(
+                    "SEC submissions artifact must contain CIK JSON files"
+                )
+            json.loads(archive.read(names[0]).decode("utf-8"))
+    except (BadZipFile, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError(
+            "SEC submissions artifact must be a valid ZIP"
+        ) from None
+
+
+def _validate_sec_submissions_path(path):
+    try:
+        with ZipFile(path) as archive:
             names = [
                 name
                 for name in archive.namelist()
