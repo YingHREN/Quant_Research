@@ -147,11 +147,14 @@ class IntradayStore:
             self._migrate_preceding_schema(connection)
 
     def read_subscription_request(self):
-        with self._connect_readonly() as connection:
-            row = connection.execute(
-                "SELECT revision, user_symbols, updated_at "
-                "FROM intraday_subscription_control WHERE singleton_id=1"
-            ).fetchone()
+        try:
+            with self._connect_readonly() as connection:
+                row = connection.execute(
+                    "SELECT revision, user_symbols, updated_at "
+                    "FROM intraday_subscription_control WHERE singleton_id=1"
+                ).fetchone()
+        except sqlite3.Error:
+            row = None
         if row is None:
             return {"revision": 0, "user_symbols": [], "updated_at": None}
         return {
@@ -163,6 +166,7 @@ class IntradayStore:
     def replace_subscription_request(self, symbols, updated_at):
         self._require_utc(updated_at, "updated_at")
         normalized = SubscriptionRequest(symbols, max_symbols=30).symbols
+        self.initialize()
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
