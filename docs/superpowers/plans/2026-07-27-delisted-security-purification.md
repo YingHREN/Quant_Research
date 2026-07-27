@@ -162,18 +162,18 @@ git commit -m "data: build purified delisted catalog"
 - Modify: `docs/modeling-todo.md`
 - Modify: `docs/superpowers/plans/2026-07-27-delisted-security-purification.md`
 
-- [ ] **Step 1: 运行真实 32,371 行目录**
+- [x] **Step 1: 运行真实 32,371 行目录**
 
 完整净化目录写到
 `data/cache/eodhd_delisted_security_catalog/2026-07-27/catalog.json`，manifest
 同目录保存；汇总写入 `reports/`。
 
-- [ ] **Step 2: 验证真实结果**
+- [x] **Step 2: 验证真实结果**
 
 检查输入行数、状态总和、试点 24 个明显误分类代码均不再 eligible、哈希、
 无临时文件、无密钥、缓存被 Git 忽略。
 
-- [ ] **Step 3: 更新中文 TODO**
+- [x] **Step 3: 更新中文 TODO**
 
 关闭“证券类型二次净化和身份契约”部分；保留正式退市日线下载、SEC 历史行业和
 历史成员区间为未完成。

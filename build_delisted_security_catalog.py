@@ -101,12 +101,19 @@ def _markdown_report(report):
             "",
             "## 身份覆盖",
             "",
-            "| 身份状态 | 数量 |",
-            "| --- | ---: |",
+            "| 身份状态 | 全目录 | 主交易所范围内 |",
+            "| --- | ---: | ---: |",
         )
     )
-    for key, value in summary["identity_status_counts"].items():
-        rows.append(f"| `{key}` | {value:,} |")
+    identity_keys = sorted(
+        set(summary["identity_status_counts"])
+        | set(summary["in_scope_identity_status_counts"])
+    )
+    for key in identity_keys:
+        rows.append(
+            f"| `{key}` | {summary['identity_status_counts'].get(key, 0):,} | "
+            f"{summary['in_scope_identity_status_counts'].get(key, 0):,} |"
+        )
     rows.extend(
         (
             "",

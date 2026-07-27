@@ -254,6 +254,10 @@ class DelistedSecurityCatalogTest(unittest.TestCase):
             {"strong_isin": 1, "ticker_only": 3},
         )
         self.assertEqual(
+            summary["in_scope_identity_status_counts"],
+            {"strong_isin": 1, "ticker_only": 2},
+        )
+        self.assertEqual(
             summary["reason_samples"]["warrant_signal"],
             ["BBB-WS"],
         )

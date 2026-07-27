@@ -273,6 +273,11 @@ def summarize_delisted_catalog(catalog):
         item["classification"] for item in securities
     )
     identity_counts = Counter(item["identity_status"] for item in securities)
+    in_scope_identity_counts = Counter(
+        item["identity_status"]
+        for item in securities
+        if item["scope_status"] == "in_scope"
+    )
     reason_counts = Counter(
         reason
         for item in securities
@@ -295,6 +300,9 @@ def summarize_delisted_catalog(catalog):
         ),
         "classification_counts": _sorted_counter(classification_counts),
         "identity_status_counts": _sorted_counter(identity_counts),
+        "in_scope_identity_status_counts": _sorted_counter(
+            in_scope_identity_counts
+        ),
         "reason_counts": _sorted_counter(reason_counts),
         "reason_samples": {
             reason: sorted(tickers)[:5]

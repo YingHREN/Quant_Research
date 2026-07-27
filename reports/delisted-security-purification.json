@@ -1,0 +1,170 @@
+{
+  "catalog_schema_version": "delisted_security_catalog_v1",
+  "catalog_sha256": "fa432000e8f77577175d2b13590dd0be65d44fef5ceceed433f3d33752ad80b0",
+  "input_sha256": "ff34a7f7aa57907ac946f995c772e1b2f07f36527d83196728a6d641974898c7",
+  "rule_version": "delisted_security_purification_v1",
+  "schema_version": "delisted_security_purification_report_v1",
+  "summary": {
+    "backfill_eligible_rows": 13039,
+    "by_exchange": {
+      "AMEX": {
+        "out_of_scope": 38
+      },
+      "BATS": {
+        "out_of_scope": 26
+      },
+      "NASDAQ": {
+        "accepted_common": 8851,
+        "needs_review": 102,
+        "out_of_scope": 803,
+        "rejected_non_common": 769
+      },
+      "NMFQS": {
+        "out_of_scope": 19
+      },
+      "NYSE": {
+        "accepted_common": 3816,
+        "needs_review": 210,
+        "out_of_scope": 611,
+        "rejected_non_common": 726
+      },
+      "NYSE ARCA": {
+        "out_of_scope": 27
+      },
+      "NYSE MKT": {
+        "accepted_common": 372,
+        "needs_review": 12,
+        "out_of_scope": 43,
+        "rejected_non_common": 54
+      },
+      "OTCBB": {
+        "out_of_scope": 768
+      },
+      "OTCCE": {
+        "out_of_scope": 658
+      },
+      "OTCGREY": {
+        "out_of_scope": 2637
+      },
+      "OTCMKTS": {
+        "out_of_scope": 921
+      },
+      "OTCQB": {
+        "out_of_scope": 1052
+      },
+      "OTCQX": {
+        "out_of_scope": 449
+      },
+      "PINK": {
+        "out_of_scope": 9227
+      },
+      "US": {
+        "out_of_scope": 180
+      }
+    },
+    "classification_counts": {
+      "accepted_common": 13039,
+      "needs_review": 324,
+      "out_of_scope": 17459,
+      "rejected_non_common": 1549
+    },
+    "identity_status_counts": {
+      "conflicting_isin": 618,
+      "invalid_isin": 5,
+      "strong_isin": 7350,
+      "ticker_only": 24398
+    },
+    "in_scope_identity_status_counts": {
+      "conflicting_isin": 400,
+      "invalid_isin": 5,
+      "strong_isin": 4248,
+      "ticker_only": 10259
+    },
+    "in_scope_rows": 14912,
+    "input_rows": 32371,
+    "reason_counts": {
+      "ambiguous_name": 319,
+      "debt_signal": 17,
+      "identity_conflict": 618,
+      "invalid_isin": 5,
+      "invalid_ticker": 1606,
+      "preferred_signal": 15,
+      "right_signal": 86,
+      "unit_signal": 554,
+      "unsupported_exchange": 16002,
+      "warrant_signal": 896
+    },
+    "reason_samples": {
+      "ambiguous_name": [
+        "AAIN",
+        "AAVL",
+        "ABGBY",
+        "ABILW",
+        "ACCUF"
+      ],
+      "debt_signal": [
+        "BMLP",
+        "CNFRL",
+        "CSSEN",
+        "CTDD",
+        "DUC"
+      ],
+      "identity_conflict": [
+        "AAC",
+        "AAC-UN",
+        "AACT",
+        "AACT-WT",
+        "AAI"
+      ],
+      "invalid_isin": [
+        "AGH",
+        "INB",
+        "LEXXW",
+        "METCL",
+        "MONDQ"
+      ],
+      "invalid_ticker": [
+        "AAAP_OLD",
+        "AACBU_OLD",
+        "AACB_OLD",
+        "AACI_OLD",
+        "AACT_OLD"
+      ],
+      "preferred_signal": [
+        "APE",
+        "BAMI",
+        "CLV",
+        "EBRB",
+        "EMMSP"
+      ],
+      "right_signal": [
+        "ACAXR",
+        "AITRR",
+        "ARIZR",
+        "ASCBR",
+        "ATAKR"
+      ],
+      "unit_signal": [
+        "AAC-U",
+        "AAC-UN",
+        "AACT-UN",
+        "AAM-UN",
+        "AAQC-UN"
+      ],
+      "unsupported_exchange": [
+        "AAAID",
+        "AAALF",
+        "AAALY",
+        "AAARF",
+        "AABNF"
+      ],
+      "warrant_signal": [
+        "AAC-WT",
+        "AACT-WT",
+        "AAM-WT",
+        "AAQC-WT",
+        "ACABW"
+      ]
+    }
+  }
+}
