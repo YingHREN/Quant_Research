@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -135,6 +136,24 @@ class FakeRepository:
             )
             for ticker, history in self.histories.items()
         }
+
+    def load_market_overview_snapshot(self, asof=None):
+        self.calls.append(("load_market_overview_snapshot", asof))
+        histories = self.load_universe_histories(asof)
+        latest = max(
+            (
+                history.index[-1]
+                for history in histories.values()
+                if not history.empty
+            ),
+            default=None,
+        )
+        return SimpleNamespace(
+            histories=histories,
+            observation_date=(
+                None if latest is None else latest.date().isoformat()
+            ),
+        )
 
     def load_analysis_snapshot(self, ticker):
         self.calls.append(("load_analysis_snapshot", ticker))
@@ -575,6 +594,26 @@ class FakeRelativeStrengthService:
                 for ticker in tickers
             },
         }
+
+
+class FakeMacroRiskService:
+    def cache_token(self):
+        return ("macro", 1)
+
+    def build_history(self, dates):
+        return [
+            {
+                "time": date,
+                "score": 0.0,
+                "coverage": 1.0,
+                "state": "low",
+                "components": {},
+                "series": {},
+                "evidence": [],
+                "unavailable_reason": None,
+            }
+            for date in dates
+        ]
 
 
 def test_config(**overrides):
@@ -2044,6 +2083,83 @@ class WebApiTest(unittest.TestCase):
             "invalid_macro_benchmark",
         )
         service.build.assert_not_called()
+
+    def test_default_macro_history_uses_configured_research_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            research_database = Path(directory) / "research.db"
+            with sqlite3.connect(research_database) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE daily_prices (
+                        ticker TEXT NOT NULL,
+                        date TEXT NOT NULL,
+                        raw_open REAL NOT NULL,
+                        raw_high REAL NOT NULL,
+                        raw_low REAL NOT NULL,
+                        raw_close REAL NOT NULL,
+                        adjusted_open REAL NOT NULL,
+                        adjusted_high REAL NOT NULL,
+                        adjusted_low REAL NOT NULL,
+                        adjusted_close REAL NOT NULL,
+                        adjustment_factor REAL NOT NULL,
+                        volume REAL NOT NULL,
+                        segment_id INTEGER NOT NULL,
+                        provider TEXT NOT NULL,
+                        snapshot_date TEXT NOT NULL,
+                        imported_at TEXT NOT NULL,
+                        adjustment_method TEXT NOT NULL,
+                        PRIMARY KEY (ticker, date)
+                    )
+                    """
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO daily_prices VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        (
+                            "SPY", "2024-01-02", 100, 101, 99, 100,
+                            100, 101, 99, 100, 1, 1000, 1, "fixture",
+                            "2026-07-23", "2026-07-23T20:00:00Z",
+                            "split_adjusted",
+                        ),
+                        (
+                            "SPY", "2025-01-02", 110, 111, 109, 110,
+                            110, 111, 109, 110, 1, 1100, 1, "fixture",
+                            "2026-07-23", "2026-07-23T20:00:00Z",
+                            "split_adjusted",
+                        ),
+                        (
+                            "SPY", "2026-01-02", 120, 121, 119, 120,
+                            120, 121, 119, 120, 1, 1200, 1, "fixture",
+                            "2026-07-23", "2026-07-23T20:00:00Z",
+                            "split_adjusted",
+                        ),
+                    ),
+                )
+            market_repository = FakeRepository()
+            market_repository.histories["SPY"] = price_history(periods=2)
+            app = create_app(
+                test_config(
+                    RESEARCH_DATABASE=str(research_database),
+                    MACRO_RISK_SERVICE=FakeMacroRiskService(),
+                ),
+                repository=market_repository,
+                update_manager=FakeManager(),
+            )
+
+            response = app.test_client().get(
+                "/api/macro-history?range=all&benchmark=SPY"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(response.get_json()["rows"]), 3)
+            self.assertEqual(
+                response.get_json()["rows"][0]["time"],
+                "2024-01-02",
+            )
 
     def test_market_page_and_api_keep_daily_proxy_state_honest(self):
         service = mock.Mock()

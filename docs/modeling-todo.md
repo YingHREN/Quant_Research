@@ -492,6 +492,10 @@
 
 设计文档：`docs/superpowers/specs/2026-07-26-point-in-time-macro-risk-design.md`
 
+十年基准时间轴设计：
+`docs/superpowers/specs/2026-07-27-macro-history-research-benchmark-design.md`
+
+- [x] 宏观历史优先使用研究库中 2016–2026 的 SPY/QQQ 复权行情生成时间轴和对照价格；研究库不可用或基准缺失时回退现有市场行情库，缓存随研究库修订自动失效，不改变其他页面的数据源。真实只读接口验收：SPY/QQQ 均为 2,513 行，覆盖 2016-07-26 至 2026-07-24，验收前三个数据库 SHA-256 均保持不变。
 - [ ] 扩充至少十年的股票、ETF 和宏观历史数据。
 - [x] 建立独立 `data/macro_data.db` 的版本化存储合约，包含 `available_at`、`realtime_start`、`realtime_end` 和来源；历史读取只选择观察时点已经发布的版本，未来修订不能改写旧结果。
 - [x] 增加 `fetch_macro_data.py`，使用官方 FRED/ALFRED `output_type=4` 下载初次发布值；FRED 只提供实时日期时保守按 UTC 日末可用，未配置 `FRED_API_KEY` 时不伪造数据。

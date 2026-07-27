@@ -33,6 +33,7 @@ from web.forecasts.model_outputs import (
     build_model_outputs,
     default_model_output_registry,
 )
+from research.expanded_market_data import ExpandedMarketDataRepository
 from research.market_context import build_group_score_frame
 from research.risk_memory import (
     RISK_MEMORY_HALF_LIFE_SESSIONS,
@@ -192,6 +193,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     macro_history_service = flask_app.config.get("MACRO_HISTORY_SERVICE")
     if macro_history_service is None:
+        research_benchmark_repository = ExpandedMarketDataRepository(
+            flask_app.config["RESEARCH_DATABASE"]
+        )
         macro_history_service = MacroHistoryService(
             repository,
             macro_risk_service,
@@ -200,6 +204,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 "database_revision",
                 0,
             ),
+            benchmark_repository=research_benchmark_repository,
         )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
