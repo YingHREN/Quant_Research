@@ -37,6 +37,7 @@ import {
   shouldReloadSelectedTicker,
 } from "./update.js";
 import { createResearchPoolControl } from "./research_pool_control.js";
+import { createIntradayLiveController } from "./intraday-live.js";
 
 const elements = {};
 let stockRequestSequence = 0;
@@ -44,6 +45,7 @@ let chartController = null;
 let updateController = null;
 let cacheStatusController = null;
 let researchPoolController = null;
+let intradayLiveController = null;
 let unsubscribeLocale = null;
 let universeError = null;
 let researchError = null;
@@ -592,6 +594,7 @@ async function selectTicker(ticker) {
     selectedTicker: ticker,
     stockPayload: preserveExistingDetails ? previousState.stockPayload : null,
   });
+  intradayLiveController?.selectTicker(ticker);
   persistSelectedTicker(ticker);
   paintUniverse();
   setRecoveryControl(elements.stockRetry, {
@@ -871,6 +874,7 @@ function applyLocale(locale) {
   );
   paintUniverse();
   researchPoolController?.setLocale(locale);
+  intradayLiveController?.render();
   chartController?.setLocale(locale);
   syncMarkerLayerControls(selectedMarkerLayers, locale);
   if (state.universePayload) {
@@ -947,6 +951,18 @@ function captureElements() {
     cacheStatusDetails: byId("cache-status-details"),
     cacheStatusRefresh: byId("cache-status-refresh"),
     markerLayerCount: byId("marker-layer-count"),
+    intradaySubscriptionSummary: byId("intraday-subscription-summary"),
+    intradaySubscriptionList: byId("intraday-subscription-list"),
+    selectedRealtimeToggle: byId("selected-realtime-toggle"),
+    intradayLiveState: byId("intraday-live-state"),
+    intradayLastTrade: byId("intraday-last-trade"),
+    intradayBid: byId("intraday-bid"),
+    intradayAsk: byId("intraday-ask"),
+    intradaySpread: byId("intraday-spread"),
+    intradayPriceChart: byId("intraday-price-chart"),
+    intradayVolumeChart: byId("intraday-volume-chart"),
+    intradayPressureBar: byId("intraday-pressure-bar"),
+    intradayPressureDetail: byId("intraday-pressure-detail"),
     rangeControls: [...document.querySelectorAll("[data-range]")],
     forecastControls: [...document.querySelectorAll("[data-forecast-horizon]")],
     markerLayerControls: [...document.querySelectorAll("[data-marker-layer]")],
@@ -966,6 +982,26 @@ export async function initializeDashboard() {
     locale: getLocale(),
     onChanged: refreshUniverseAfterResearchPoolChange,
   });
+  if (elements.selectedRealtimeToggle && elements.intradaySubscriptionList) {
+    intradayLiveController = createIntradayLiveController({
+      api,
+      locale: () => store.getState().locale,
+      elements: {
+        summary: elements.intradaySubscriptionSummary,
+        list: elements.intradaySubscriptionList,
+        toggle: elements.selectedRealtimeToggle,
+        state: elements.intradayLiveState,
+        lastTrade: elements.intradayLastTrade,
+        bid: elements.intradayBid,
+        ask: elements.intradayAsk,
+        spread: elements.intradaySpread,
+        priceChart: elements.intradayPriceChart,
+        volumeChart: elements.intradayVolumeChart,
+        pressureBar: elements.intradayPressureBar,
+        pressureDetail: elements.intradayPressureDetail,
+      },
+    });
+  }
   chartController = createLinkedCharts(
     elements.priceChart,
     elements.volumeChart,
@@ -1000,6 +1036,7 @@ export async function initializeDashboard() {
   bindControls();
   await updateController.initialize();
   await cacheStatusController.initialize();
+  await intradayLiveController?.initialize();
   await loadUniverse();
 }
 
@@ -1009,6 +1046,7 @@ if (typeof document !== "undefined") {
     chartController?.destroy();
     updateController?.destroy();
     cacheStatusController?.destroy();
+    intradayLiveController?.destroy();
     unsubscribeLocale?.();
   }, { once: true });
 }

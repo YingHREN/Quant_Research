@@ -35,6 +35,7 @@ class IntradayCollector:
         batch_size=DEFAULT_EVENT_BATCH_SIZE,
         heartbeat_interval=DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
         stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS,
+        subscription_poll_interval=1.0,
     ):
         if (
             isinstance(queue_size, bool)
@@ -50,6 +51,8 @@ class IntradayCollector:
             raise ValueError("batch_size must be a positive integer")
         if heartbeat_interval <= 0:
             raise ValueError("heartbeat_interval must be positive")
+        if subscription_poll_interval <= 0:
+            raise ValueError("subscription_poll_interval must be positive")
         self._provider = provider
         self._store = store
         self._retry_delays = tuple(retry_delays) or (0,)
@@ -57,7 +60,13 @@ class IntradayCollector:
         self._batch_size = batch_size
         self._heartbeat_interval = float(heartbeat_interval)
         self._stale_after_seconds = stale_after_seconds
+        self._subscription_poll_interval = float(subscription_poll_interval)
         limit = provider.capabilities().max_symbols
+        self._selected = None
+        self._peers = ()
+        self._candidates = ()
+        self._persisted_symbols = ()
+        self._subscription_revision = None
         self._desired = SubscriptionRequest(
             build_pool(None, (), (), limit=limit),
             max_symbols=limit,
@@ -84,6 +93,7 @@ class IntradayCollector:
         self._storage_failure_event = None
         self._provider_failure_event = None
         self._heartbeat_task = None
+        self._subscription_control_task = None
         self._queue_high_water = 0
         self._dropped_event_count = 0
         self._undrained_event_count = 0
@@ -95,8 +105,19 @@ class IntradayCollector:
         return datetime.now(timezone.utc)
 
     def set_selection(self, selected, peers, candidates):
+        self._selected = selected
+        self._peers = tuple(peers)
+        self._candidates = tuple(candidates)
+        self._rebuild_desired()
+
+    def _rebuild_desired(self):
         limit = self._provider.capabilities().max_symbols
-        desired = build_pool(selected, peers, candidates, limit=limit)
+        desired = build_pool(
+            self._selected,
+            self._peers,
+            self._candidates + self._persisted_symbols,
+            limit=limit,
+        )
         self._desired = SubscriptionRequest(desired, max_symbols=limit)
         if self._desired == self._active:
             self._update_error = None
@@ -230,6 +251,7 @@ class IntradayCollector:
         provider_failed = False
         cancelled = False
         try:
+            await self._stop_subscription_control()
             await self._cancel_update_worker()
             self._accepting_events = False
             await self._stop_writer()
@@ -415,6 +437,42 @@ class IntradayCollector:
         await asyncio.gather(task, return_exceptions=True)
         self._heartbeat_task = None
 
+    async def _subscription_control_loop(self):
+        while not self._stop_requested:
+            try:
+                request = await asyncio.to_thread(
+                    self._store.read_subscription_request
+                )
+                revision = int(request.get("revision", 0))
+                if (
+                    self._subscription_revision is None
+                    or revision > self._subscription_revision
+                ):
+                    self._subscription_revision = revision
+                    self._persisted_symbols = tuple(
+                        request.get("user_symbols") or ()
+                    )
+                    self._rebuild_desired()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(),
+                    timeout=self._subscription_poll_interval,
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    async def _stop_subscription_control(self):
+        task = self._subscription_control_task
+        if task is None or task is asyncio.current_task():
+            return
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self._subscription_control_task = None
+
     def _publish_status(self):
         if self._session_id is None or not hasattr(
             self._store,
@@ -500,6 +558,7 @@ class IntradayCollector:
         self._storage_failure_event = asyncio.Event()
         self._provider_failure_event = asyncio.Event()
         self._heartbeat_task = None
+        self._subscription_control_task = None
         self._queue_high_water = 0
         self._dropped_event_count = 0
         self._undrained_event_count = 0
@@ -515,6 +574,13 @@ class IntradayCollector:
         capabilities = self._provider.capabilities()
         try:
             self._store.initialize()
+            if hasattr(self._store, "read_subscription_request"):
+                request = self._store.read_subscription_request()
+                self._subscription_revision = int(request.get("revision", 0))
+                self._persisted_symbols = tuple(
+                    request.get("user_symbols") or ()
+                )
+                self._rebuild_desired()
             now = self._now()
             self._store.record_capabilities(capabilities, now)
             if hasattr(self._store, "begin_collector_session"):
@@ -539,6 +605,10 @@ class IntradayCollector:
         self._heartbeat_task = asyncio.create_task(
             self._heartbeat_loop()
         )
+        if hasattr(self._store, "read_subscription_request"):
+            self._subscription_control_task = asyncio.create_task(
+                self._subscription_control_loop()
+            )
         retry_index = 0
         try:
             while not self._stop_requested:

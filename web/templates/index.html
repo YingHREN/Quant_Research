@@ -133,6 +133,11 @@
       <p class="filter-note" data-i18n="universe.gate.explanation">
         技术门槛检查价格高于 SMA50、EMA10 高于 EMA20、两条均线向上及距 52 周高点不超过 20%；它不是完整 CAN SLIM 或买入信号。
       </p>
+      <section class="intraday-subscription-manager" aria-labelledby="intraday-subscription-title">
+        <h3 id="intraday-subscription-title" data-i18n="intraday.subscription.title">实时订阅</h3>
+        <p id="intraday-subscription-summary" class="inline-status" aria-live="polite">0 / 30</p>
+        <div id="intraday-subscription-list" class="intraday-subscription-list"></div>
+      </section>
 
       <p id="universe-status" class="inline-status" role="status" aria-live="polite" data-i18n="universe.loading">
         Loading local universe…
@@ -191,6 +196,33 @@
                 data-i18n="recovery.stock">Retry current stock</button>
         <ul id="data-warnings" class="warning-list span-full" aria-label="Data quality warnings"
             data-i18n-aria-label="security.warningAria"></ul>
+      </section>
+
+      <section id="intraday-live-panel" class="panel intraday-live-panel" aria-labelledby="intraday-live-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Alpaca IEX</p>
+            <h2 id="intraday-live-title" data-i18n="intraday.title">盘中实时看板</h2>
+          </div>
+          <div class="intraday-live-actions">
+            <span id="intraday-live-state" class="state-badge" data-i18n="intraday.state.unavailable">不可用</span>
+            <button id="selected-realtime-toggle" class="quiet-button" type="button" aria-pressed="false"
+                    data-i18n="intraday.subscription.add">加入实时</button>
+          </div>
+        </div>
+        <dl class="intraday-quote-grid">
+          <div><dt data-i18n="intraday.lastTrade">最新成交</dt><dd id="intraday-last-trade">—</dd></div>
+          <div><dt data-i18n="intraday.bid">买一</dt><dd id="intraday-bid">—</dd></div>
+          <div><dt data-i18n="intraday.ask">卖一</dt><dd id="intraday-ask">—</dd></div>
+          <div><dt data-i18n="intraday.spread">价差</dt><dd id="intraday-spread">—</dd></div>
+        </dl>
+        <div class="intraday-chart-grid">
+          <svg id="intraday-price-chart" viewBox="0 0 600 100" role="img" aria-label="Intraday minute price"></svg>
+          <svg id="intraday-volume-chart" viewBox="0 0 600 60" role="img" aria-label="Intraday minute volume"></svg>
+        </div>
+        <div id="intraday-pressure-bar" class="intraday-pressure-bar"><span></span></div>
+        <p id="intraday-pressure-detail" class="inline-status">—</p>
+        <p class="safety-copy" data-i18n="intraday.iexLimitation">仅含 IEX 部分市场成交与最优报价，不代表全市场订单流。</p>
       </section>
 
       <section class="panel chart-panel" aria-labelledby="chart-title">

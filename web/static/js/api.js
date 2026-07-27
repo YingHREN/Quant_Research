@@ -126,6 +126,26 @@ export function getCacheStatus() {
   return requestJson("/api/cache/status");
 }
 
+export function getIntradaySubscriptions() {
+  return requestJson("/api/market-data/subscriptions");
+}
+
+export function replaceIntradaySubscriptions(symbols) {
+  return requestJson("/api/market-data/subscriptions", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbols }),
+  });
+}
+
+export function getIntradaySnapshot(ticker, windowMinutes = 120) {
+  return requestJson(
+    `/api/intraday/${encodeURIComponent(ticker)}?window=${encodeURIComponent(windowMinutes)}`,
+    {},
+    { retryDelays: [] },
+  );
+}
+
 export const api = Object.freeze({
   getUniverse,
   getStock,
@@ -136,4 +156,7 @@ export const api = Object.freeze({
   startUpdate,
   getUpdateStatus,
   getCacheStatus,
+  getIntradaySubscriptions,
+  replaceIntradaySubscriptions,
+  getIntradaySnapshot,
 });

@@ -272,6 +272,23 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .global-status[data-tone="error"] { color: var(--danger); }
 
 .universe-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.intraday-subscription-manager { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 12px; }
+.intraday-subscription-manager h3 { margin: 0; font-size: .9rem; }
+.intraday-subscription-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.intraday-subscription-chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 8px; background: transparent; color: var(--text); }
+.intraday-live-panel { min-height: 330px; overflow: hidden; }
+.intraday-live-actions { display: flex; align-items: center; gap: 8px; }
+.intraday-quote-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 12px 0; }
+.intraday-quote-grid div { border: 1px solid var(--line); border-radius: 10px; padding: 9px; }
+.intraday-quote-grid dt { color: var(--muted); font-size: .78rem; }
+.intraday-quote-grid dd { margin: 5px 0 0; font-weight: 700; }
+.intraday-chart-grid { height: 170px; display: grid; grid-template-rows: 100px 60px; gap: 6px; }
+.intraday-chart-grid svg { width: 100%; height: 100%; background: rgba(4, 15, 23, .35); }
+.intraday-price-line { fill: none; stroke: #55c7ff; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.intraday-volume-buy { fill: #34c8aa; }
+.intraday-volume-sell { fill: #ff737d; }
+.intraday-pressure-bar { position: relative; height: 8px; margin-top: 12px; border-radius: 999px; background: linear-gradient(90deg, #ff737d, #667788 50%, #34c8aa); }
+.intraday-pressure-bar span { position: absolute; top: -4px; left: var(--pressure-position, 50%); width: 3px; height: 16px; background: white; }
 .universe-row { width: 100%; min-height: 62px; padding: 9px 10px; text-align: left; background: #0c151d; color: var(--text); }
 .universe-row[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
 .ticker-line, .ticker-meta { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

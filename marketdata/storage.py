@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS collector_status (
     queue_high_water INTEGER NOT NULL, dropped_event_count INTEGER NOT NULL,
     undrained_event_count INTEGER NOT NULL, lease_expires_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS intraday_subscription_control (
+    singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+    revision INTEGER NOT NULL,
+    user_symbols TEXT NOT NULL,
+    updated_at TEXT
+);
+INSERT OR IGNORE INTO intraday_subscription_control (
+    singleton_id, revision, user_symbols, updated_at
+) VALUES (1, 0, '[]', NULL);
 """
 
 
@@ -136,6 +145,54 @@ class IntradayStore:
         with self._connect() as connection:
             connection.executescript(SCHEMA)
             self._migrate_preceding_schema(connection)
+
+    def read_subscription_request(self):
+        try:
+            with self._connect_readonly() as connection:
+                row = connection.execute(
+                    "SELECT revision, user_symbols, updated_at "
+                    "FROM intraday_subscription_control WHERE singleton_id=1"
+                ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is None:
+            return {"revision": 0, "user_symbols": [], "updated_at": None}
+        return {
+            "revision": int(row[0]),
+            "user_symbols": list(json.loads(row[1])),
+            "updated_at": row[2],
+        }
+
+    def replace_subscription_request(self, symbols, updated_at):
+        self._require_utc(updated_at, "updated_at")
+        normalized = SubscriptionRequest(symbols, max_symbols=30).symbols
+        self.initialize()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT revision FROM intraday_subscription_control "
+                "WHERE singleton_id=1"
+            ).fetchone()
+            revision = (0 if row is None else int(row[0])) + 1
+            connection.execute(
+                "INSERT INTO intraday_subscription_control "
+                "(singleton_id, revision, user_symbols, updated_at) "
+                "VALUES (1, ?, ?, ?) "
+                "ON CONFLICT(singleton_id) DO UPDATE SET "
+                "revision=excluded.revision, "
+                "user_symbols=excluded.user_symbols, "
+                "updated_at=excluded.updated_at",
+                (
+                    revision,
+                    json.dumps(normalized),
+                    updated_at.isoformat(),
+                ),
+            )
+        return {
+            "revision": revision,
+            "user_symbols": list(normalized),
+            "updated_at": updated_at.isoformat(),
+        }
 
     @staticmethod
     def _migrate_preceding_schema(connection):
@@ -503,6 +560,35 @@ class IntradayStore:
             event_ts_ns=row["event_ts_ns"],
             trading_date=row["trading_date"],
             size_unit=row["size_unit"],
+        )
+
+    def read_latest_quote(self, provider, symbol):
+        normalized = SubscriptionRequest((symbol,), max_symbols=1).symbols[0]
+        with self._connect_readonly() as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM intraday_quotes "
+                "WHERE provider=? AND symbol=? "
+                "ORDER BY event_ts_ns DESC LIMIT 1",
+                (provider, normalized),
+            ).fetchone()
+        if row is None:
+            return None
+        return QuoteEvent(
+            provider=row["provider"],
+            symbol=row["symbol"],
+            event_ts=_parse_utc(row["event_ts"]),
+            received_ts=_parse_utc(row["received_ts"]),
+            bid_price=row["bid_price"],
+            bid_size=row["bid_size"],
+            ask_price=row["ask_price"],
+            ask_size=row["ask_size"],
+            source_sequence=row["source_sequence"],
+            session=row["session"],
+            event_ts_ns=row["event_ts_ns"],
+            trading_date=row["trading_date"],
+            size_unit=row["size_unit"],
+            lot_size=row["lot_size"],
         )
 
     def record_capabilities(self, capabilities, recorded_at):
