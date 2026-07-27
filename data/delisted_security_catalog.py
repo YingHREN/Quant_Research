@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Mapping, Sequence
 import re
 
 
@@ -179,3 +180,120 @@ def classify_catalog_row(raw):
         "backfill_eligible": classification == "accepted_common",
         "rule_version": RULE_VERSION,
     }
+
+
+def build_delisted_catalog(rows):
+    """Build an order-independent catalog and quarantine identity conflicts."""
+    if isinstance(rows, (str, bytes)) or not isinstance(rows, Sequence):
+        raise TypeError("catalog rows must be a sequence")
+    securities = [classify_catalog_row(raw) for raw in rows]
+    seen_in_scope = set()
+    for item in securities:
+        if item["scope_status"] != "in_scope":
+            continue
+        key = (item["exchange"], item["ticker"])
+        if key in seen_in_scope:
+            raise ValueError(
+                f"duplicate in-scope security: {item['exchange']} "
+                f"{item['ticker']}"
+            )
+        seen_in_scope.add(key)
+
+    by_identity = {}
+    for index, item in enumerate(securities):
+        identity_key = item.get("identity_key")
+        if identity_key:
+            by_identity.setdefault(identity_key, []).append(index)
+    for indexes in by_identity.values():
+        if len(indexes) < 2:
+            continue
+        names = {
+            _normalized_name(securities[index]["name"])
+            for index in indexes
+        }
+        classifications = {
+            securities[index]["classification"] for index in indexes
+        }
+        if len(names) == 1 and len(classifications) == 1:
+            continue
+        for index in indexes:
+            item = dict(securities[index])
+            item["classification"] = "needs_review"
+            item["reason_codes"] = sorted(
+                set(item["reason_codes"]) | {"identity_conflict"}
+            )
+            item["evidence"] = sorted(
+                set(item["evidence"]) | {f"identity:{item['identity_key']}"}
+            )
+            item["backfill_eligible"] = False
+            securities[index] = item
+
+    securities.sort(
+        key=lambda item: (
+            item["scope_status"] == "out_of_scope",
+            item["exchange"],
+            item["ticker"],
+            item["name"],
+        )
+    )
+    return {
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "rule_version": RULE_VERSION,
+        "input_rows": len(rows),
+        "securities": securities,
+    }
+
+
+def summarize_delisted_catalog(catalog):
+    """Summarize a purified catalog without copying provider payloads."""
+    if not isinstance(catalog, Mapping):
+        raise TypeError("catalog must be a mapping")
+    if catalog.get("schema_version") != CATALOG_SCHEMA_VERSION:
+        raise ValueError("unsupported delisted catalog schema")
+    securities = catalog.get("securities")
+    if not isinstance(securities, list):
+        raise TypeError("catalog securities must be a list")
+    classification_counts = Counter(
+        item["classification"] for item in securities
+    )
+    identity_counts = Counter(item["identity_status"] for item in securities)
+    reason_counts = Counter(
+        reason
+        for item in securities
+        for reason in item["reason_codes"]
+    )
+    reason_tickers = {}
+    by_exchange = {}
+    for item in securities:
+        exchange_counts = by_exchange.setdefault(item["exchange"], Counter())
+        exchange_counts[item["classification"]] += 1
+        for reason in item["reason_codes"]:
+            reason_tickers.setdefault(reason, set()).add(item["ticker"])
+    return {
+        "input_rows": len(securities),
+        "in_scope_rows": sum(
+            item["scope_status"] == "in_scope" for item in securities
+        ),
+        "backfill_eligible_rows": sum(
+            bool(item["backfill_eligible"]) for item in securities
+        ),
+        "classification_counts": _sorted_counter(classification_counts),
+        "identity_status_counts": _sorted_counter(identity_counts),
+        "reason_counts": _sorted_counter(reason_counts),
+        "reason_samples": {
+            reason: sorted(tickers)[:5]
+            for reason, tickers in sorted(reason_tickers.items())
+        },
+        "by_exchange": {
+            exchange: _sorted_counter(counts)
+            for exchange, counts in sorted(by_exchange.items())
+        },
+    }
+
+
+def _normalized_name(value):
+    return " ".join(str(value or "").upper().split())
+
+
+def _sorted_counter(counter):
+    return {key: int(counter[key]) for key in sorted(counter)}

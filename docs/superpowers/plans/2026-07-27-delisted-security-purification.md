@@ -87,29 +87,29 @@ git commit -m "data: classify delisted security types"
 - Produces: `build_delisted_catalog(rows: Sequence[Mapping]) -> dict`
 - Produces: `summarize_delisted_catalog(catalog: Mapping) -> dict`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 以手工目录验证输入顺序不影响输出、范围内重复代码失败、同一 ISIN 的名称或
 分类冲突会把相关行都改为 `needs_review/identity_conflict`，以及交易所、
 分类、原因和身份覆盖统计。
 
-- [ ] **Step 2: 运行测试确认新接口缺失**
+- [x] **Step 2: 运行测试确认新接口缺失**
 
 Expected: FAIL，仅因为 `build_delisted_catalog` / `summarize_delisted_catalog`
 尚不存在。
 
-- [ ] **Step 3: 实现目录构建**
+- [x] **Step 3: 实现目录构建**
 
 输出 `schema_version=delisted_security_catalog_v1`、规则版本、按
 `(exchange,ticker)` 排序的 `securities`。冲突处理不得删除行；原因码去重
 排序，并同步把 `backfill_eligible` 改为 false。
 
-- [ ] **Step 4: 实现确定性汇总**
+- [x] **Step 4: 实现确定性汇总**
 
 汇总输入数、范围内数、四种分类数、各交易所分类数、原因计数、身份状态计数和
 每种原因最多五个按代码排序的样例。
 
-- [ ] **Step 5: 重跑目标测试并提交**
+- [x] **Step 5: 重跑目标测试并提交**
 
 ```bash
 git add data/delisted_security_catalog.py tests/test_delisted_security_catalog.py

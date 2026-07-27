@@ -1,6 +1,11 @@
 import unittest
 
-from data.delisted_security_catalog import classify_catalog_row, valid_isin
+from data.delisted_security_catalog import (
+    build_delisted_catalog,
+    classify_catalog_row,
+    summarize_delisted_catalog,
+    valid_isin,
+)
 
 
 def row(
@@ -114,6 +119,103 @@ class DelistedSecurityCatalogTest(unittest.TestCase):
     def test_non_mapping_row_is_rejected(self):
         with self.assertRaises(TypeError):
             classify_catalog_row(["not", "a", "mapping"])
+
+    def test_catalog_is_order_independent_and_rejects_in_scope_duplicates(self):
+        rows = [
+            row("ZZZ", "Last Inc"),
+            row("AAA", "First Inc"),
+            row("OTC", "OTC Inc", exchange="PINK"),
+        ]
+
+        forward = build_delisted_catalog(rows)
+        backward = build_delisted_catalog(list(reversed(rows)))
+
+        self.assertEqual(forward, backward)
+        self.assertEqual(
+            [item["ticker"] for item in forward["securities"]],
+            ["AAA", "ZZZ", "OTC"],
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate in-scope security"):
+            build_delisted_catalog(
+                [
+                    row("AAA", "First Inc"),
+                    row("AAA", "Duplicate Inc"),
+                ]
+            )
+
+    def test_same_isin_conflict_requires_review_without_merging_tickers(self):
+        catalog = build_delisted_catalog(
+            [
+                row(
+                    "OLD",
+                    "Old Company Inc",
+                    isin="US0378331005",
+                ),
+                row(
+                    "NEW",
+                    "Different Company Inc",
+                    exchange="NYSE",
+                    isin="US0378331005",
+                ),
+            ]
+        )
+
+        self.assertEqual(len(catalog["securities"]), 2)
+        for item in catalog["securities"]:
+            self.assertEqual(item["classification"], "needs_review")
+            self.assertEqual(
+                item["reason_codes"],
+                ["identity_conflict"],
+            )
+            self.assertFalse(item["backfill_eligible"])
+            self.assertEqual(
+                item["identity_key"],
+                "isin:US0378331005",
+            )
+
+    def test_summary_counts_scope_classification_reason_and_identity(self):
+        catalog = build_delisted_catalog(
+            [
+                row("AAA", "AAA Inc", isin="US0378331005"),
+                row("BBB-WS", "BBB Warrants", exchange="NYSE"),
+                row("CCC", "CCC", exchange="NYSE MKT"),
+                row("DDD", "DDD Inc", exchange="PINK"),
+            ]
+        )
+
+        summary = summarize_delisted_catalog(catalog)
+
+        self.assertEqual(summary["input_rows"], 4)
+        self.assertEqual(summary["in_scope_rows"], 3)
+        self.assertEqual(
+            summary["classification_counts"],
+            {
+                "accepted_common": 1,
+                "needs_review": 1,
+                "out_of_scope": 1,
+                "rejected_non_common": 1,
+            },
+        )
+        self.assertEqual(
+            summary["reason_counts"],
+            {
+                "ambiguous_name": 1,
+                "unsupported_exchange": 1,
+                "warrant_signal": 1,
+            },
+        )
+        self.assertEqual(
+            summary["identity_status_counts"],
+            {"strong_isin": 1, "ticker_only": 3},
+        )
+        self.assertEqual(
+            summary["reason_samples"]["warrant_signal"],
+            ["BBB-WS"],
+        )
+        self.assertEqual(
+            summary["by_exchange"]["NYSE"]["rejected_non_common"],
+            1,
+        )
 
 
 if __name__ == "__main__":
