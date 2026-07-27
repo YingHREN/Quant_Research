@@ -152,6 +152,17 @@ class GroupAssignmentTest(unittest.TestCase):
 
         self.assertEqual(overrides, ())
 
+    def test_resolver_accepts_records_returned_by_override_loader(self):
+        assignment = resolve_group_assignment(
+            "SNDK",
+            {},
+            "2026-07-24",
+            overrides=load_group_overrides(),
+        )
+
+        self.assertEqual(assignment.primary_model_group, "semiconductor")
+        self.assertEqual(assignment.source, "override")
+
     def test_audit_reports_invalid_benchmarks_duplicate_themes_and_conflicts(self):
         valid = resolve_group_assignment(
             "CHIP",

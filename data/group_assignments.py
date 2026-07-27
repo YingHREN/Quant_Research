@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
 
 from web.market_groups import MARKET_GROUPS, SECTOR_ETFS
 
@@ -235,7 +235,7 @@ def _classified_assignment(
 
 
 def _normalize_override(entry, default_rule_version=None):
-    if not isinstance(entry, dict) or not _OVERRIDE_FIELDS <= entry.keys():
+    if not isinstance(entry, Mapping) or not _OVERRIDE_FIELDS <= entry.keys():
         raise ValueError("invalid_group_override")
     ticker = str(entry["ticker"]).strip().upper()
     start = _normalize_date(entry["effective_from"])
