@@ -132,6 +132,11 @@ class ExpandedMarketDataRepositoryTest(unittest.TestCase):
                         None, "other_universe", "fixture", "2026-07-27",
                         "2026-07-27T10:00:00Z", 0, "Ignored",
                     ),
+                    (
+                        "legacy_v1", "UNKNOWN", "2010-01-01",
+                        None, "legacy_v1", None, None, None, None,
+                        "Unknown status",
+                    ),
                 ),
             )
             connection.executemany(
@@ -306,6 +311,16 @@ class ExpandedMarketDataRepositoryTest(unittest.TestCase):
                 universe_key="sp500_historical_eodhd_v1",
                 observation_dates=(),
             )
+
+    def test_legacy_membership_does_not_invent_delisted_status(self):
+        repository = ExpandedMarketDataRepository(self.database)
+
+        members = repository.load_universe_members(
+            universe_key="legacy_v1",
+            asof="2020-01-01",
+        )
+
+        self.assertIsNone(members["UNKNOWN"]["is_delisted"])
 
 
 if __name__ == "__main__":

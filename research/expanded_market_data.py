@@ -189,7 +189,9 @@ class ExpandedMarketDataRepository:
                 "imported_at": (
                     None if imported_at is None else str(imported_at)
                 ),
-                "is_delisted": bool(is_delisted),
+                "is_delisted": (
+                    None if is_delisted is None else bool(is_delisted)
+                ),
                 "security_name": (
                     None if security_name is None else str(security_name)
                 ),
