@@ -1992,6 +1992,59 @@ class WebApiTest(unittest.TestCase):
         )
         service.build.assert_not_called()
 
+    def test_macro_history_route_passes_validated_query_to_service(self):
+        service = mock.Mock()
+        service.build.return_value = {
+            "asof": "2026-07-23",
+            "range": "3y",
+            "benchmark": "QQQ",
+            "rows": [],
+            "series_catalog": {},
+            "score_thresholds": {},
+            "point_in_time": True,
+            "unavailable_reason": None,
+        }
+        app = create_app(
+            test_config(MACRO_HISTORY_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+
+        response = app.test_client().get(
+            "/api/macro-history?range=3y&benchmark=QQQ&asof=2026-07-23"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        service.build.assert_called_once_with(
+            asof="2026-07-23",
+            range_key="3y",
+            benchmark="QQQ",
+        )
+
+    def test_macro_history_route_rejects_unknown_range_and_benchmark(self):
+        service = mock.Mock()
+        app = create_app(
+            test_config(MACRO_HISTORY_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+        client = app.test_client()
+
+        bad_range = client.get("/api/macro-history?range=10y")
+        bad_benchmark = client.get("/api/macro-history?benchmark=AMD")
+
+        self.assertEqual(bad_range.status_code, 400)
+        self.assertEqual(
+            bad_range.get_json()["error"]["code"],
+            "invalid_macro_range",
+        )
+        self.assertEqual(bad_benchmark.status_code, 400)
+        self.assertEqual(
+            bad_benchmark.get_json()["error"]["code"],
+            "invalid_macro_benchmark",
+        )
+        service.build.assert_not_called()
+
     def test_market_page_and_api_keep_daily_proxy_state_honest(self):
         service = mock.Mock()
         service.build.return_value = {

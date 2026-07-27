@@ -9,8 +9,10 @@ from threading import RLock
 import pandas as pd
 
 from research.macro_risk import (
+    HISTORY_SERIES,
     MODEL_KEY,
     SERIES_IDS,
+    build_macro_history_rows,
     build_macro_risk,
     unavailable_macro_risk,
 )
@@ -30,7 +32,7 @@ class MacroRiskService:
 
     def build(self, asof=None):
         cutoff = _asof_cutoff(asof)
-        key = cutoff.isoformat()
+        key = ("point", self.cache_token(), cutoff.isoformat())
         with self._lock:
             cached = self._cache.get(key)
             if cached is not None:
@@ -46,6 +48,43 @@ class MacroRiskService:
                 "macro_data_unavailable",
                 cutoff,
             )
+        with self._lock:
+            self._cache[key] = deepcopy(payload)
+            while len(self._cache) > self._max_cache_size:
+                self._cache.pop(next(iter(self._cache)))
+        return deepcopy(payload)
+
+    def build_history(self, dates):
+        normalized_dates = tuple(
+            sorted(
+                {
+                    pd.Timestamp(value).date().isoformat()
+                    for value in dates
+                }
+            )
+        )
+        if not normalized_dates:
+            return []
+        key = ("history", self.cache_token(), normalized_dates)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                return deepcopy(cached)
+        maximum = max(_asof_cutoff(value) for value in normalized_dates)
+        try:
+            observations = self._store.load_available(
+                maximum,
+                series_ids=SERIES_IDS,
+            )
+            payload = build_macro_history_rows(
+                observations,
+                normalized_dates,
+            )
+        except (MacroDataUnavailable, ValueError, TypeError):
+            payload = [
+                _unavailable_history_row(date)
+                for date in normalized_dates
+            ]
         with self._lock:
             self._cache[key] = deepcopy(payload)
             while len(self._cache) > self._max_cache_size:
@@ -118,3 +157,28 @@ def _asof_cutoff(asof):
         value = value + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
         return value.tz_localize("UTC")
     return value.tz_convert("UTC")
+
+
+def _unavailable_history_row(date):
+    risk = unavailable_macro_risk(
+        "macro_data_unavailable",
+        _asof_cutoff(date),
+    )
+    return {
+        "time": pd.Timestamp(date).date().isoformat(),
+        "score": risk["score"],
+        "coverage": risk["coverage"],
+        "state": risk["state"],
+        "components": risk["components"],
+        "series": {
+            key: {
+                "value": None,
+                "observation_date": None,
+                "available_at": None,
+                "series_ids": [],
+            }
+            for key in HISTORY_SERIES
+        },
+        "evidence": risk["evidence"],
+        "unavailable_reason": risk["unavailable_reason"],
+    }

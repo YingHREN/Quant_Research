@@ -7,6 +7,67 @@ from web.services.macro_store import MacroObservationStore
 
 
 class MacroRiskServiceTest(unittest.TestCase):
+    def test_cache_is_invalidated_when_macro_database_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "macro.db"
+            service = MacroRiskService(path)
+
+            missing = service.build("2026-07-20")
+            store = MacroObservationStore(path)
+            store.initialize()
+            store.upsert(
+                [
+                    {
+                        "series_id": "VIXCLS",
+                        "observation_date": "2026-07-01",
+                        "available_at": "2026-07-01T18:00:00+00:00",
+                        "value": 18.0,
+                        "realtime_start": "2026-07-01",
+                        "realtime_end": "9999-12-31",
+                        "source": "FRED",
+                    }
+                ]
+            )
+            refreshed = service.build("2026-07-20")
+
+            self.assertEqual(
+                missing["unavailable_reason"],
+                "macro_data_unavailable",
+            )
+            self.assertEqual(
+                refreshed["unavailable_reason"],
+                "insufficient_macro_coverage",
+            )
+
+    def test_build_history_returns_one_point_in_time_row_per_date(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = MacroObservationStore(Path(directory) / "macro.db")
+            store.initialize()
+            store.upsert(
+                [
+                    {
+                        "series_id": "VIXCLS",
+                        "observation_date": "2026-07-01",
+                        "available_at": "2026-07-01T18:00:00+00:00",
+                        "value": 18.0,
+                        "realtime_start": "2026-07-01",
+                        "realtime_end": "9999-12-31",
+                        "source": "FRED",
+                    }
+                ]
+            )
+
+            rows = MacroRiskService(store.path).build_history(
+                ("2026-06-30", "2026-07-02")
+            )
+
+            self.assertEqual(
+                [row["time"] for row in rows],
+                ["2026-06-30", "2026-07-02"],
+            )
+            self.assertIsNone(rows[0]["series"]["VIXCLS"]["value"])
+            self.assertEqual(rows[1]["series"]["VIXCLS"]["value"], 18.0)
+
     def test_store_returns_only_vintages_available_by_requested_time(self):
         with tempfile.TemporaryDirectory() as directory:
             store = MacroObservationStore(Path(directory) / "macro.db")

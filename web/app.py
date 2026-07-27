@@ -65,6 +65,11 @@ from web.services.market_data import (
     UnknownTicker,
 )
 from web.services.market_overview import MarketOverviewService
+from web.services.macro_history import (
+    MacroHistoryService,
+    VALID_BENCHMARKS as VALID_MACRO_BENCHMARKS,
+    VALID_RANGES as VALID_MACRO_RANGES,
+)
 from web.services.macro_risk import MacroRiskService
 from web.services.universe import UniverseSnapshotService
 from web.services.research_classification import ResearchClassificationService
@@ -185,6 +190,17 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             ),
             macro_risk_service=macro_risk_service,
         )
+    macro_history_service = flask_app.config.get("MACRO_HISTORY_SERVICE")
+    if macro_history_service is None:
+        macro_history_service = MacroHistoryService(
+            repository,
+            macro_risk_service,
+            revision_getter=lambda: getattr(
+                forecast_service,
+                "database_revision",
+                0,
+            ),
+        )
     factor_registry = flask_app.config.get("FACTOR_REGISTRY")
     if factor_registry is None:
         factor_registry = build_default_registry(
@@ -256,6 +272,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         "dashboard_market_overview_service"
     ] = market_overview_service
     flask_app.extensions["dashboard_macro_risk_service"] = macro_risk_service
+    flask_app.extensions[
+        "dashboard_macro_history_service"
+    ] = macro_history_service
 
     @flask_app.get("/")
     def index():
@@ -295,6 +314,29 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             asof=request.args.get("asof"),
             horizon=horizon,
             sector=sector,
+        )
+        return _json_response(payload)
+
+    @flask_app.get("/api/macro-history")
+    def macro_history():
+        range_key = request.args.get("range", "3y")
+        if range_key not in VALID_MACRO_RANGES:
+            return _safe_error(
+                "invalid_macro_range",
+                "Macro history range is invalid",
+                400,
+            )
+        benchmark = request.args.get("benchmark", "SPY")
+        if benchmark not in VALID_MACRO_BENCHMARKS:
+            return _safe_error(
+                "invalid_macro_benchmark",
+                "Macro history benchmark is invalid",
+                400,
+            )
+        payload = macro_history_service.build(
+            asof=request.args.get("asof"),
+            range_key=range_key,
+            benchmark=benchmark,
         )
         return _json_response(payload)
 
