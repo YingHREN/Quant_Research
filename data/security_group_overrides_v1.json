@@ -1,0 +1,16 @@
+{
+  "rule_version": "security_group_overrides_v1",
+  "overrides": [
+    {
+      "ticker": "SNDK",
+      "effective_from": "2025-02-24",
+      "effective_to": "9999-12-31",
+      "sector_key": "technology",
+      "sector_benchmark": "XLK",
+      "theme_keys": ["semiconductor"],
+      "primary_model_group": "semiconductor",
+      "reason": "flash memory and storage semiconductor exposure",
+      "rule_version": "security_group_overrides_v1"
+    }
+  ]
+}
