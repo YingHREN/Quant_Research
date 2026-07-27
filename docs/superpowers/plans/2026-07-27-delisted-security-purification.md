@@ -28,20 +28,20 @@
 - Produces: `classify_catalog_row(raw: Mapping) -> dict`
 - Produces: `valid_isin(value: object) -> bool`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖普通股、SPAC 普通股、warrant/unit/right/preferred/debt/fund、空名称、
 非法代码、范围外交易所、有效/缺失/非法 ISIN。断言稳定状态、原因码、
 `identity_key` 和 `backfill_eligible`。
 
-- [ ] **Step 2: 运行测试确认缺少接口**
+- [x] **Step 2: 运行测试确认缺少接口**
 
 Run:
 `PYTHONWARNINGS=error ../../venv/bin/python -m unittest tests.test_delisted_security_catalog -q`
 
 Expected: FAIL，无法导入 `data.delisted_security_catalog`。
 
-- [ ] **Step 3: 实现最小纯函数**
+- [x] **Step 3: 实现最小纯函数**
 
 使用预编译正则、ISO 6166 字符展开和 Luhn 校验。范围门先于三态判断；拒绝
 信号先于歧义信号。返回字段固定为：
@@ -65,11 +65,11 @@ Expected: FAIL，无法导入 `data.delisted_security_catalog`。
 }
 ```
 
-- [ ] **Step 4: 重跑目标测试**
+- [x] **Step 4: 重跑目标测试**
 
 Expected: PASS，无 warning。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add data/delisted_security_catalog.py tests/test_delisted_security_catalog.py
