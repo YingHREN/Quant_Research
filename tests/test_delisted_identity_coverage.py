@@ -1,6 +1,11 @@
+import json
 import unittest
 
-from research.delisted_identity_coverage import select_coverage_sample
+from research.delisted_identity_coverage import (
+    adjudicate_identity,
+    normalize_provider_evidence,
+    select_coverage_sample,
+)
 
 
 class SelectCoverageSampleTests(unittest.TestCase):
@@ -140,6 +145,271 @@ class SelectCoverageSampleTests(unittest.TestCase):
                 {"AAA": {"valid_rows": 100}},
                 {"strong_isin": 1},
             )
+
+
+class AdjudicateIdentityTests(unittest.TestCase):
+    def test_normalizes_provider_isin_to_cik_evidence(self):
+        result = normalize_provider_evidence(
+            [
+                {
+                    "isin": " us123 ",
+                    "cik": "123",
+                    "code": "old",
+                    "name": "Example Devices",
+                }
+            ],
+            "2026-07-27T12:00:00Z",
+        )
+
+        self.assertEqual(
+            result,
+            (
+                {
+                    "key_type": "isin_cik",
+                    "isin": "US123",
+                    "cik": "0000000123",
+                    "ticker": "OLD",
+                    "name": "Example Devices",
+                    "available_at": "2026-07-27T12:00:00Z",
+                    "source": "eodhd",
+                },
+            ),
+        )
+
+    def test_ticker_only_match_never_confirms_identity(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Unrelated Company",
+                "provider_isin": None,
+                "first_date": "2018-01-01",
+                "last_date": "2020-01-01",
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["current_ticker"],
+                    "matched_former_name": None,
+                }
+            ],
+            (),
+        )
+
+        self.assertEqual(result["link_status"], "review_required")
+        self.assertEqual(result["cik"], None)
+        self.assertEqual(result["reason_codes"], ["ticker_only_match"])
+
+    def test_unique_isin_to_cik_with_exact_name_confirms(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example Devices",
+                "provider_isin": "US123",
+                "first_date": "2018-01-01",
+                "last_date": "2020-01-01",
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["exact_former_name"],
+                    "matched_former_name": {
+                        "name": "Example Devices Corp.",
+                        "from": "2012-01-01",
+                        "to": "2020-06-01",
+                    },
+                }
+            ],
+            [
+                {
+                    "key_type": "isin_cik",
+                    "isin": "US123",
+                    "cik": "0000000123",
+                    "available_at": "2026-07-27T00:00:00Z",
+                }
+            ],
+        )
+
+        self.assertEqual(result["link_status"], "confirmed")
+        self.assertEqual(result["cik"], "0000000123")
+        self.assertEqual(
+            result["decision_rule"],
+            "isin_cik_plus_exact_name",
+        )
+
+    def test_dated_former_name_overlapping_price_history_confirms(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example Devices",
+                "provider_isin": None,
+                "first_date": "2018-01-01",
+                "last_date": "2020-01-01",
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["exact_former_name"],
+                    "matched_former_name": {
+                        "name": "Example Devices Corp.",
+                        "from": "2012-01-01",
+                        "to": "2020-06-01",
+                    },
+                }
+            ],
+            (),
+        )
+
+        self.assertEqual(result["link_status"], "confirmed")
+        self.assertEqual(result["cik"], "0000000123")
+        self.assertEqual(
+            result["decision_rule"],
+            "dated_former_name_overlap",
+        )
+
+    def test_no_identity_candidates_remains_unresolved(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Unknown Company",
+                "provider_isin": None,
+            },
+            (),
+            (),
+        )
+
+        self.assertEqual(result["link_status"], "unresolved")
+        self.assertIsNone(result["cik"])
+        self.assertEqual(result["reason_codes"], ["no_identity_candidates"])
+
+    def test_undated_exact_name_requires_review(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example Holdings",
+                "provider_isin": None,
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["exact_current_name"],
+                    "matched_former_name": None,
+                }
+            ],
+            (),
+        )
+
+        self.assertEqual(result["link_status"], "review_required")
+        self.assertIsNone(result["cik"])
+        self.assertEqual(result["reason_codes"], ["undated_exact_name"])
+
+    def test_competing_ciks_require_review(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Shared Company",
+                "provider_isin": None,
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["exact_current_name"],
+                    "matched_former_name": None,
+                },
+                {
+                    "cik": "0000000456",
+                    "match_reasons": ["exact_current_name"],
+                    "matched_former_name": None,
+                },
+            ],
+            (),
+        )
+
+        self.assertEqual(result["link_status"], "review_required")
+        self.assertIsNone(result["cik"])
+        self.assertEqual(result["reason_codes"], ["competing_ciks"])
+        self.assertEqual(len(result["conflicting_evidence"]), 2)
+
+    def test_conflicting_isin_to_cik_evidence_requires_review(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example",
+                "provider_isin": "US123",
+            },
+            (),
+            [
+                {
+                    "key_type": "isin_cik",
+                    "isin": "US123",
+                    "cik": "0000000123",
+                },
+                {
+                    "key_type": "isin_cik",
+                    "isin": "US123",
+                    "cik": "0000000456",
+                },
+            ],
+        )
+
+        self.assertEqual(result["link_status"], "review_required")
+        self.assertIsNone(result["cik"])
+        self.assertEqual(result["reason_codes"], ["conflicting_isin_cik"])
+        self.assertEqual(len(result["conflicting_evidence"]), 2)
+
+    def test_security_type_contradiction_rejects_link(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example",
+                "provider_isin": None,
+            },
+            (),
+            [
+                {
+                    "key_type": "security_type",
+                    "value": "Warrant",
+                    "source": "eodhd",
+                }
+            ],
+        )
+
+        self.assertEqual(result["link_status"], "rejected")
+        self.assertIsNone(result["cik"])
+        self.assertEqual(
+            result["reason_codes"],
+            ["security_type_contradiction"],
+        )
+
+    def test_adjudication_is_independent_of_evidence_order(self):
+        sample = {
+            "ticker": "OLD",
+            "name": "Shared Company",
+            "provider_isin": None,
+        }
+        candidates = [
+            {
+                "cik": "0000000456",
+                "match_reasons": ["exact_current_name"],
+                "matched_former_name": None,
+            },
+            {
+                "cik": "0000000123",
+                "match_reasons": ["exact_current_name"],
+                "matched_former_name": None,
+            },
+        ]
+
+        first = adjudicate_identity(sample, candidates, ())
+        second = adjudicate_identity(
+            sample,
+            list(reversed(candidates)),
+            (),
+        )
+
+        self.assertEqual(
+            json.dumps(first, sort_keys=True),
+            json.dumps(second, sort_keys=True),
+        )
 
 
 if __name__ == "__main__":
