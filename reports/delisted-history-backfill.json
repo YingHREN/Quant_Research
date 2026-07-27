@@ -1,0 +1,71 @@
+{
+  "backfill_version": "delisted_history_backfill_v1",
+  "catalog_sha256": "fa432000e8f77577175d2b13590dd0be65d44fef5ceceed433f3d33752ad80b0",
+  "finish_date": "2026-07-27",
+  "schema_version": "delisted_history_backfill_result_v1",
+  "start_date": "2016-01-01",
+  "summary": {
+    "audited_count": 13039,
+    "by_exchange": [
+      {
+        "audited_count": 8851,
+        "candidate_count": 8851,
+        "duplicate_dates": 0,
+        "empty_responses": 4457,
+        "exchange": "NASDAQ",
+        "invalid_rows": 3020,
+        "permanent_errors": 0,
+        "quality_warnings": 357,
+        "raw_bytes": 589674588,
+        "raw_rows": 3732634,
+        "retryable_errors": 0,
+        "usable_histories": 4392,
+        "valid_rows": 3729614
+      },
+      {
+        "audited_count": 3816,
+        "candidate_count": 3816,
+        "duplicate_dates": 0,
+        "empty_responses": 1604,
+        "exchange": "NYSE",
+        "invalid_rows": 752,
+        "permanent_errors": 0,
+        "quality_warnings": 116,
+        "raw_bytes": 310810942,
+        "raw_rows": 1949327,
+        "retryable_errors": 0,
+        "usable_histories": 2194,
+        "valid_rows": 1948575
+      },
+      {
+        "audited_count": 372,
+        "candidate_count": 372,
+        "duplicate_dates": 0,
+        "empty_responses": 178,
+        "exchange": "NYSE MKT",
+        "invalid_rows": 60,
+        "permanent_errors": 0,
+        "quality_warnings": 14,
+        "raw_bytes": 37291520,
+        "raw_rows": 235861,
+        "retryable_errors": 0,
+        "usable_histories": 193,
+        "valid_rows": 235801
+      }
+    ],
+    "candidate_count": 13039,
+    "completion_status": "complete",
+    "duplicate_dates": 0,
+    "empty_responses": 6239,
+    "invalid_rows": 3832,
+    "permanent_errors": 0,
+    "quality_warnings": 487,
+    "raw_bytes": 937777050,
+    "raw_rows": 5917822,
+    "resolved_count": 13039,
+    "retryable_errors": 0,
+    "usable_histories": 6779,
+    "valid_rows": 5913990
+  },
+  "updated_at": "2026-07-27T06:51:09.420019+00:00"
+}
