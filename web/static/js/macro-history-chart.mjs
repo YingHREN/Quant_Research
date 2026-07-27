@@ -29,6 +29,18 @@ function timeKey(value) {
   return String(value).slice(0, 10);
 }
 
+function formatCrosshairDate(value) {
+  return timeKey(value) || "—";
+}
+
+export function benchmarkChartValue(row) {
+  return row?.benchmark_close;
+}
+
+export function clearChartCrosshairs(charts) {
+  for (const chart of charts) chart.clearCrosshairPosition();
+}
+
 export function createSelectionState(rows = []) {
   let rowByTime = new Map(rows.map((row) => [timeKey(row.time), row]));
   let hoveredTime = rows.length ? timeKey(rows.at(-1).time) : null;
@@ -65,6 +77,13 @@ export function createSelectionState(rows = []) {
       lockedTime = null;
       return this.selected();
     },
+    reset() {
+      lockedTime = null;
+      hoveredTime = rowByTime.size
+        ? Array.from(rowByTime.keys()).at(-1)
+        : null;
+      return this.selected();
+    },
     selected() {
       const selectedTime = lockedTime || hoveredTime;
       return {
@@ -90,6 +109,7 @@ function chartOptions(element, height) {
       horzLines: { color: COLORS.grid },
     },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    localization: { timeFormatter: formatCrosshairDate },
     rightPriceScale: { borderColor: COLORS.grid },
     leftPriceScale: {
       visible: true,
@@ -283,7 +303,13 @@ export function createMacroHistoryCharts({
         selected.available_at || "—",
       ],
       [
-        tr("market.macro.history.benchmarkValue", {
+        tr("market.macro.history.benchmarkClose", {
+          benchmark: payload.benchmark || "SPY",
+        }),
+        formatNumber(row.benchmark_close),
+      ],
+      [
+        tr("market.macro.history.benchmarkNormalized", {
           benchmark: payload.benchmark || "SPY",
         }),
         formatNumber(row.benchmark_normalized),
@@ -407,11 +433,30 @@ export function createMacroHistoryCharts({
     return (payload.rows || []).find((row) => row.time === key) || null;
   }
 
+  function clearAllCrosshairs() {
+    synchronizingCrosshair = true;
+    try {
+      clearChartCrosshairs([scoreChart, contextChart]);
+    } finally {
+      synchronizingCrosshair = false;
+    }
+  }
+
   function handleCrosshair(source, target, targetSeries, valueGetter) {
     return (param) => {
       if (synchronizingCrosshair) return;
       const row = rowFromParam(param);
-      if (!row) return;
+      if (!row) {
+        if (!selection.selected().locked) {
+          synchronizingCrosshair = true;
+          try {
+            clearChartCrosshairs([target]);
+          } finally {
+            synchronizingCrosshair = false;
+          }
+        }
+        return;
+      }
       selection.hover(row.time);
       renderDetail();
       const value = Number(valueGetter(row));
@@ -429,7 +474,7 @@ export function createMacroHistoryCharts({
       scoreChart,
       contextChart,
       benchmarkSeries,
-      (row) => row.benchmark_normalized,
+      benchmarkChartValue,
     ),
   );
   contextChart.subscribeCrosshairMove(
@@ -444,7 +489,8 @@ export function createMacroHistoryCharts({
   function handleClick(param) {
     const row = rowFromParam(param);
     if (!row) return;
-    selection.toggleLock(row.time);
+    const selected = selection.toggleLock(row.time);
+    if (!selected.locked) clearAllCrosshairs();
     renderDetail();
   }
   scoreChart.subscribeClick(handleClick);
@@ -456,6 +502,7 @@ export function createMacroHistoryCharts({
   });
   unlockButton.addEventListener("click", () => {
     selection.unlock();
+    clearAllCrosshairs();
     renderDetail();
   });
 
@@ -474,6 +521,8 @@ export function createMacroHistoryCharts({
       payload = nextPayload || { rows: [], series_catalog: {} };
       const rows = payload.rows || [];
       selection.replaceRows(rows);
+      selection.reset();
+      clearAllCrosshairs();
       populateSeries();
       totalSeries.setData(chartSeriesData(rows, (row) => row.score));
       for (const key of COMPONENTS) {
@@ -483,7 +532,7 @@ export function createMacroHistoryCharts({
       }
       benchmarkSeries.applyOptions({ title: payload.benchmark || "SPY" });
       benchmarkSeries.setData(
-        chartSeriesData(rows, (row) => row.benchmark_normalized),
+        chartSeriesData(rows, benchmarkChartValue),
       );
       updateContextSeries();
       scoreChart.timeScale().fitContent();
@@ -491,8 +540,18 @@ export function createMacroHistoryCharts({
     },
     setLocale(nextLocale) {
       currentLocale = nextLocale;
-      scoreChart.applyOptions({ localization: { locale: currentLocale } });
-      contextChart.applyOptions({ localization: { locale: currentLocale } });
+      scoreChart.applyOptions({
+        localization: {
+          locale: currentLocale,
+          timeFormatter: formatCrosshairDate,
+        },
+      });
+      contextChart.applyOptions({
+        localization: {
+          locale: currentLocale,
+          timeFormatter: formatCrosshairDate,
+        },
+      });
       totalSeries.applyOptions({ title: tr("market.macro.total") });
       for (const key of COMPONENTS) {
         componentSeries[key].applyOptions({
@@ -501,6 +560,11 @@ export function createMacroHistoryCharts({
       }
       populateSeries();
       updateContextSeries();
+    },
+    resetSelection() {
+      selection.reset();
+      clearAllCrosshairs();
+      renderDetail();
     },
     destroy() {
       resizeObserver?.disconnect();

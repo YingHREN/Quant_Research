@@ -41,9 +41,21 @@ class MarketAssetTest(unittest.TestCase):
         ).resolve()
         script = f"""
           import {{
+            benchmarkChartValue,
             chartSeriesData,
+            clearChartCrosshairs,
             createSelectionState,
           }} from {module.as_uri()!r};
+          if (benchmarkChartValue({{
+            benchmark_close: 612.34,
+            benchmark_normalized: 129.12,
+          }}) !== 612.34) process.exit(6);
+          let cleared = 0;
+          clearChartCrosshairs([
+            {{ clearCrosshairPosition: () => cleared += 1 }},
+            {{ clearCrosshairPosition: () => cleared += 1 }},
+          ]);
+          if (cleared !== 2) process.exit(7);
           const gaps = chartSeriesData([
             {{ time: "2026-06-30", value: null }},
             {{ time: "2026-07-01", value: 25 }},
@@ -59,6 +71,14 @@ class MarketAssetTest(unittest.TestCase):
           selection.hover("2026-07-02");
           if (selection.selected().time !== "2026-07-01") process.exit(2);
           if (!selection.selected().locked) process.exit(3);
+          selection.replaceRows([
+            {{ time: "2026-07-01" }},
+            {{ time: "2026-07-02" }},
+            {{ time: "2026-07-03" }},
+          ]);
+          selection.reset();
+          if (selection.selected().locked) process.exit(8);
+          if (selection.selected().time !== "2026-07-03") process.exit(9);
           selection.unlock();
           selection.hover("2026-07-02");
           if (selection.selected().time !== "2026-07-02") process.exit(4);
@@ -69,6 +89,27 @@ class MarketAssetTest(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
+        )
+
+    def test_macro_history_chart_uses_actual_benchmark_and_clears_selection(self):
+        source = (
+            ROOT / "web/static/js/macro-history-chart.mjs"
+        ).read_text()
+        market_source = (ROOT / "web/static/js/market.js").read_text()
+
+        self.assertIn(
+            "chartSeriesData(rows, benchmarkChartValue)",
+            source,
+        )
+        self.assertIn(
+            "clearChartCrosshairs([scoreChart, contextChart])",
+            source,
+        )
+        self.assertIn("selection.reset();", source)
+        self.assertIn("timeFormatter: formatCrosshairDate", source)
+        self.assertGreaterEqual(
+            market_source.count("macroHistoryCharts?.resetSelection();"),
+            2,
         )
 
     def test_market_js_uses_payload_evidence_without_recomputing_scores(self):

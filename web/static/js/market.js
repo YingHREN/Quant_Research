@@ -479,6 +479,7 @@ for (const control of document.querySelectorAll("[data-macro-range]")) {
     const range = control.dataset.macroRange;
     if (range === state.macroHistory.range) return;
     state.macroHistory.range = range;
+    macroHistoryCharts?.resetSelection();
     for (const button of document.querySelectorAll("[data-macro-range]")) {
       button.setAttribute(
         "aria-pressed",
@@ -494,6 +495,7 @@ for (const control of document.querySelectorAll("[data-macro-benchmark]")) {
     const benchmark = control.dataset.macroBenchmark;
     if (benchmark === state.macroHistory.benchmark) return;
     state.macroHistory.benchmark = benchmark;
+    macroHistoryCharts?.resetSelection();
     for (const button of document.querySelectorAll("[data-macro-benchmark]")) {
       button.setAttribute(
         "aria-pressed",
