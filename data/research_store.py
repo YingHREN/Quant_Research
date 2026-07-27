@@ -348,8 +348,11 @@ class ResearchPriceStore:
         if not isinstance(assignment, GroupAssignment):
             raise TypeError("assignment must be a GroupAssignment")
         effective_from = date.fromisoformat(
-            str(effective_from or assignment.asof)
+            str(effective_from or assignment.effective_from)
         ).isoformat()
+        effective_to = (
+            assignment.effective_to if effective_to is None else effective_to
+        )
         effective_to = (
             None
             if effective_to is None
@@ -639,7 +642,6 @@ class ResearchPriceStore:
                 )
                 self.persist_group_assignment(
                     assignment,
-                    effective_from=asof,
                     observed_at=asof,
                 )
             self.connection.executemany(

@@ -20,7 +20,7 @@ def daily(date, open_, high, low, close, adjusted_close, volume=1000):
 
 
 class ResearchStoreTest(unittest.TestCase):
-    def test_import_security_persists_canonical_group_assignment(self):
+    def test_import_security_preserves_active_override_effective_interval(self):
         connection = sqlite3.connect(":memory:")
         store = ResearchPriceStore(connection)
         store.initialize()
@@ -65,8 +65,8 @@ class ResearchStoreTest(unittest.TestCase):
                 '["semiconductor"]',
                 '{"semiconductor":["SOXX","SMH"]}',
                 "semiconductor",
-                "2026-07-24",
-                None,
+                "2025-02-24",
+                "9999-12-31",
                 "2026-07-24",
                 "override",
                 1.0,

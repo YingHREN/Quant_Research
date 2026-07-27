@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from build_research_db import build_database
+from data.research_store import ResearchPriceStore
 from web.market_groups import REFERENCE_TICKERS
 
 
@@ -73,6 +74,23 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
             imported_at="2026-07-25T00:00:00Z",
         )
 
+    def replace_catalog_securities(self, securities):
+        self.catalog_path.write_text(
+            json.dumps(
+                {
+                    "asof": "2026-07-24",
+                    "universe_key": "fixture_universe_v1",
+                    "securities": securities,
+                }
+            ),
+            encoding="utf-8",
+        )
+        for security in securities:
+            ticker = security["ticker"]
+            (self.raw_root / f"{ticker}.json").write_text(
+                json.dumps(_daily_row()), encoding="utf-8"
+            )
+
     def test_build_publishes_common_stock_assignment_coverage_and_review(self):
         result = self.build()
 
@@ -122,6 +140,79 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
                 self.build()
 
         self.assertEqual(self.output_path.read_bytes(), original)
+
+    def test_duplicate_catalog_common_stock_ticker_is_rejected_before_publication(self):
+        self.build()
+        original = self.output_path.read_bytes()
+        duplicate = {
+            "ticker": "ZZZZ",
+            "name": "Duplicate Fixture",
+            "exchange": "US",
+            "classification": {
+                "sector_key": "unclassified",
+                "theme_keys": [],
+                "confidence": 0.0,
+                "source": "sec",
+                "rule_version": "sec_sic_v1",
+            },
+        }
+        self.replace_catalog_securities([duplicate, duplicate])
+
+        with self.assertRaisesRegex(
+            ValueError, "duplicate catalog common-stock tickers: ZZZZ"
+        ):
+            self.build()
+
+        self.assertEqual(self.output_path.read_bytes(), original)
+
+    def test_persisted_assignment_cardinality_must_match_catalog(self):
+        second = {
+            "ticker": "YYYY",
+            "name": "Second Fixture",
+            "exchange": "US",
+            "classification": {
+                "sector_key": "unclassified",
+                "theme_keys": [],
+                "confidence": 0.0,
+                "source": "sec",
+                "rule_version": "sec_sic_v1",
+            },
+        }
+        self.replace_catalog_securities(
+            [
+                {
+                    "ticker": "ZZZZ",
+                    "name": "Unresolved Fixture",
+                    "exchange": "US",
+                    "classification": {
+                        "sector_key": "unclassified",
+                        "theme_keys": [],
+                        "confidence": 0.0,
+                        "source": "sec",
+                        "rule_version": "sec_sic_v1",
+                    },
+                },
+                second,
+            ]
+        )
+        original_persist = ResearchPriceStore.persist_group_assignment
+
+        def skip_second_assignment(store, assignment, **kwargs):
+            if assignment.ticker == "YYYY":
+                return assignment
+            return original_persist(store, assignment, **kwargs)
+
+        with patch.object(
+            ResearchPriceStore,
+            "persist_group_assignment",
+            new=skip_second_assignment,
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "persisted group assignment count mismatch"
+            ):
+                self.build()
+
+        self.assertFalse(self.output_path.exists())
 
 
 if __name__ == "__main__":

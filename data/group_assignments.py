@@ -50,8 +50,20 @@ class GroupAssignment:
     rule_version: str
     confidence: float
     override_reason: str | None = None
+    effective_from: str | None = None
+    effective_to: str | None = None
 
     def __post_init__(self):
+        effective_from = _normalize_date(self.effective_from or self.asof)
+        effective_to = (
+            None
+            if self.effective_to is None
+            else _normalize_date(self.effective_to)
+        )
+        if effective_to is not None and effective_to < effective_from:
+            raise ValueError("invalid_assignment_effective_range")
+        object.__setattr__(self, "effective_from", effective_from)
+        object.__setattr__(self, "effective_to", effective_to)
         object.__setattr__(self, "theme_keys", tuple(self.theme_keys))
         object.__setattr__(
             self,
@@ -202,6 +214,8 @@ def _assignment_from_override(ticker, asof, override):
         1.0,
         override_reason=override["reason"],
         primary_model_group=override["primary_model_group"],
+        effective_from=override["effective_from"],
+        effective_to=override["effective_to"],
     )
 
 
@@ -216,6 +230,8 @@ def _classified_assignment(
     *,
     override_reason=None,
     primary_model_group=None,
+    effective_from=None,
+    effective_to=None,
 ):
     themes = _normalize_themes(theme_keys)
     return GroupAssignment(
@@ -231,6 +247,8 @@ def _classified_assignment(
         rule_version=rule_version,
         confidence=confidence,
         override_reason=override_reason,
+        effective_from=effective_from,
+        effective_to=effective_to,
     )
 
 

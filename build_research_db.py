@@ -56,6 +56,21 @@ def _audit_failure(audit):
     return findings or None
 
 
+def _catalog_common_stock_tickers(catalog):
+    tickers = tuple(
+        str(security.get("ticker") or "").strip().upper()
+        for security in catalog.get("securities", ())
+    )
+    duplicates = sorted(
+        ticker for ticker in set(tickers) if tickers.count(ticker) > 1
+    )
+    if duplicates:
+        raise ValueError(
+            "duplicate catalog common-stock tickers: " + ", ".join(duplicates)
+        )
+    return tickers
+
+
 def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     catalog_path = Path(catalog_path)
     raw_root = Path(raw_root)
@@ -63,6 +78,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     imported_at = imported_at or datetime.now(timezone.utc).isoformat()
     catalog = json.loads(catalog_path.read_text())
     snapshot_date = raw_root.name
+    catalog_tickers = _catalog_common_stock_tickers(catalog)
     _validate_reference_assets()
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     if temporary.exists():
@@ -169,7 +185,6 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 )
                 store.persist_group_assignment(
                     assignment,
-                    effective_from=catalog["asof"],
                     observed_at=catalog["asof"],
                 )
                 assignments.append(assignment)
@@ -179,6 +194,14 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 raise ValueError(
                     "group assignment audit failed: "
                     + json.dumps(audit_failure, ensure_ascii=False, sort_keys=True)
+                )
+            persisted_assignment_count = connection.execute(
+                "SELECT COUNT(DISTINCT ticker) FROM group_assignments"
+            ).fetchone()[0]
+            if persisted_assignment_count != len(catalog_tickers):
+                raise ValueError(
+                    "persisted group assignment count mismatch: "
+                    f"expected {len(catalog_tickers)}, got {persisted_assignment_count}"
                 )
             connection.execute(
                 """
@@ -216,7 +239,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 "SELECT COUNT(*) FROM dividends"
             ).fetchone()[0],
             "market_behavior": behavior_count,
-            "group_assignment_count": assignment_audit["total"],
+            "group_assignment_count": persisted_assignment_count,
             "group_assignment_review_count": assignment_audit[
                 "needs_review_count"
             ],
