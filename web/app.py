@@ -85,6 +85,13 @@ from web.services.research_universe import (
     ResearchUniverseDataError,
     UnknownResearchTicker,
 )
+from web.services.research_pool import (
+    InvalidResearchPoolTicker,
+    ResearchPoolMembershipStore,
+    apply_research_pool_membership,
+    apply_stock_research_pool_membership,
+    normalize_research_pool_ticker,
+)
 from web.services.supply_demand import attach_supply_demand_rows
 from web.services.intraday import IntradayStatusService
 from web.services.scenarios import HistoricalScenarioProvider
@@ -116,6 +123,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         ),
         ENTRY_SIGNAL_ARTIFACT_CACHE_ENTRIES=64,
         RESEARCH_DATABASE=os.fspath(PROJECT_ROOT / "data" / "research_prices.db"),
+        RESEARCH_POOL_MEMBERSHIP_DATABASE=os.fspath(
+            PROJECT_ROOT / "data" / "research_pool_membership.db"
+        ),
         MACRO_DATABASE=os.fspath(PROJECT_ROOT / "data" / "macro_data.db"),
     )
     if config:
@@ -263,6 +273,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         "_research_universe_repository",
         None,
     )
+    research_pool_membership_store = flask_app.config.get(
+        "RESEARCH_POOL_MEMBERSHIP_STORE"
+    )
+    if research_pool_membership_store is None:
+        research_pool_membership_store = ResearchPoolMembershipStore(
+            None
+            if flask_app.config.get("TESTING")
+            else flask_app.config["RESEARCH_POOL_MEMBERSHIP_DATABASE"]
+        )
     scenario_provider = flask_app.config.get("SCENARIO_PROVIDER")
     if scenario_provider is None:
         scenario_provider = HistoricalScenarioProvider()
@@ -291,6 +310,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions[
         "dashboard_research_universe_repository"
     ] = getattr(universe_service, "_research_universe_repository", None)
+    flask_app.extensions[
+        "dashboard_research_pool_membership_store"
+    ] = research_pool_membership_store
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions[
@@ -371,7 +393,42 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
     @flask_app.get("/api/universe")
     def universe():
-        return _json_response(universe_service.build())
+        return _json_response(
+            apply_research_pool_membership(
+                universe_service.build(),
+                research_pool_membership_store,
+            )
+        )
+
+    @flask_app.route(
+        "/api/research-pool/<path:ticker>",
+        methods=("PUT", "DELETE"),
+    )
+    def research_pool_membership(ticker):
+        try:
+            normalized_ticker = normalize_research_pool_ticker(ticker)
+        except InvalidResearchPoolTicker as error:
+            raise InvalidTicker(str(error)) from error
+        universe_payload = universe_service.build()
+        available_tickers = {
+            row.get("ticker")
+            for row in universe_payload.get("tickers", ())
+            if isinstance(row, dict)
+        }
+        if normalized_ticker not in available_tickers:
+            raise UnknownTicker(f"Ticker was not found: {normalized_ticker}")
+        included = request.method == "PUT"
+        research_pool_membership_store.set_membership(
+            normalized_ticker,
+            included,
+        )
+        return _json_response(
+            {
+                "ticker": normalized_ticker,
+                "research": included,
+                "state": "included" if included else "excluded",
+            }
+        )
 
     @flask_app.get("/api/stocks/<path:ticker>")
     def stock(ticker):
@@ -393,10 +450,13 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             except (UnknownResearchTicker, ResearchUniverseDataError):
                 raise active_error
             return _json_response(
-                _research_stock_payload(
-                    normalized_ticker,
-                    research_snapshot,
-                    scenario_provider,
+                apply_stock_research_pool_membership(
+                    _research_stock_payload(
+                        normalized_ticker,
+                        research_snapshot,
+                        scenario_provider,
+                    ),
+                    research_pool_membership_store,
                 )
             )
         history = snapshot.histories[normalized_ticker]
@@ -560,7 +620,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             "technical_gate": technical_gate,
             "market_gate": market_gate,
         }
-        return _json_response(payload)
+        return _json_response(
+            apply_stock_research_pool_membership(
+                payload,
+                research_pool_membership_store,
+            )
+        )
 
     @flask_app.get("/api/stocks/<ticker>/forecasts/<forecast_date>")
     def historical_forecast(ticker, forecast_date):

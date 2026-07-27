@@ -148,6 +148,7 @@ function poolState(row) {
   };
   if (membership.active && membership.research) return "both";
   if (membership.research) return "research";
+  if (membership.research_catalog && !membership.active) return "catalog";
   return "active";
 }
 

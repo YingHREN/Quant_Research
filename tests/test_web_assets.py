@@ -83,6 +83,67 @@ class WebAssetTest(unittest.TestCase):
             },
         )
 
+    def test_research_pool_control_supports_join_exit_and_localized_status(self):
+        module_uri = (STATIC / "js/research_pool_control.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            const button = {{
+              hidden: false, disabled: false, textContent: '', dataset: {{}},
+              addEventListener(_name, handler) {{ this.handler = handler; }},
+            }};
+            const status = {{textContent: '', dataset: {{}}}};
+            const calls = [];
+            const changes = [];
+            const controllerModule = await import({json.dumps(module_uri)});
+            const controller = controllerModule.createResearchPoolControl({{
+              button,
+              status,
+              locale: 'zh-CN',
+              apiClient: {{
+                async setResearchPoolMembership(ticker, included) {{
+                  calls.push([ticker, included]);
+                  return {{
+                    ticker,
+                    research: included,
+                    state: included ? 'included' : 'excluded',
+                  }};
+                }},
+              }},
+              async onChanged(payload) {{
+                changes.push(payload);
+                controller.setSelection(payload.ticker, {{
+                  active: true,
+                  research: payload.research,
+                }});
+              }},
+            }});
+            controller.setSelection('AAA', {{active: true, research: false}});
+            assert.equal(button.textContent, '加入研究池');
+            await button.handler();
+            assert.deepEqual(calls, [['AAA', true]]);
+            assert.equal(button.textContent, '退出研究池');
+            assert.equal(status.textContent, 'AAA 已加入研究池');
+            await button.handler();
+            assert.deepEqual(calls, [['AAA', true], ['AAA', false]]);
+            assert.equal(button.textContent, '加入研究池');
+            assert.equal(status.textContent, 'AAA 已退出研究池，仍保留在候选库');
+            controller.setLocale('en');
+            assert.equal(button.textContent, 'Join research pool');
+            assert.equal(changes.length, 2);
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dashboard_research_pool_management_updates_selected_stock(self):
+        actual = self.run_dashboard_runtime("research-pool")
+        self.assertEqual(actual["button"], "Join research pool")
+        self.assertIn("仍保留在候选库", actual["status"])
+
     def test_marker_layer_preferences(self):
         self.assertTrue(
             (STATIC / "js/marker_layers.js").exists(),

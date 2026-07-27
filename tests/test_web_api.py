@@ -2008,7 +2008,11 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(response.json["analysis_scope"], "research_diagnostic")
         self.assertEqual(
             response.json["pool_membership"],
-            {"active": False, "research": True},
+            {
+                "active": False,
+                "research": True,
+                "research_catalog": True,
+            },
         )
         self.assertEqual(response.json["factors"], [])
         self.assertIn("research_pool_limited_analysis", response.json["warnings"])
@@ -2020,6 +2024,62 @@ class WebApiTest(unittest.TestCase):
             response.json["forecasts"]["model"]["unavailable_reason"],
             "research_pool_diagnostic_only",
         )
+
+    def test_user_can_join_and_exit_research_pool_without_removing_catalog_row(self):
+        class MembershipStore:
+            def __init__(self):
+                self.overrides = {}
+
+            def resolve(self, ticker, default=False):
+                return self.overrides.get(ticker, default)
+
+            def set_membership(self, ticker, included):
+                self.overrides[ticker] = bool(included)
+                return self.overrides[ticker]
+
+        membership_store = MembershipStore()
+        client = create_app(
+            test_config(RESEARCH_POOL_MEMBERSHIP_STORE=membership_store),
+            self.repository,
+            self.manager,
+        ).test_client()
+
+        joined = client.put("/api/research-pool/AAA")
+        self.assertEqual(joined.status_code, 200)
+        self.assertEqual(
+            joined.json,
+            {"ticker": "AAA", "research": True, "state": "included"},
+        )
+        active_row = next(
+            row
+            for row in client.get("/api/universe").json["tickers"]
+            if row["ticker"] == "AAA"
+        )
+        self.assertTrue(active_row["pool_membership"]["research"])
+        self.assertFalse(active_row["pool_membership"]["research_catalog"])
+
+        exited = client.delete("/api/research-pool/AAA")
+        self.assertEqual(exited.status_code, 200)
+        self.assertEqual(
+            exited.json,
+            {"ticker": "AAA", "research": False, "state": "excluded"},
+        )
+        remaining = client.get("/api/universe").json["tickers"]
+        self.assertIn("AAA", {row["ticker"] for row in remaining})
+        active_row = next(row for row in remaining if row["ticker"] == "AAA")
+        self.assertFalse(active_row["pool_membership"]["research"])
+
+    def test_research_pool_mutation_rejects_unknown_ticker(self):
+        client = create_app(
+            test_config(RESEARCH_POOL_MEMBERSHIP_STORE=object()),
+            self.repository,
+            self.manager,
+        ).test_client()
+
+        response = client.put("/api/research-pool/NOPE")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json["error"]["code"], "unknown_ticker")
 
     def test_safe_invalid_ticker_error(self):
         response = self.client.get("/api/stocks/AAA%2Fetc")

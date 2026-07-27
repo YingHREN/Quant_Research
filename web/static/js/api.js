@@ -81,6 +81,13 @@ export function getStockForecast(ticker, date) {
   );
 }
 
+export function setResearchPoolMembership(ticker, included) {
+  return requestJson(
+    `/api/research-pool/${encodeURIComponent(ticker)}`,
+    { method: included ? "PUT" : "DELETE" },
+  );
+}
+
 export function getMarketOverview({
   asof = "",
   horizon = 5,
@@ -123,6 +130,7 @@ export const api = Object.freeze({
   getUniverse,
   getStock,
   getStockForecast,
+  setResearchPoolMembership,
   getMarketOverview,
   getMacroHistory,
   startUpdate,

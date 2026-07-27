@@ -295,6 +295,7 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 }
 .ticker-pool[data-pool="research"] { color: #8ec5ff; border-color: #315f82; }
 .ticker-pool[data-pool="both"] { color: var(--accent); border-color: #257c71; }
+.ticker-pool[data-pool="catalog"] { color: var(--muted); border-color: var(--line-strong); }
 .ticker-gate[data-state="pass"] { color: var(--accent); border-color: #257c71; }
 .ticker-gate[data-state="fail"] { color: var(--danger); border-color: #7c3947; }
 .ticker-gate[data-state="missing"] { color: var(--muted); }
@@ -320,6 +321,15 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .empty-list { padding: 20px 8px; color: var(--muted); text-align: center; }
 
 .research-panel { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 16px; }
+.research-pool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 10px;
+}
+.research-pool-actions .inline-status { margin: 0; }
+.research-pool-actions .inline-status[data-tone="success"] { color: var(--accent); }
 .research-panel > .panel { min-width: 0; max-width: 100%; overflow: hidden; }
 .analysis-grid > .panel { min-width: 0; }
 .research-panel > .panel, .analysis-grid > .panel { padding: 18px; }

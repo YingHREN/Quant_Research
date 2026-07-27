@@ -88,6 +88,7 @@ const ids = [
   "universe-list", "universe-count", "universe-status", "universe-retry",
   "universe-search", "sort-key",
   "security-pool-state", "security-gate-state",
+  "research-pool-toggle", "research-pool-action-status",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
   "market-date", "market-coverage", "selected-ticker", "selected-close",
   "selected-change", "observation-date", "security-state", "research-status", "stock-retry",
@@ -217,6 +218,7 @@ const universe = {
   tickers: [{
     ticker: "AAA", latest_date: "2026-07-22", lag_days: 0, inactive: false,
     stale: false, shape_state: "strict_vcp", momentum_percentile: 80,
+    pool_membership: { active: true, research: false, research_catalog: false },
     sector_classification: {
       state: "agree",
       sec: {
@@ -403,7 +405,7 @@ globalThis.setTimeout = (callback) => nativeSetTimeout(callback, 0);
 let universeAttempts = 0;
 let stockAttempts = 0;
 
-globalThis.fetch = async (path) => {
+globalThis.fetch = async (path, options = {}) => {
   if (path === "/api/update/status") return jsonResponse({ state: "idle" });
   if (path === "/api/universe") {
     universeAttempts += 1;
@@ -429,6 +431,15 @@ globalThis.fetch = async (path) => {
       }, 500);
     }
     return jsonResponse(stock);
+  }
+  if (path === "/api/research-pool/AAA") {
+    const included = options.method === "PUT";
+    universe.tickers[0].pool_membership.research = included;
+    return jsonResponse({
+      ticker: "AAA",
+      research: included,
+      state: included ? "included" : "excluded",
+    });
   }
   throw new Error(`Unexpected fetch: ${path}`);
 };
@@ -678,5 +689,27 @@ if (mode === "success") {
   console.log(JSON.stringify({
     stored: JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
     markerCount: elements.get("marker-layer-count").textContent,
+  }));
+} else if (mode === "research-pool") {
+  const button = elements.get("research-pool-toggle");
+  const status = elements.get("research-pool-action-status");
+  assert.equal(button.textContent, "加入研究池");
+  button.dispatch("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(button.textContent, "退出研究池");
+  assert.equal(status.textContent, "AAA 已加入研究池");
+  assert.equal(elements.get("security-pool-state").textContent, "主动+研究");
+  button.dispatch("click");
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(button.textContent, "加入研究池");
+  assert.equal(status.textContent, "AAA 已退出研究池，仍保留在候选库");
+  enButton.dispatch("click");
+  assert.equal(button.textContent, "Join research pool");
+  console.log(JSON.stringify({
+    button: button.textContent,
+    status: status.textContent,
+    pool: elements.get("security-pool-state").textContent,
   }));
 }

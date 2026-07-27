@@ -36,12 +36,14 @@ import {
   shouldReloadAfterUpdate,
   shouldReloadSelectedTicker,
 } from "./update.js";
+import { createResearchPoolControl } from "./research_pool_control.js";
 
 const elements = {};
 let stockRequestSequence = 0;
 let chartController = null;
 let updateController = null;
 let cacheStatusController = null;
+let researchPoolController = null;
 let unsubscribeLocale = null;
 let universeError = null;
 let researchError = null;
@@ -494,9 +496,14 @@ function renderStockHeader(payload) {
   const membership = universeRow?.pool_membership || payload.pool_membership || {};
   const pool = membership.active && membership.research
     ? "both"
-    : membership.research ? "research" : "active";
+    : membership.research
+      ? "research"
+      : membership.research_catalog && !membership.active
+        ? "catalog"
+        : "active";
   setText(elements.securityPoolState, t(`universe.pool.${pool}`, {}, locale));
   elements.securityPoolState.dataset.tone = pool === "research" ? "watch" : "neutral";
+  researchPoolController?.setSelection(payload.ticker, membership);
   const gate = payload.technical_gate || {};
   const gateState = ["pass", "fail", "missing"].includes(gate.state)
     ? gate.state
@@ -731,6 +738,39 @@ async function refreshUniverseAfterUpdate(updateSnapshot = {}) {
   }
 }
 
+async function refreshUniverseAfterResearchPoolChange(change) {
+  const previous = store.getState();
+  const payload = await api.getUniverse();
+  universeError = null;
+  const rows = Array.isArray(payload.tickers) ? payload.tickers : [];
+  const selectedTicker = previous.selectedTicker;
+  const selectedRow = rows.find((row) => row.ticker === selectedTicker) || null;
+  const stockPayload = (
+    previous.stockPayload
+    && previous.stockPayload.ticker === selectedTicker
+    && selectedRow
+  )
+    ? {
+      ...previous.stockPayload,
+      pool_membership: selectedRow.pool_membership,
+    }
+    : previous.stockPayload;
+  store.setState({
+    universePayload: payload,
+    universe: rows,
+    selectedTicker,
+    stockPayload,
+  });
+  setText(
+    elements.marketDate,
+    payload.asof || t("header.noData", {}, store.getState().locale),
+  );
+  setText(elements.marketCoverage, coverageText(payload));
+  paintUniverse();
+  if (stockPayload) renderStockHeader(stockPayload);
+  return change;
+}
+
 function bindControls() {
   elements.universeRetry.addEventListener("click", () => {
     void loadUniverse();
@@ -830,6 +870,7 @@ function applyLocale(locale) {
     t(`universe.sort.${direction === "asc" ? "ascendingAria" : "descendingAria"}`, {}, locale),
   );
   paintUniverse();
+  researchPoolController?.setLocale(locale);
   chartController?.setLocale(locale);
   syncMarkerLayerControls(selectedMarkerLayers, locale);
   if (state.universePayload) {
@@ -882,6 +923,8 @@ function captureElements() {
     securityState: byId("security-state"),
     securityRsState: byId("security-rs-state"),
     securityPoolState: byId("security-pool-state"),
+    researchPoolToggle: byId("research-pool-toggle"),
+    researchPoolActionStatus: byId("research-pool-action-status"),
     securityGateState: byId("security-gate-state"),
     marketRegimeGateState: byId("market-regime-gate-state"),
     topRiskState: byId("top-risk-state"),
@@ -916,6 +959,13 @@ export async function initializeDashboard() {
   captureElements();
   applyDocumentLocale(document, getLocale());
   unsubscribeLocale = subscribeLocale(applyLocale);
+  researchPoolController = createResearchPoolControl({
+    button: elements.researchPoolToggle,
+    status: elements.researchPoolActionStatus,
+    apiClient: api,
+    locale: getLocale(),
+    onChanged: refreshUniverseAfterResearchPoolChange,
+  });
   chartController = createLinkedCharts(
     elements.priceChart,
     elements.volumeChart,
