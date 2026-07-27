@@ -6,7 +6,7 @@
 
 **Architecture:** Pure research modules select the frozen sample, index SEC submissions, adjudicate identity evidence, and derive SIC intervals. A separate SQLite reference store persists evidence and audit output; one CLI owns network collection, immutable caches, reporting, and resume behavior. Existing price databases remain read-only.
 
-**Tech Stack:** Python 3 standard library, SQLite, `unittest`/`pytest`, SEC submissions bulk ZIP, EODHD Fundamentals and ID Mapping APIs.
+**Tech Stack:** Python 3 standard library, SQLite, `unittest`, SEC submissions bulk ZIP, EODHD Fundamentals and ID Mapping APIs.
 
 ## Global Constraints
 
@@ -84,7 +84,7 @@ def test_sample_is_stable_and_covers_identity_panels():
 
 - [ ] **Step 2: Run the focused test and verify failure**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_delisted_identity_coverage.py -v`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_delisted_identity_coverage -v`
 
 Expected: FAIL because `research.delisted_identity_coverage` does not exist.
 
@@ -141,7 +141,7 @@ The tests must assert explicit `ValueError` for duplicate eligible tickers and i
 
 - [ ] **Step 5: Run focused tests**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_delisted_identity_coverage.py -v`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_delisted_identity_coverage -v`
 
 Expected: all Task 1 tests PASS.
 
@@ -198,7 +198,7 @@ def test_archive_indexes_current_and_former_names(tmp_path):
 
 - [ ] **Step 2: Run and verify failure**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_sec_identity_archive.py -v`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_sec_identity_archive -v`
 
 Expected: FAIL because the module does not exist.
 
@@ -246,7 +246,7 @@ Shared ticker lookup must return both candidates in sorted CIK order.
 
 - [ ] **Step 6: Run focused tests and commit**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_sec_identity_archive.py -v`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_sec_identity_archive -v`
 
 Expected: all Task 2 tests PASS.
 
@@ -293,7 +293,8 @@ def test_unique_isin_to_cik_with_exact_name_confirms():
 
 - [ ] **Step 2: Run and verify the new tests fail**
 
-Run the two test nodes with `pytest -v`; expected failure is missing functions.
+Run the two test methods with `unittest -v`; expected failure is missing
+functions.
 
 - [ ] **Step 3: Implement explicit decision rules**
 
@@ -331,7 +332,7 @@ canonical JSON serialization.
 
 - [ ] **Step 5: Run tests and commit**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_delisted_identity_coverage.py -v`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_delisted_identity_coverage -v`
 
 Expected: PASS.
 
@@ -398,7 +399,7 @@ The query function must reject naive datetimes and prove the boundary is
 - [ ] **Step 6: Run tests and commit**
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_sec_industry_history.py -v
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_sec_industry_history -v
 git add research/sec_industry_history.py tests/test_sec_industry_history.py
 git commit -m "research: derive point-in-time SEC industry intervals"
 ```
@@ -478,7 +479,7 @@ assert hashes are unchanged.
 - [ ] **Step 6: Run tests and commit**
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_delisted_reference_store.py -v
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_delisted_reference_store -v
 git add research/delisted_reference_store.py tests/test_delisted_reference_store.py
 git commit -m "data: add isolated delisted reference store"
 ```
@@ -568,7 +569,7 @@ network access.
 - [ ] **Step 7: Run tests and commit**
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_run_delisted_identity_coverage.py -v
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_run_delisted_identity_coverage -v
 git add run_delisted_identity_coverage.py tests/test_run_delisted_identity_coverage.py
 git commit -m "research: add delisted identity coverage runner"
 ```
@@ -621,7 +622,7 @@ all three reports for fake tokens, `api_token=`, and authenticated URLs.
 - [ ] **Step 6: Run tests and commit**
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest tests/test_delisted_identity_coverage.py tests/test_run_delisted_identity_coverage.py -v
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest tests.test_delisted_identity_coverage tests.test_run_delisted_identity_coverage -v
 git add research/delisted_identity_coverage.py run_delisted_identity_coverage.py tests/test_delisted_identity_coverage.py tests/test_run_delisted_identity_coverage.py
 git commit -m "research: report delisted identity coverage"
 ```
@@ -641,13 +642,13 @@ git commit -m "research: report delisted identity coverage"
 - [ ] **Step 1: Run focused and full tests**
 
 ```bash
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest \
-  tests/test_delisted_identity_coverage.py \
-  tests/test_sec_identity_archive.py \
-  tests/test_sec_industry_history.py \
-  tests/test_delisted_reference_store.py \
-  tests/test_run_delisted_identity_coverage.py -v
-PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest -q
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest \
+  tests.test_delisted_identity_coverage \
+  tests.test_sec_identity_archive \
+  tests.test_sec_industry_history \
+  tests.test_delisted_reference_store \
+  tests.test_run_delisted_identity_coverage -v
+PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest discover -s tests -q
 ```
 
 Expected: all tests PASS.
@@ -732,7 +733,7 @@ Expected: no secret values; only known user-owned untracked files remain.
 
 - [ ] **Step 3: Run final regression**
 
-Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m pytest -q`
+Run: `PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ../../venv/bin/python -m unittest discover -s tests -q`
 
 Expected: full suite PASS.
 
