@@ -2010,7 +2010,7 @@ class WebApiTest(unittest.TestCase):
             response.json["pool_membership"],
             {
                 "active": False,
-                "research": True,
+                "research": False,
                 "research_catalog": True,
             },
         )
@@ -2023,6 +2023,96 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(
             response.json["forecasts"]["model"]["unavailable_reason"],
             "research_pool_diagnostic_only",
+        )
+
+    def test_joined_research_ticker_gets_latest_and_historical_ridge_forecasts(self):
+        research_history = price_history(periods=260, end="2026-07-20")
+
+        class ResearchRepository:
+            def revision(self):
+                return 9
+
+            def snapshot(self, asof=None, sessions=260):
+                return SimpleNamespace(
+                    status="unavailable",
+                    asof=asof,
+                    revision=9,
+                    members=(),
+                    histories={},
+                    reason="fixture",
+                )
+
+            def load_detail_snapshot(
+                self,
+                ticker,
+                asof=None,
+                benchmark_tickers=("SPY", "QQQ"),
+            ):
+                self.request = (ticker, asof, benchmark_tickers)
+                return SimpleNamespace(
+                    ticker=ticker,
+                    asof="2026-07-20",
+                    revision=9,
+                    histories={
+                        ticker: research_history,
+                        "SPY": price_history(
+                            periods=260,
+                            end="2026-07-20",
+                            offset=20,
+                        ),
+                        "QQQ": price_history(
+                            periods=260,
+                            end="2026-07-20",
+                            offset=10,
+                        ),
+                    },
+                    stale=False,
+                )
+
+        class MembershipStore:
+            def resolve(self, ticker, default=False):
+                return ticker == "RESEARCH"
+
+            def set_membership(self, ticker, included):
+                return bool(included)
+
+        research_repository = ResearchRepository()
+        research_forecast_service = ForecastService(
+            provider_factory=FakeForecastFactory(),
+            evaluator=fake_forecast_evaluation,
+            max_forecast_dates=1,
+        )
+        client = create_app(
+            test_config(
+                RESEARCH_UNIVERSE_REPOSITORY=research_repository,
+                RESEARCH_POOL_MEMBERSHIP_STORE=MembershipStore(),
+                RESEARCH_FORECAST_SERVICE=research_forecast_service,
+            ),
+            self.repository,
+            self.manager,
+        ).test_client()
+
+        latest = client.get("/api/stocks/RESEARCH")
+        historical = client.get(
+            "/api/stocks/RESEARCH/forecasts/2026-07-16"
+        )
+
+        self.assertEqual(latest.status_code, 200)
+        self.assertEqual(latest.json["analysis_scope"], "research_on_demand")
+        self.assertEqual(
+            latest.json["forecasts"]["by_date"]["2026-07-20"]["20"][
+                "direction"
+            ],
+            "up",
+        )
+        self.assertIn("research_pool_on_demand_forecast", latest.json["warnings"])
+        self.assertIn("SOXX", research_repository.request[2])
+        self.assertEqual(historical.status_code, 200)
+        self.assertEqual(
+            historical.json["forecasts"]["by_date"]["2026-07-16"]["20"][
+                "direction"
+            ],
+            "up",
         )
 
     def test_user_can_join_and_exit_research_pool_without_removing_catalog_row(self):

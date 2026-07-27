@@ -104,7 +104,7 @@ def apply_research_pool_membership(payload, membership_store):
         membership["research_catalog"] = catalog_member
         membership["research"] = membership_store.resolve(
             row.get("ticker"),
-            default=bool(membership.get("research")),
+            default=False,
         )
         row["pool_membership"] = membership
     result["pool_summary"] = {
@@ -134,7 +134,7 @@ def apply_stock_research_pool_membership(payload, membership_store):
     membership["research_catalog"] = catalog_member
     membership["research"] = membership_store.resolve(
         result.get("ticker"),
-        default=bool(membership.get("research")),
+        default=False,
     )
     result["pool_membership"] = membership
     return result

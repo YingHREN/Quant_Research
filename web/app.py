@@ -155,6 +155,17 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             max_cache_size=flask_app.config.get("FORECAST_CACHE_SIZE", 16),
             artifact_store=artifact_store,
         )
+    research_forecast_service = flask_app.config.get(
+        "RESEARCH_FORECAST_SERVICE"
+    )
+    if research_forecast_service is None:
+        research_forecast_service = ForecastService(
+            max_cache_size=flask_app.config.get(
+                "RESEARCH_FORECAST_CACHE_SIZE",
+                16,
+            ),
+            max_forecast_dates=1,
+        )
     entry_signal_service = flask_app.config.get("ENTRY_SIGNAL_SERVICE")
     if entry_signal_service is None:
         persistent_entry_cache_enabled = bool(
@@ -316,6 +327,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     flask_app.extensions["dashboard_scenario_provider"] = scenario_provider
     flask_app.extensions["dashboard_forecast_service"] = forecast_service
     flask_app.extensions[
+        "dashboard_research_forecast_service"
+    ] = research_forecast_service
+    flask_app.extensions[
         "dashboard_entry_signal_service"
     ] = entry_signal_service
     flask_app.extensions["dashboard_intraday_status_service"] = intraday_status_service
@@ -442,19 +456,71 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             try:
                 research_snapshot = (
                     research_universe_repository.load_detail_snapshot(
-                        normalized_ticker
+                        normalized_ticker,
+                        benchmark_tickers=REFERENCE_TICKERS,
                     )
                 )
             except InvalidResearchTicker as error:
                 raise InvalidTicker(str(error)) from error
             except (UnknownResearchTicker, ResearchUniverseDataError):
                 raise active_error
+            research_member = research_pool_membership_store.resolve(
+                normalized_ticker,
+                default=False,
+            )
+            forecast_payload = None
+            top_risk = None
+            if research_member:
+                research_forecast_arguments = (
+                    normalized_ticker,
+                    tuple(
+                        iso_date(timestamp)
+                        for timestamp in research_snapshot.histories[
+                            normalized_ticker
+                        ].index
+                    ),
+                    research_snapshot.histories,
+                )
+                try:
+                    forecast_payload = research_forecast_service.build(
+                        *research_forecast_arguments
+                    )
+                except Exception as error:
+                    flask_app.logger.exception(
+                        "Research forecast service failed for %s",
+                        normalized_ticker,
+                        exc_info=error,
+                    )
+                    forecast_payload = unavailable_forecast_bundle(
+                        getattr(
+                            research_forecast_service,
+                            "model_key",
+                            "ridge_direction_v1",
+                        ),
+                        getattr(
+                            research_forecast_service,
+                            "model_version",
+                            "v1",
+                        ),
+                    )
+                _attach_forecast_target_dates(
+                    forecast_payload,
+                    research_snapshot.histories[normalized_ticker].index,
+                )
+                top_risk = _top_risk_payload(
+                    research_forecast_service,
+                    research_forecast_arguments,
+                    None,
+                )
             return _json_response(
                 apply_stock_research_pool_membership(
                     _research_stock_payload(
                         normalized_ticker,
                         research_snapshot,
                         scenario_provider,
+                        forecast_payload=forecast_payload,
+                        top_risk=top_risk,
+                        research_member=research_member,
                     ),
                     research_pool_membership_store,
                 )
@@ -630,8 +696,30 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
     @flask_app.get("/api/stocks/<ticker>/forecasts/<forecast_date>")
     def historical_forecast(ticker, forecast_date):
         normalized_ticker = ticker.strip().upper()
-        revision = getattr(forecast_service, "database_revision", None)
-        snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        selected_forecast_service = forecast_service
+        revision = getattr(selected_forecast_service, "database_revision", None)
+        try:
+            snapshot = repository.load_analysis_snapshot(normalized_ticker)
+        except UnknownTicker as active_error:
+            if (
+                research_universe_repository is None
+                or not research_pool_membership_store.resolve(
+                    normalized_ticker,
+                    default=False,
+                )
+            ):
+                raise
+            try:
+                snapshot = research_universe_repository.load_detail_snapshot(
+                    normalized_ticker,
+                    benchmark_tickers=REFERENCE_TICKERS,
+                )
+            except InvalidResearchTicker as error:
+                raise InvalidTicker(str(error)) from error
+            except (UnknownResearchTicker, ResearchUniverseDataError):
+                raise active_error
+            selected_forecast_service = research_forecast_service
+            revision = None
         try:
             timestamp = pd.Timestamp(forecast_date)
         except (TypeError, ValueError):
@@ -648,8 +736,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         if getattr(update_snapshot, "state", None) == "running":
             return _json_response(
                 unavailable_forecast_bundle(
-                    getattr(forecast_service, "model_key", "ridge_direction_v1"),
-                    getattr(forecast_service, "model_version", "v1"),
+                    getattr(
+                        selected_forecast_service,
+                        "model_key",
+                        "ridge_direction_v1",
+                    ),
+                    getattr(selected_forecast_service, "model_version", "v1"),
                     UnavailableReason.UPDATE_IN_PROGRESS,
                 )
             )
@@ -661,16 +753,20 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
         try:
             payload = (
-                forecast_service.build(*arguments)
+                selected_forecast_service.build(*arguments)
                 if revision is None
-                else forecast_service.build(
+                else selected_forecast_service.build(
                     *arguments, expected_revision=revision
                 )
             )
         except ForecastRevisionChanged:
             payload = unavailable_forecast_bundle(
-                getattr(forecast_service, "model_key", "ridge_direction_v1"),
-                getattr(forecast_service, "model_version", "v1"),
+                getattr(
+                    selected_forecast_service,
+                    "model_key",
+                    "ridge_direction_v1",
+                ),
+                getattr(selected_forecast_service, "model_version", "v1"),
                 UnavailableReason.UPDATE_IN_PROGRESS,
             )
         _attach_forecast_target_dates(
@@ -1007,7 +1103,15 @@ def _snapshot_dict(snapshot):
     return snapshot.to_dict() if hasattr(snapshot, "to_dict") else snapshot
 
 
-def _research_stock_payload(ticker, snapshot, scenario_provider):
+def _research_stock_payload(
+    ticker,
+    snapshot,
+    scenario_provider,
+    *,
+    forecast_payload=None,
+    top_risk=None,
+    research_member=False,
+):
     history = snapshot.histories[ticker].sort_index()
     if history.empty:
         raise UnknownTicker(f"Ticker was not found: {ticker}")
@@ -1029,17 +1133,32 @@ def _research_stock_payload(ticker, snapshot, scenario_provider):
         stale=bool(snapshot.stale),
     )
     chart[-1]["canslim_technical_gate"] = technical_gate
-    top_risk = unavailable_top_risk_timeline(
-        "research_pool_diagnostic_only"
-    )
-    forecast_payload = unavailable_forecast_bundle(
-        reason=UnavailableReason.RESEARCH_POOL_DIAGNOSTIC_ONLY
-    )
+    _attach_market_bearish_risk(chart, ticker, snapshot.histories)
+    attach_supply_demand_rows(chart, ticker, snapshot.histories)
+    market_gate = _attach_market_gate_rows(chart, snapshot.histories)
+    if forecast_payload is None:
+        forecast_payload = unavailable_forecast_bundle(
+            reason=UnavailableReason.RESEARCH_POOL_DIAGNOSTIC_ONLY
+        )
+    if top_risk is None:
+        top_risk = unavailable_top_risk_timeline(
+            (
+                "service_unsupported"
+                if research_member
+                else "research_pool_diagnostic_only"
+            )
+        )
     structures = _structure_payload([], chart, top_risk)
     _attach_model_outputs(forecast_payload, chart, structures)
     summary = _stock_summary(chart, None)
     summary["stale"] = bool(snapshot.stale)
-    warnings = ["research_pool_limited_analysis"]
+    warnings = [
+        (
+            "research_pool_on_demand_forecast"
+            if research_member
+            else "research_pool_limited_analysis"
+        )
+    ]
     if snapshot.stale:
         warnings.append("stale_ticker")
     if benchmark is None:
@@ -1048,8 +1167,16 @@ def _research_stock_payload(ticker, snapshot, scenario_provider):
         warnings.append("insufficient_indicator_history")
     return {
         "ticker": ticker,
-        "analysis_scope": "research_diagnostic",
-        "pool_membership": {"active": False, "research": True},
+        "analysis_scope": (
+            "research_on_demand"
+            if research_member
+            else "research_diagnostic"
+        ),
+        "pool_membership": {
+            "active": False,
+            "research": bool(research_member),
+            "research_catalog": True,
+        },
         "observation_date": observation_date,
         "summary": summary,
         "chart": chart,
@@ -1070,6 +1197,7 @@ def _research_stock_payload(ticker, snapshot, scenario_provider):
         ),
         "top_risk": top_risk,
         "technical_gate": technical_gate,
+        "market_gate": market_gate,
     }
 
 
