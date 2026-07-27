@@ -60,7 +60,7 @@ class GroupAssignment:
             if self.effective_to is None
             else _normalize_date(self.effective_to)
         )
-        if effective_to is not None and effective_to < effective_from:
+        if effective_to is not None and effective_to <= effective_from:
             raise ValueError("invalid_assignment_effective_range")
         object.__setattr__(self, "effective_from", effective_from)
         object.__setattr__(self, "effective_to", effective_to)
@@ -258,7 +258,7 @@ def _normalize_override(entry, default_rule_version=None):
     ticker = str(entry["ticker"]).strip().upper()
     start = _normalize_date(entry["effective_from"])
     finish = _normalize_date(entry["effective_to"])
-    if start > finish or entry["sector_key"] not in _STANDARD_SECTORS:
+    if start >= finish or entry["sector_key"] not in _STANDARD_SECTORS:
         raise ValueError("invalid_group_override")
     themes = _normalize_themes(entry["theme_keys"])
     primary = str(entry["primary_model_group"])
@@ -285,7 +285,7 @@ def _validate_non_overlapping_ranges(overrides):
     for records in by_ticker.values():
         records.sort(key=lambda item: item["effective_from"])
         for previous, current in zip(records, records[1:]):
-            if current["effective_from"] <= previous["effective_to"]:
+            if current["effective_from"] < previous["effective_to"]:
                 raise ValueError("conflicting_override_effective_ranges")
 
 
@@ -295,7 +295,7 @@ def _active_override(overrides, ticker, asof):
             override
             for override in overrides
             if override["ticker"] == ticker
-            and override["effective_from"] <= asof <= override["effective_to"]
+            and override["effective_from"] <= asof < override["effective_to"]
         ),
         None,
     )

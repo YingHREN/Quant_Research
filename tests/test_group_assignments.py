@@ -113,6 +113,50 @@ class GroupAssignmentTest(unittest.TestCase):
         self.assertEqual(assignment.primary_model_group, "technology")
         self.assertEqual(assignment.source, "sec_broad")
 
+    def test_override_effective_dates_are_half_open(self):
+        override = {
+            "ticker": "CHIP",
+            "effective_from": "2026-07-24",
+            "effective_to": "2026-07-26",
+            "sector_key": "technology",
+            "theme_keys": ["software"],
+            "primary_model_group": "software",
+            "reason": "temporary software classification",
+            "rule_version": "security_group_overrides_v1",
+        }
+        classifications = {
+            "sec": {"sector_key": "technology", "confidence": 0.8}
+        }
+
+        starts_on = resolve_group_assignment(
+            "CHIP", classifications, "2026-07-24", overrides=[override]
+        )
+        day_before_end = resolve_group_assignment(
+            "CHIP", classifications, "2026-07-25", overrides=[override]
+        )
+        ends_on = resolve_group_assignment(
+            "CHIP", classifications, "2026-07-26", overrides=[override]
+        )
+
+        self.assertEqual(starts_on.source, "override")
+        self.assertEqual(day_before_end.source, "override")
+        self.assertEqual(ends_on.source, "sec_broad")
+
+    def test_zero_length_override_interval_is_rejected(self):
+        override = {
+            "ticker": "CHIP",
+            "effective_from": "2026-07-24",
+            "effective_to": "2026-07-24",
+            "sector_key": "technology",
+            "theme_keys": [],
+            "primary_model_group": "technology",
+            "reason": "empty interval",
+            "rule_version": "security_group_overrides_v1",
+        }
+
+        with self.assertRaisesRegex(ValueError, "invalid_group_override"):
+            resolve_group_assignment("CHIP", {}, "2026-07-24", overrides=[override])
+
     def test_overlapping_override_ranges_for_one_ticker_are_rejected(self):
         overrides = [
             {
