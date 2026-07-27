@@ -21,6 +21,17 @@ SERIES_IDS = (
     "DTWEXBGS",
 )
 
+HISTORY_SERIES = (
+    "DGS2",
+    "DGS10",
+    "CURVE_10Y_2Y",
+    "CPI_YOY",
+    "DCOILWTICO",
+    "BAMLH0A0HYM2",
+    "VIXCLS",
+    "DTWEXBGS",
+)
+
 _RULES = (
     ("rates", "two_year_yield_high", 10.0, "DGS2", 4.5, "ge"),
     ("rates", "two_year_yield_rising", 8.0, "DGS2_CHANGE", 0.5, "ge"),
@@ -47,6 +58,48 @@ _RULES = (
     ("risk_aversion", "vix_spiking", 5.0, "VIX_CHANGE", 5.0, "ge"),
     ("risk_aversion", "dollar_surge", 5.0, "DOLLAR_CHANGE", 3.0, "ge"),
 )
+
+
+def build_macro_history_rows(observations, dates):
+    """Replay the macro score on each date without using later releases."""
+    if isinstance(dates, (str, bytes)):
+        raise TypeError("dates must be an iterable of date-like values")
+    normalized_dates = sorted(
+        {
+            pd.Timestamp(value).date().isoformat()
+            for value in dates
+        }
+    )
+    rows = []
+    for date in normalized_dates:
+        cutoff = _cutoff(date)
+        frame = _normalize_observations(observations, cutoff)
+        values, metadata = _derived_values(frame)
+        risk = build_macro_risk(frame, cutoff)
+        series = {}
+        for key in HISTORY_SERIES:
+            value = values.get(key)
+            finite = value is not None and math.isfinite(float(value))
+            source = metadata.get(key, {})
+            series[key] = {
+                "value": round(float(value), 6) if finite else None,
+                "observation_date": source.get("observation_date"),
+                "available_at": source.get("available_at"),
+                "series_ids": list(source.get("series_ids", ())),
+            }
+        rows.append(
+            {
+                "time": date,
+                "score": risk["score"],
+                "coverage": risk["coverage"],
+                "state": risk["state"],
+                "components": risk["components"],
+                "series": series,
+                "evidence": risk["evidence"],
+                "unavailable_reason": risk["unavailable_reason"],
+            }
+        )
+    return rows
 
 
 def build_macro_risk(observations, asof):

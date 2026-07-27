@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from research.macro_risk import build_macro_risk
+from research.macro_risk import build_macro_history_rows, build_macro_risk
 
 
 def observations():
@@ -65,6 +65,77 @@ def observations():
 
 
 class MacroRiskTest(unittest.TestCase):
+    def test_builds_point_in_time_history_rows_with_raw_series_metadata(self):
+        rows = build_macro_history_rows(
+            observations(),
+            ("2026-07-10", "2026-07-20"),
+        )
+
+        self.assertEqual(
+            [row["time"] for row in rows],
+            ["2026-07-10", "2026-07-20"],
+        )
+        self.assertEqual(
+            set(rows[0]),
+            {
+                "time",
+                "score",
+                "coverage",
+                "state",
+                "components",
+                "series",
+                "evidence",
+                "unavailable_reason",
+            },
+        )
+        self.assertIsNone(rows[0]["series"]["CPI_YOY"]["value"])
+        self.assertEqual(rows[1]["series"]["CPI_YOY"]["value"], 3.5)
+        self.assertEqual(rows[1]["series"]["DGS2"]["value"], 4.75)
+        self.assertEqual(
+            rows[1]["series"]["DGS2"]["observation_date"],
+            "2026-07-01",
+        )
+        self.assertEqual(
+            rows[1]["series"]["DGS2"]["available_at"],
+            "2026-07-01T18:00:00+00:00",
+        )
+        self.assertEqual(
+            rows[1]["series"]["CURVE_10Y_2Y"]["value"],
+            -0.65,
+        )
+        self.assertEqual(
+            rows[1]["series"]["CURVE_10Y_2Y"]["series_ids"],
+            ["DGS10", "DGS2"],
+        )
+        self.assertEqual(len(rows[1]["evidence"]), 10)
+
+    def test_history_rows_ignore_revisions_released_after_the_last_date(self):
+        frame = observations()
+        revised = pd.concat(
+            [
+                frame,
+                pd.DataFrame(
+                    [
+                        {
+                            "series_id": "DGS2",
+                            "observation_date": "2026-07-01",
+                            "available_at": "2026-07-25T18:00:00+00:00",
+                            "value": 3.0,
+                            "realtime_start": "2026-07-25",
+                            "realtime_end": "9999-12-31",
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+        dates = ("2026-07-10", "2026-07-20")
+
+        self.assertEqual(
+            build_macro_history_rows(revised, dates),
+            build_macro_history_rows(frame, dates),
+        )
+
     def test_scores_four_independent_risk_groups(self):
         result = build_macro_risk(
             observations(),
