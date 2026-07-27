@@ -357,6 +357,36 @@ class AdjudicateIdentityTests(unittest.TestCase):
         self.assertEqual(result["reason_codes"], ["conflicting_isin_cik"])
         self.assertEqual(len(result["conflicting_evidence"]), 2)
 
+    def test_catalog_conflicting_isin_cannot_be_auto_confirmed(self):
+        result = adjudicate_identity(
+            {
+                "ticker": "OLD",
+                "name": "Example",
+                "identity_panel": "conflicting_isin",
+                "provider_isin": "US123",
+            },
+            [
+                {
+                    "cik": "0000000123",
+                    "match_reasons": ["exact_current_name"],
+                    "matched_former_name": None,
+                }
+            ],
+            [
+                {
+                    "key_type": "isin_cik",
+                    "isin": "US123",
+                    "cik": "0000000123",
+                }
+            ],
+        )
+
+        self.assertEqual(result["link_status"], "review_required")
+        self.assertEqual(
+            result["reason_codes"],
+            ["catalog_conflicting_isin"],
+        )
+
     def test_security_type_contradiction_rejects_link(self):
         result = adjudicate_identity(
             {

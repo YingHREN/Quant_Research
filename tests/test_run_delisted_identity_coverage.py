@@ -15,6 +15,7 @@ from run_delisted_identity_coverage import (
     collect_artifact,
     collect_provider_sample,
     collect_sec_header_sample,
+    collect_targeted_sec_submissions,
     main,
     run_coverage_pilot,
     write_coverage_reports,
@@ -281,7 +282,116 @@ class CollectSecHeaderSampleTests(unittest.TestCase):
         self.assertEqual(second["status_counts"], {"success": 1})
 
 
+class CollectTargetedSecSubmissionsTests(unittest.TestCase):
+    def test_collects_each_provider_cik_once_and_reuses_cache(self):
+        payloads = {
+            "AAA": {"General": {"CIK": "123"}},
+            "BBB": {"General": {"CIK": "123"}},
+            "CCC": {"General": {"CIK": None}},
+        }
+        calls = []
+
+        def fetch(cik, headers):
+            calls.append(cik)
+            return json.dumps(
+                {
+                    "cik": "123",
+                    "name": "Example Inc",
+                    "tickers": ["AAA"],
+                    "formerNames": [],
+                    "filings": {"recent": {}, "files": []},
+                }
+            ).encode()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            first = collect_targeted_sec_submissions(
+                payloads,
+                Path(temp_dir),
+                fetcher=fetch,
+            )
+            second = collect_targeted_sec_submissions(
+                payloads,
+                Path(temp_dir),
+                fetcher=fetch,
+            )
+
+        self.assertEqual(calls, ["0000000123"])
+        self.assertEqual(len(first["records"]), 1)
+        self.assertEqual(first["records"][0]["cik"], "0000000123")
+        self.assertEqual(second["status_counts"], {"success": 1})
+        self.assertEqual(first["cache_sha256"], second["cache_sha256"])
+
+
 class RunCoveragePilotTests(unittest.TestCase):
+    def test_targeted_pilot_confirms_strong_isin_without_bulk_archive(self):
+        catalog = {
+            "securities": [
+                {
+                    "ticker": "OLD",
+                    "exchange": "NASDAQ",
+                    "name": "Example Inc",
+                    "identity_status": "strong_isin",
+                    "provider_isin": "US123",
+                    "backfill_eligible": True,
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            catalog_path = root / "catalog.json"
+            catalog_path.write_text(json.dumps(catalog))
+            staging_path = root / "delisted.db"
+            connection = sqlite3.connect(staging_path)
+            connection.execute(
+                """
+                CREATE TABLE history_segments (
+                    ticker TEXT, first_date TEXT, last_date TEXT,
+                    row_count INTEGER
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO history_segments VALUES (?, ?, ?, ?)",
+                ("OLD", "2018-01-01", "2020-01-01", 500),
+            )
+            connection.commit()
+            connection.close()
+
+            result = run_coverage_pilot(
+                catalog_path,
+                staging_path,
+                root / "reference.db",
+                root / "raw",
+                quotas={"strong_isin": 1},
+                snapshot_date="2026-07-27",
+                provider_fetcher=lambda ticker, token: {
+                    "General": {
+                        "Code": ticker,
+                        "Name": "Example Inc",
+                        "ISIN": "US123",
+                        "CIK": "123",
+                    }
+                },
+                sec_entity_fetcher=lambda cik, headers: json.dumps(
+                    {
+                        "cik": "123",
+                        "name": "Example Inc",
+                        "tickers": [],
+                        "formerNames": [],
+                        "filings": {"recent": {}, "files": []},
+                    }
+                ).encode(),
+                token="fake-token",
+                sec_strategy="targeted",
+            )
+
+        self.assertEqual(result["decision_counts"], {"confirmed": 1})
+        self.assertEqual(
+            result["decisions"][0]["decision_rule"],
+            "isin_cik_plus_exact_name",
+        )
+
     def test_offline_pilot_with_missing_sec_cache_makes_no_network_call(self):
         calls = []
 

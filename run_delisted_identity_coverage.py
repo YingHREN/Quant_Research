@@ -33,6 +33,7 @@ from research.sec_identity_archive import (
     build_identity_index,
     find_sec_candidates,
     iter_submission_records,
+    normalize_submission_record,
 )
 from research.sec_industry_history import (
     INTERVAL_RULE_VERSION,
@@ -210,11 +211,13 @@ def collect_sec_header_sample(
     root = Path(cache_root) / "sec" / "filings"
     root.mkdir(parents=True, exist_ok=True)
     headers = {"Accept": "text/plain"}
+    missing_user_agent = False
     if fetcher is None:
         user_agent = str(os.environ.get("SEC_USER_AGENT") or "").strip()
-        if not user_agent and not offline:
-            raise ValueError("SEC_USER_AGENT is required")
-        headers["User-Agent"] = user_agent
+        if user_agent:
+            headers["User-Agent"] = user_agent
+        elif not offline:
+            missing_user_agent = True
         fetcher = _fetch_sec_submission
     confirmed = sorted(
         {
@@ -263,6 +266,8 @@ def collect_sec_header_sample(
                 )
                 continue
             else:
+                if missing_user_agent:
+                    raise ValueError("SEC_USER_AGENT is required")
                 try:
                     raw = fetcher(cik, accession, headers)
                     if not isinstance(raw, bytes) or not raw:
@@ -333,6 +338,101 @@ def collect_sec_header_sample(
     }
 
 
+def collect_targeted_sec_submissions(
+    provider_payloads,
+    cache_root,
+    *,
+    fetcher=None,
+    offline=False,
+):
+    """Collect SEC submissions only for provider-discovered CIKs."""
+    root = Path(cache_root) / "sec" / "entities"
+    root.mkdir(parents=True, exist_ok=True)
+    headers = {"Accept": "application/json"}
+    if fetcher is None:
+        user_agent = str(os.environ.get("SEC_USER_AGENT") or "").strip()
+        if not user_agent and not offline:
+            raise ValueError("SEC_USER_AGENT is required")
+        headers["User-Agent"] = user_agent
+        fetcher = _fetch_sec_company_submission
+    ciks = sorted(
+        {
+            str((payload.get("General") or {}).get("CIK") or "")
+            .strip()
+            .zfill(10)
+            for payload in provider_payloads.values()
+            if str((payload.get("General") or {}).get("CIK") or "")
+            .strip()
+            .isdigit()
+        }
+    )
+    records = []
+    statuses = []
+    hashes = {}
+    for cik in ciks:
+        path = root / f"CIK{cik}.json"
+        reused = path.exists()
+        if reused:
+            raw = path.read_bytes()
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                record = normalize_submission_record(
+                    payload,
+                    expected_cik=cik,
+                    source_name=path.name,
+                )
+            except (
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                ValueError,
+            ):
+                raise ValueError(
+                    f"cached SEC entity is corrupt: {cik}"
+                ) from None
+        elif offline:
+            statuses.append({"cik": cik, "status": "offline_missing"})
+            continue
+        else:
+            try:
+                raw = fetcher(cik, headers)
+                if not isinstance(raw, bytes) or not raw:
+                    raise ValueError(
+                        "SEC entity response must be non-empty bytes"
+                    )
+                payload = json.loads(raw.decode("utf-8"))
+                record = normalize_submission_record(
+                    payload,
+                    expected_cik=cik,
+                    source_name=f"CIK{cik}.json",
+                )
+                _atomic_write(path, _canonical_json_bytes(payload))
+                raw = path.read_bytes()
+            except Exception as exc:  # external SEC boundary
+                statuses.append(
+                    {"cik": cik, "status": _provider_error_status(exc)}
+                )
+                continue
+        digest = hashlib.sha256(raw).hexdigest()
+        hashes[cik] = digest
+        records.append(record)
+        statuses.append(
+            {"cik": cik, "status": "success", "reused": reused}
+        )
+    status_counts = {}
+    for row in statuses:
+        status = row["status"]
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "records": tuple(sorted(records, key=lambda row: row["cik"])),
+        "statuses": tuple(statuses),
+        "status_counts": dict(sorted(status_counts.items())),
+        "cache_hashes": dict(sorted(hashes.items())),
+        "cache_sha256": hashlib.sha256(
+            _canonical_json_bytes(dict(sorted(hashes.items())))
+        ).hexdigest(),
+    }
+
+
 def run_coverage_pilot(
     catalog_path,
     delisted_db,
@@ -342,11 +442,13 @@ def run_coverage_pilot(
     quotas,
     snapshot_date,
     sec_fetcher=None,
+    sec_entity_fetcher=None,
     sec_header_fetcher=None,
     provider_fetcher=None,
     token=None,
     offline=False,
     protected_db_paths=(),
+    sec_strategy="bulk",
 ):
     """Run the identity portion of the fixed-sample coverage pilot."""
     started_at = time.monotonic()
@@ -375,21 +477,71 @@ def run_coverage_pilot(
     sample_bytes = _canonical_json_bytes(list(sample))
     sample_sha256 = hashlib.sha256(sample_bytes).hexdigest()
 
-    sec_cache_root = raw_root / "sec"
-    if offline and not (
-        (sec_cache_root / "submissions.zip").exists()
-        and (sec_cache_root / "manifest.json").exists()
-    ):
-        raise ValueError("offline SEC submissions cache is missing")
-    sec_artifact = collect_artifact(
-        "sec_submissions",
-        sec_cache_root,
-        fetcher=sec_fetcher,
-    )
-    sec_index = build_identity_index(
-        iter_submission_records(raw_root / "sec" / "submissions.zip"),
-        sample_rows=sample,
-    )
+    if sec_strategy not in {"bulk", "targeted"}:
+        raise ValueError(f"unsupported SEC strategy: {sec_strategy}")
+    provider_result = {
+        "requested": 0,
+        "statuses": (),
+        "status_counts": {},
+        "payloads": {},
+    }
+    sec_identity_requests = 0
+    if sec_strategy == "targeted":
+        seed_decisions = [
+            {
+                "ticker": row["ticker"],
+                "link_status": "unresolved",
+                "provider_isin": row.get("provider_isin"),
+            }
+            for row in sample
+        ]
+        if token or provider_fetcher is not None:
+            provider_result = collect_provider_sample(
+                seed_decisions,
+                raw_root,
+                token=token,
+                fetcher=provider_fetcher,
+                offline=offline,
+            )
+        targeted_sec = collect_targeted_sec_submissions(
+            provider_result["payloads"],
+            raw_root,
+            fetcher=sec_entity_fetcher,
+            offline=offline,
+        )
+        sec_index = build_identity_index(
+            targeted_sec["records"],
+            sample_rows=sample,
+        )
+        sec_identity_requests = sum(
+            1
+            for row in targeted_sec["statuses"]
+            if not row.get("reused")
+            and row.get("status") != "offline_missing"
+        )
+        sec_artifact = {
+            "sha256": targeted_sec["cache_sha256"],
+            "reused": sec_identity_requests == 0,
+        }
+    else:
+        sec_cache_root = raw_root / "sec"
+        if offline and not (
+            (sec_cache_root / "submissions.zip").exists()
+            and (sec_cache_root / "manifest.json").exists()
+        ):
+            raise ValueError("offline SEC submissions cache is missing")
+        sec_artifact = collect_artifact(
+            "sec_submissions",
+            sec_cache_root,
+            fetcher=sec_fetcher,
+        )
+        sec_index = build_identity_index(
+            iter_submission_records(
+                raw_root / "sec" / "submissions.zip"
+            ),
+            sample_rows=sample,
+        )
+        sec_identity_requests = 0 if sec_artifact["reused"] else 1
     candidates_by_ticker = {}
     initial_decisions = []
     for row in sample:
@@ -403,13 +555,10 @@ def run_coverage_pilot(
             }
         )
 
-    provider_result = {
-        "requested": 0,
-        "statuses": (),
-        "status_counts": {},
-        "payloads": {},
-    }
-    if token or provider_fetcher is not None:
+    if (
+        sec_strategy == "bulk"
+        and (token or provider_fetcher is not None)
+    ):
         provider_result = collect_provider_sample(
             initial_decisions,
             raw_root,
@@ -544,9 +693,7 @@ def run_coverage_pilot(
             "projected_runtime_seconds": elapsed * scale,
         }
     usage = {
-        "sec_requests": (
-            (0 if sec_artifact["reused"] else 1) + sec_header_requests
-        ),
+        "sec_requests": sec_identity_requests + sec_header_requests,
         "provider_requests": provider_requests,
         "provider_api_units": provider_requests * 10,
         "download_bytes": raw_bytes,
@@ -788,6 +935,15 @@ def _fetch_sec_submission(cik, accession, headers):
         return response.read()
 
 
+def _fetch_sec_company_submission(cik, headers):
+    request = Request(
+        f"https://data.sec.gov/submissions/CIK{cik}.json",
+        headers=dict(headers),
+    )
+    with urlopen(request, timeout=90) as response:
+        return response.read()
+
+
 def _provider_error_status(exc):
     if isinstance(exc, HTTPError):
         if exc.code in {401, 403}:
@@ -925,6 +1081,12 @@ def main(argv=None):
         help="Price database to hash before reporting; may be repeated.",
     )
     parser.add_argument("--snapshot-date", default="2026-07-27")
+    parser.add_argument(
+        "--sec-strategy",
+        choices=("bulk", "targeted"),
+        default="bulk",
+        help="Use the full SEC archive or provider-discovered CIKs.",
+    )
     parser.add_argument("--offline", action="store_true")
     arguments = parser.parse_args(argv)
     result = run_coverage_pilot(
@@ -937,6 +1099,7 @@ def main(argv=None):
         token=os.environ.get("EODHD_API_TOKEN"),
         offline=arguments.offline,
         protected_db_paths=arguments.protected_db,
+        sec_strategy=arguments.sec_strategy,
     )
     if arguments.report_prefix:
         result["report_paths"] = write_coverage_reports(

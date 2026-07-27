@@ -37,51 +37,62 @@ def iter_submission_records(path):
             if not match:
                 continue
             payload = json.loads(archive.read(name).decode("utf-8"))
-            if not isinstance(payload, Mapping):
-                raise ValueError("SEC submission payload must be an object")
-            cik = str(payload.get("cik") or "").strip().zfill(10)
-            if cik != match.group(1):
-                raise ValueError(f"CIK mismatch for {name}")
-            former_names = []
-            for raw in payload.get("formerNames") or ():
-                former_names.append(
-                    {
-                        "name": str(raw.get("name") or "").strip(),
-                        "normalized_name": normalize_legal_name(
-                            raw.get("name")
-                        ),
-                        "from": _iso_date(raw.get("from")),
-                        "to": _iso_date(raw.get("to")),
-                    }
-                )
-            filings = payload.get("filings") or {}
-            yield {
-                "cik": cik,
-                "name": str(payload.get("name") or "").strip(),
-                "normalized_name": normalize_legal_name(payload.get("name")),
-                "tickers": tuple(
-                    sorted(
-                        {
-                            str(value).strip().upper()
-                            for value in payload.get("tickers") or ()
-                            if str(value).strip()
-                        }
-                    )
-                ),
-                "exchanges": tuple(
-                    str(value or "").strip().upper()
-                    for value in payload.get("exchanges") or ()
-                ),
-                "sic": str(payload.get("sic") or "").strip() or None,
-                "sic_description": str(
-                    payload.get("sicDescription") or ""
-                ).strip(),
-                "former_names": tuple(former_names),
-                "recent_filings": _recent_filings(
-                    filings.get("recent") or {}
-                ),
-                "filing_files": tuple(filings.get("files") or ()),
+            yield normalize_submission_record(
+                payload,
+                expected_cik=match.group(1),
+                source_name=name,
+            )
+
+
+def normalize_submission_record(
+    payload,
+    *,
+    expected_cik=None,
+    source_name=None,
+):
+    """Normalize one SEC submissions payload with optional CIK binding."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("SEC submission payload must be an object")
+    cik = str(payload.get("cik") or "").strip().zfill(10)
+    if expected_cik is not None and cik != str(expected_cik).zfill(10):
+        label = source_name or f"CIK{str(expected_cik).zfill(10)}"
+        raise ValueError(f"CIK mismatch for {label}")
+    former_names = []
+    for raw in payload.get("formerNames") or ():
+        former_names.append(
+            {
+                "name": str(raw.get("name") or "").strip(),
+                "normalized_name": normalize_legal_name(raw.get("name")),
+                "from": _iso_date(raw.get("from")),
+                "to": _iso_date(raw.get("to")),
             }
+        )
+    filings = payload.get("filings") or {}
+    return {
+        "cik": cik,
+        "name": str(payload.get("name") or "").strip(),
+        "normalized_name": normalize_legal_name(payload.get("name")),
+        "tickers": tuple(
+            sorted(
+                {
+                    str(value).strip().upper()
+                    for value in payload.get("tickers") or ()
+                    if str(value).strip()
+                }
+            )
+        ),
+        "exchanges": tuple(
+            str(value or "").strip().upper()
+            for value in payload.get("exchanges") or ()
+        ),
+        "sic": str(payload.get("sic") or "").strip() or None,
+        "sic_description": str(
+            payload.get("sicDescription") or ""
+        ).strip(),
+        "former_names": tuple(former_names),
+        "recent_filings": _recent_filings(filings.get("recent") or {}),
+        "filing_files": tuple(filings.get("files") or ()),
+    }
 
 
 def build_identity_index(records, sample_rows=None):

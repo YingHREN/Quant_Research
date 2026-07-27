@@ -113,6 +113,21 @@ def adjudicate_identity(sample_row, sec_candidates, provider_evidence):
         if str(row.get("key_type") or "") == "isin_cik"
         and str(row.get("isin") or "").strip().upper() == sample_isin
     }
+    if (
+        str(sample_row.get("identity_panel") or "")
+        == "conflicting_isin"
+        and provider_ciks
+    ):
+        return {
+            "ticker": ticker,
+            "cik": None,
+            "link_status": "review_required",
+            "decision_rule": "catalog_conflicting_isin",
+            "rule_version": ADJUDICATION_VERSION,
+            "reason_codes": ["catalog_conflicting_isin"],
+            "supporting_evidence": [],
+            "conflicting_evidence": list(provider_rows),
+        }
     if len(provider_ciks) > 1:
         conflicts = [
             row
