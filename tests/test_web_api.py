@@ -34,7 +34,6 @@ from web.services.market_data import (
     MarketDataUnavailable,
     UnknownTicker,
 )
-from web.services.research_universe import ResearchUniverseRepository
 from web.services.update_jobs import UpdateAlreadyRunning, UpdateJobManager
 
 
@@ -647,13 +646,64 @@ class SndkGroupAssignmentRepository:
         }
 
 
-def local_research_database():
-    checkout = Path(__file__).resolve().parents[1]
-    candidates = (
-        checkout / "data" / "research_prices.db",
-        checkout.parent.parent / "data" / "research_prices.db",
-    )
-    return next((path for path in candidates if path.is_file()), None)
+def sndk_top_risk_histories():
+    index = pd.bdate_range(end="2026-07-24", periods=260)
+
+    def rising(slope):
+        close = pd.Series(100.0 + np.arange(len(index)) * slope, index=index)
+        return pd.DataFrame(
+            {
+                "Open": close - 0.2,
+                "High": close + 0.8,
+                "Low": close - 0.8,
+                "Close": close,
+                "Volume": 1_000_000.0,
+            },
+            index=index,
+        )
+
+    histories = {
+        "SNDK": rising(0.32),
+        "QQQ": rising(0.18),
+        "SPY": rising(0.16),
+        "XLK": rising(0.20),
+        "SOXX": rising(0.24),
+        "SMH": rising(0.25),
+    }
+    close_by_date = {
+        "2026-06-15": 172.0,
+        "2026-06-16": 169.0,
+        "2026-06-17": 170.0,
+        "2026-06-18": 170.5,
+        "2026-06-22": 171.0,
+        "2026-06-23": 171.2,
+        "2026-06-24": 171.0,
+        "2026-06-25": 171.0,
+        "2026-06-26": 171.0,
+        "2026-06-29": 169.0,
+        "2026-06-30": 167.0,
+        "2026-07-01": 164.0,
+        "2026-07-02": 158.0,
+    }
+    event_dates = {"2026-06-16", "2026-06-26", "2026-07-02"}
+    sndk = histories["SNDK"]
+    for raw_date, close in close_by_date.items():
+        timestamp = pd.Timestamp(raw_date)
+        if raw_date in event_dates:
+            values = (close + 2.0, close + 3.0, close - 1.0, close, 3_000_000.0)
+        else:
+            values = (close - 0.2, close + 0.8, close - 0.8, close, 1_000_000.0)
+        sndk.loc[timestamp, ("Open", "High", "Low", "Close", "Volume")] = values
+    for position, timestamp in enumerate(index[index > pd.Timestamp("2026-07-02")]):
+        close = 160.0 + position * 0.4
+        sndk.loc[timestamp, ("Open", "High", "Low", "Close", "Volume")] = (
+            close - 0.2,
+            close + 0.8,
+            close - 0.8,
+            close,
+            1_000_000.0,
+        )
+    return histories
 
 
 class FakeMacroRiskService:
@@ -1327,6 +1377,71 @@ class WebApiTest(unittest.TestCase):
                 "events": [],
             },
         )
+
+    def test_available_assignments_keep_legacy_latest_and_historical_builds(self):
+        service = InjectedForecastService()
+        app = create_app(
+            test_config(
+                FORECAST_SERVICE=service,
+                GROUP_ASSIGNMENT_REPOSITORY=SndkGroupAssignmentRepository(),
+            ),
+            self.repository,
+            self.manager,
+        )
+        requested = self.repository.histories["AAA"].index[-20].date().isoformat()
+
+        latest = app.test_client().get("/api/stocks/AAA")
+        historical = app.test_client().get(
+            f"/api/stocks/AAA/forecasts/{requested}"
+        )
+
+        self.assertEqual(latest.status_code, 200)
+        self.assertEqual(
+            latest.json["forecasts"]["model"]["status"],
+            "available",
+        )
+        self.assertEqual(historical.status_code, 200)
+        self.assertEqual(
+            historical.json["forecasts"]["model"]["status"],
+            "available",
+        )
+        self.assertEqual(len(service.calls), 2)
+
+    def test_available_assignments_keep_legacy_top_risk_signature(self):
+        class LegacyTimelineService(RevisionAwareInjectedForecastService):
+            def build_top_risk_timeline(
+                self,
+                ticker,
+                chart_dates,
+                histories,
+                *,
+                expected_revision=None,
+            ):
+                return {
+                    "status": "available",
+                    "unavailable_reason": None,
+                    "events": [],
+                    "latest": {
+                        "time": tuple(chart_dates)[-1],
+                        "score": 45.0,
+                        "raw_score": 45.0,
+                        "state": "watch",
+                        "raw_state": "watch",
+                        "memory_age_sessions": 0,
+                    },
+                }
+
+        response = create_app(
+            test_config(
+                FORECAST_SERVICE=LegacyTimelineService(),
+                GROUP_ASSIGNMENT_REPOSITORY=SndkGroupAssignmentRepository(),
+            ),
+            self.repository,
+            self.manager,
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["top_risk"]["status"], "available")
 
     def test_top_risk_timeline_failure_does_not_fail_stock_endpoint(self):
         class BrokenTimelineForecastService(InjectedForecastService):
@@ -2284,10 +2399,6 @@ class WebApiTest(unittest.TestCase):
         )
 
     def test_joined_sndk_top_risk_uses_one_point_in_time_assignment_snapshot(self):
-        database = local_research_database()
-        if database is None:
-            self.skipTest("local SNDK research history is unavailable")
-
         class MembershipStore:
             def resolve(self, ticker, default=False):
                 return ticker == "SNDK"
@@ -2295,7 +2406,36 @@ class WebApiTest(unittest.TestCase):
             def set_membership(self, ticker, included):
                 return bool(included)
 
-        research_repository = ResearchUniverseRepository(database)
+        class ResearchRepository:
+            def revision(self):
+                return 73
+
+            def snapshot(self, asof=None, sessions=260):
+                return SimpleNamespace(
+                    status="unavailable",
+                    asof=asof,
+                    revision=73,
+                    members=(),
+                    histories={},
+                    reason="fixture",
+                )
+
+            def load_detail_snapshot(
+                self,
+                ticker,
+                asof=None,
+                benchmark_tickers=REFERENCE_TICKERS,
+            ):
+                histories = sndk_top_risk_histories()
+                return SimpleNamespace(
+                    ticker=ticker,
+                    asof="2026-07-24",
+                    revision=73,
+                    histories=histories,
+                    stale=False,
+                )
+
+        research_repository = ResearchRepository()
         assignments = SndkGroupAssignmentRepository()
         forecast_service = ForecastService(
             provider_factory=FakeForecastFactory(),
@@ -2322,13 +2462,11 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(latest.json["top_risk"]["status"], "available")
         events = latest.json["top_risk"]["events"]
         self.assertIn(
+            ("2026-06-26", "top_risk_watch", "watch"),
             {
-                "time": "2026-06-26",
-                "type": "top_risk_watch",
-                "score": 63.25,
-                "state": "watch",
+                (event["time"], event["type"], event["state"])
+                for event in events
             },
-            events,
         )
         june_26 = next(
             row
@@ -2344,10 +2482,13 @@ class WebApiTest(unittest.TestCase):
             historical.json["forecasts"]["by_date"]["2026-06-26"]["20"][
                 "direction"
             ],
-            "neutral",
+            "up",
         )
         self.assertIn(
-            (tuple(sorted(REFERENCE_TICKERS + ("SNDK",))), "2026-06-26"),
+            (
+                tuple(sorted(sndk_top_risk_histories())),
+                "2026-06-26",
+            ),
             assignments.calls,
         )
 

@@ -116,6 +116,54 @@ class ForecastArtifactStoreTest(unittest.TestCase):
             }.issubset(columns)
         )
 
+    def test_prior_schema_migrates_in_place_without_reusing_legacy_identity(self):
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE forecast_artifacts (
+                    cache_key TEXT PRIMARY KEY,
+                    market_signature TEXT NOT NULL,
+                    model_key TEXT NOT NULL,
+                    model_version TEXT NOT NULL,
+                    feature_version TEXT NOT NULL,
+                    risk_context_version TEXT NOT NULL,
+                    format_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    market_asof TEXT,
+                    payload_codec TEXT NOT NULL,
+                    payload_checksum TEXT NOT NULL,
+                    payload BLOB NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO forecast_artifacts VALUES (
+                    'legacy-key', 'market-a', 'ridge_direction_v1', 'v4',
+                    'features-v1', 'risk-v1', 'forecast-artifact-v1',
+                    '2026-07-24T00:00:00+00:00', '2026-07-21',
+                    'pickle5+zlib', 'legacy-checksum', X'00'
+                )
+                """
+            )
+
+        store = ForecastArtifactStore(self.path, max_entries=4)
+        self.assertEqual(store.entry_count(), 1)
+        with sqlite3.connect(self.path) as connection:
+            migrated = connection.execute(
+                """
+                SELECT assignment_revision, assignment_fingerprint
+                FROM forecast_artifacts
+                WHERE cache_key = 'legacy-key'
+                """
+            ).fetchone()
+        self.assertEqual(migrated, ("legacy", "legacy"))
+        self.assertIsNone(store.load(_identity(), "market-a"))
+        self.assertTrue(store.save(_identity(), "market-a", _artifact()))
+        self.assertEqual(store.entry_count(), 2)
+        restored = store.load(_identity(), "market-a")
+        pd.testing.assert_frame_equal(restored.frame, _artifact().frame)
+
     def test_corrupt_checksum_payload_and_codec_are_safe_misses(self):
         mutations = (
             ("payload_checksum", "broken"),

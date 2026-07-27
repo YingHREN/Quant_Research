@@ -9,6 +9,7 @@ Usage::
 from __future__ import annotations
 
 from collections.abc import Mapping
+import inspect
 import math
 from numbers import Real
 import os
@@ -505,12 +506,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                     research_snapshot.histories,
                 )
                 try:
-                    forecast_payload = research_forecast_service.build(
-                        *research_forecast_arguments,
-                        **_assignment_options(
-                            research_assignments,
-                            research_assignment_revision,
-                        ),
+                    forecast_payload = _call_forecast_builder(
+                        research_forecast_service.build,
+                        research_forecast_arguments,
+                        research_assignments,
+                        research_assignment_revision,
                     )
                 except Exception as error:
                     flask_app.logger.exception(
@@ -655,21 +655,19 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                     UnavailableReason.UPDATE_IN_PROGRESS,
                 )
             elif forecast_revision is None:
-                forecast_payload = forecast_service.build(
-                    *forecast_arguments,
-                    **_assignment_options(
-                        assignments,
-                        assignment_revision,
-                    ),
+                forecast_payload = _call_forecast_builder(
+                    forecast_service.build,
+                    forecast_arguments,
+                    assignments,
+                    assignment_revision,
                 )
             else:
-                forecast_payload = forecast_service.build(
-                    *forecast_arguments,
-                    **_assignment_options(
-                        assignments,
-                        assignment_revision,
-                    ),
-                    expected_revision=forecast_revision,
+                forecast_payload = _call_forecast_builder(
+                    forecast_service.build,
+                    forecast_arguments,
+                    assignments,
+                    assignment_revision,
+                    forecast_revision,
                 )
         except ForecastRevisionChanged:
             forecast_payload = unavailable_forecast_bundle(
@@ -805,23 +803,12 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             snapshot.histories,
         )
         try:
-            payload = (
-                selected_forecast_service.build(
-                    *arguments,
-                    **_assignment_options(
-                        assignments,
-                        assignment_revision,
-                    ),
-                )
-                if revision is None
-                else selected_forecast_service.build(
-                    *arguments,
-                    **_assignment_options(
-                        assignments,
-                        assignment_revision,
-                    ),
-                    expected_revision=revision,
-                )
+            payload = _call_forecast_builder(
+                selected_forecast_service.build,
+                arguments,
+                assignments,
+                assignment_revision,
+                revision,
             )
         except ForecastRevisionChanged:
             payload = unavailable_forecast_bundle(
@@ -1125,6 +1112,32 @@ def _assignment_options(assignments, assignment_revision):
     return options
 
 
+def _call_forecast_builder(
+    builder,
+    arguments,
+    assignments,
+    assignment_revision,
+    expected_revision=None,
+):
+    options = _assignment_options(assignments, assignment_revision)
+    if expected_revision is not None:
+        options["expected_revision"] = expected_revision
+    try:
+        parameters = inspect.signature(builder).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_keywords = any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    supported = {
+        key: value
+        for key, value in options.items()
+        if accepts_keywords or key in parameters
+    }
+    return builder(*arguments, **supported)
+
+
 def _market_group_for_assignment(ticker, histories, assignments):
     if assignments is None:
         return market_group_for_ticker(ticker)
@@ -1349,16 +1362,12 @@ def _top_risk_payload(
     if not callable(builder):
         return unavailable_top_risk_timeline("service_unsupported")
     try:
-        options = _assignment_options(
+        return _call_forecast_builder(
+            builder,
+            forecast_arguments,
             assignments,
             assignment_revision,
-        )
-        if expected_revision is None:
-            return builder(*forecast_arguments, **options)
-        return builder(
-            *forecast_arguments,
-            **options,
-            expected_revision=expected_revision,
+            expected_revision,
         )
     except ForecastRevisionChanged:
         return unavailable_top_risk_timeline("update_in_progress")
