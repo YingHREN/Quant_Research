@@ -94,6 +94,19 @@ export function getMarketOverview({
   return requestJson(`/api/market-overview?${params.toString()}`);
 }
 
+export function getMacroHistory({
+  asof = "",
+  range = "3y",
+  benchmark = "SPY",
+} = {}) {
+  const params = new URLSearchParams({
+    range: String(range),
+    benchmark: String(benchmark),
+  });
+  if (asof) params.set("asof", String(asof));
+  return requestJson(`/api/macro-history?${params.toString()}`);
+}
+
 export function startUpdate() {
   return requestJson("/api/update", { method: "POST" });
 }
@@ -111,6 +124,7 @@ export const api = Object.freeze({
   getStock,
   getStockForecast,
   getMarketOverview,
+  getMacroHistory,
   startUpdate,
   getUpdateStatus,
   getCacheStatus,

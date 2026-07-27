@@ -18,6 +18,11 @@ class MarketAssetTest(unittest.TestCase):
             "market-events",
             "market-data-tier",
             "market-coverage",
+            "macro-history-score-chart",
+            "macro-history-context-chart",
+            "macro-history-detail",
+            "macro-history-series",
+            "macro-history-unlock",
         ):
             self.assertIn(f'id="{element_id}"', source)
         self.assertIn('aria-live="polite"', source)
@@ -25,6 +30,37 @@ class MarketAssetTest(unittest.TestCase):
         self.assertIn('data-horizon="5"', source)
         self.assertIn('data-horizon="20"', source)
         self.assertIn('data-horizon="60"', source)
+        self.assertLess(
+            source.index("lightweight-charts.standalone.production.js"),
+            source.index('src="/static/js/market.js"'),
+        )
+
+    def test_macro_history_selection_stays_locked_until_explicit_unlock(self):
+        module = (
+            ROOT / "web/static/js/macro-history-chart.mjs"
+        ).resolve()
+        script = f"""
+          import {{ createSelectionState }} from {module.as_uri()!r};
+          const selection = createSelectionState([
+            {{ time: "2026-07-01" }},
+            {{ time: "2026-07-02" }},
+          ]);
+          selection.hover("2026-07-01");
+          selection.toggleLock("2026-07-01");
+          selection.hover("2026-07-02");
+          if (selection.selected().time !== "2026-07-01") process.exit(2);
+          if (!selection.selected().locked) process.exit(3);
+          selection.unlock();
+          selection.hover("2026-07-02");
+          if (selection.selected().time !== "2026-07-02") process.exit(4);
+        """
+
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def test_market_js_uses_payload_evidence_without_recomputing_scores(self):
         source = (ROOT / "web/static/js/market.js").read_text()
@@ -83,6 +119,11 @@ class MarketAssetTest(unittest.TestCase):
             "market.group.software",
             "market.sector.technology",
             "market.sector.utilities",
+            "market.macro.history.title",
+            "market.macro.history.locked",
+            "market.macro.history.unlocked",
+            "market.macro.history.series.CPI_YOY",
+            "market.macro.evidence.two_year_yield_high",
         )
         for key in required:
             with self.subTest(key=key):
@@ -121,6 +162,7 @@ class MarketAssetTest(unittest.TestCase):
             ROOT / "web/static/js/api.js",
             ROOT / "web/static/js/i18n.js",
             ROOT / "web/static/js/market.js",
+            ROOT / "web/static/js/macro-history-chart.mjs",
         ):
             subprocess.run(
                 ["node", "--check", str(path)],

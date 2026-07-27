@@ -99,6 +99,58 @@
         </span>
       </div>
       <div id="macro-risk" class="macro-risk-grid"></div>
+      <div class="macro-history">
+        <div class="macro-history-heading">
+          <div>
+            <h3 data-i18n="market.macro.history.title">宏观风险历史</h3>
+            <p data-i18n="market.macro.history.help">
+              点击图表锁定日期，核对当时可见的数据与规则证据。
+            </p>
+          </div>
+          <div class="macro-history-controls">
+            <div role="group" aria-label="宏观历史范围"
+                 data-i18n-aria-label="market.macro.history.rangeAria">
+              <button type="button" data-macro-range="1y"
+                      aria-pressed="false">1Y</button>
+              <button type="button" data-macro-range="3y"
+                      aria-pressed="true">3Y</button>
+              <button type="button" data-macro-range="5y"
+                      aria-pressed="false">5Y</button>
+              <button type="button" data-macro-range="all"
+                      aria-pressed="false"
+                      data-i18n="market.macro.history.all">全部</button>
+            </div>
+            <div role="group" aria-label="对照指数"
+                 data-i18n-aria-label="market.macro.history.benchmarkAria">
+              <button type="button" data-macro-benchmark="SPY"
+                      aria-pressed="true">SPY</button>
+              <button type="button" data-macro-benchmark="QQQ"
+                      aria-pressed="false">QQQ</button>
+            </div>
+            <label>
+              <span data-i18n="market.macro.history.seriesLabel">宏观序列</span>
+              <select id="macro-history-series"></select>
+            </label>
+            <button id="macro-history-unlock" type="button"
+                    data-i18n="market.macro.history.unlock">
+              取消日期锁定
+            </button>
+          </div>
+        </div>
+        <p id="macro-history-status" class="market-status-line"
+           role="status" aria-live="polite"></p>
+        <div class="macro-history-chart-shell">
+          <div id="macro-history-score-chart"
+               class="macro-history-score-chart"
+               aria-label="宏观风险分数历史图"
+               data-i18n-aria-label="market.macro.history.scoreAria"></div>
+          <div id="macro-history-context-chart"
+               class="macro-history-context-chart"
+               aria-label="宏观序列与指数对照图"
+               data-i18n-aria-label="market.macro.history.contextAria"></div>
+        </div>
+        <div id="macro-history-detail" class="macro-history-detail"></div>
+      </div>
     </section>
 
     <div class="market-main-grid">
@@ -162,6 +214,7 @@
     </section>
   </main>
 
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <script type="module" src="/static/js/market.js"></script>
 </body>
 </html>

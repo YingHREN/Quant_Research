@@ -1,4 +1,5 @@
-import { getMarketOverview } from "./api.js";
+import { getMacroHistory, getMarketOverview } from "./api.js";
+import { createMacroHistoryCharts } from "./macro-history-chart.mjs";
 import {
   applyDocumentLocale,
   getLocale,
@@ -14,7 +15,16 @@ const state = {
   payload: null,
   requestId: 0,
   status: { kind: "idle", error: null },
+  macroHistory: {
+    range: "3y",
+    benchmark: "SPY",
+    payload: null,
+    requestId: 0,
+    status: { kind: "idle", error: null },
+  },
 };
+
+let macroHistoryCharts = null;
 
 function text(node, value) {
   node.textContent = value == null ? "—" : String(value);
@@ -370,6 +380,58 @@ function renderStatus() {
   setStatus("");
 }
 
+function renderMacroHistoryStatus() {
+  const target = document.querySelector("#macro-history-status");
+  const status = state.macroHistory.status;
+  if (status.kind === "loading") {
+    text(target, t("market.macro.history.loading"));
+    delete target.dataset.tone;
+    return;
+  }
+  if (status.kind === "error") {
+    text(target, translateError(status.error));
+    target.dataset.tone = "error";
+    return;
+  }
+  const payload = state.macroHistory.payload;
+  if (payload?.unavailable_reason) {
+    text(target, unavailableText(payload.unavailable_reason));
+    target.dataset.tone = "error";
+    return;
+  }
+  text(
+    target,
+    payload
+      ? t("market.macro.history.loaded", {
+        count: payload.rows?.length || 0,
+        asof: payload.asof || "—",
+      })
+      : "",
+  );
+  delete target.dataset.tone;
+}
+
+async function loadMacroHistory() {
+  const requestId = ++state.macroHistory.requestId;
+  state.macroHistory.status = { kind: "loading", error: null };
+  renderMacroHistoryStatus();
+  try {
+    const payload = await getMacroHistory({
+      range: state.macroHistory.range,
+      benchmark: state.macroHistory.benchmark,
+    });
+    if (requestId !== state.macroHistory.requestId) return;
+    state.macroHistory.payload = payload;
+    macroHistoryCharts?.update(payload);
+    state.macroHistory.status = { kind: "idle", error: null };
+    renderMacroHistoryStatus();
+  } catch (error) {
+    if (requestId !== state.macroHistory.requestId) return;
+    state.macroHistory.status = { kind: "error", error };
+    renderMacroHistoryStatus();
+  }
+}
+
 async function load() {
   const requestId = ++state.requestId;
   state.status = { kind: "loading", error: null };
@@ -412,6 +474,36 @@ for (const control of document.querySelectorAll("[data-horizon]")) {
   });
 }
 
+for (const control of document.querySelectorAll("[data-macro-range]")) {
+  control.addEventListener("click", () => {
+    const range = control.dataset.macroRange;
+    if (range === state.macroHistory.range) return;
+    state.macroHistory.range = range;
+    for (const button of document.querySelectorAll("[data-macro-range]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.macroRange === range),
+      );
+    }
+    loadMacroHistory();
+  });
+}
+
+for (const control of document.querySelectorAll("[data-macro-benchmark]")) {
+  control.addEventListener("click", () => {
+    const benchmark = control.dataset.macroBenchmark;
+    if (benchmark === state.macroHistory.benchmark) return;
+    state.macroHistory.benchmark = benchmark;
+    for (const button of document.querySelectorAll("[data-macro-benchmark]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.macroBenchmark === benchmark),
+      );
+    }
+    loadMacroHistory();
+  });
+}
+
 for (const control of document.querySelectorAll("[data-locale]")) {
   control.addEventListener("click", () => setLocale(control.dataset.locale));
 }
@@ -421,8 +513,25 @@ subscribeLocale((locale) => {
   if (state.payload) {
     render(state.payload);
   }
+  macroHistoryCharts?.setLocale(locale);
   renderStatus();
+  renderMacroHistoryStatus();
 });
 
 applyDocumentLocale(document, getLocale());
+try {
+  macroHistoryCharts = createMacroHistoryCharts({
+    scoreElement: document.querySelector("#macro-history-score-chart"),
+    contextElement: document.querySelector("#macro-history-context-chart"),
+    detailElement: document.querySelector("#macro-history-detail"),
+    seriesSelect: document.querySelector("#macro-history-series"),
+    unlockButton: document.querySelector("#macro-history-unlock"),
+    translate: t,
+    locale: getLocale(),
+  });
+} catch (error) {
+  state.macroHistory.status = { kind: "error", error };
+  renderMacroHistoryStatus();
+}
 load();
+loadMacroHistory();
