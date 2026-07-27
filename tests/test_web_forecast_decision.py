@@ -211,6 +211,10 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "persistent_risk_age_sessions",
                 "persistent_risk_sources",
                 "individual_risk_score",
+                "sector_group_key",
+                "sector_risk_score",
+                "theme_group_key",
+                "theme_risk_score",
                 "group_risk_score",
                 "slow_decline_risk_score",
                 "high_level_distribution_score",
@@ -333,6 +337,94 @@ class ForecastRiskContextTest(unittest.TestCase):
         self.assertEqual(
             tuple(group.key for group in groups),
             ("semiconductor", "software"),
+        )
+
+    def test_assignment_driven_context_keeps_sector_and_theme_evidence(self):
+        assignments = {
+            "SNDK": {
+                "state": "assigned",
+                "ticker": "SNDK",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "AMD": {
+                "state": "assigned",
+                "ticker": "AMD",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "NVDA": {
+                "state": "assigned",
+                "ticker": "NVDA",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "SNDK": rising(slope=0.4),
+            "AMD": rising(slope=0.35),
+            "NVDA": rising(slope=0.45),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertFalse(sndk.empty)
+        self.assertTrue(sndk["high_level_distribution_state"].notna().all())
+        self.assertEqual(set(sndk["sector_group_key"]), {"technology"})
+        self.assertEqual(set(sndk["theme_group_key"]), {"semiconductor"})
+        self.assertTrue(sndk["sector_risk_score"].notna().any())
+        self.assertTrue(sndk["theme_risk_score"].notna().any())
+
+    def test_related_membership_does_not_duplicate_dynamic_context_rows(self):
+        assignments = {
+            "NBIS": {
+                "state": "assigned",
+                "ticker": "NBIS",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "NBIS": rising(slope=0.4),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+
+        self.assertFalse(context.index.has_duplicates)
+        self.assertEqual(
+            set(context.index.get_level_values("ticker")),
+            {"NBIS"},
+        )
+        self.assertEqual(
+            set(context.xs("NBIS", level="ticker")["sector_group_key"]),
+            {"technology"},
         )
 
 

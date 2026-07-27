@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Mapping
 import math
 from numbers import Integral, Real
@@ -18,7 +18,11 @@ from research.high_level_distribution import (
 from research.slow_decline import build_slow_decline_state
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
-from web.market_groups import modeled_market_groups
+from web.market_groups import (
+    SECTOR_ETFS,
+    modeled_market_groups,
+    resolved_market_groups,
+)
 
 
 DECISION_RISK_STATES = frozenset(
@@ -37,6 +41,10 @@ RISK_CONTEXT_COLUMNS = (
     "persistent_risk_age_sessions",
     "persistent_risk_sources",
     "individual_risk_score",
+    "sector_group_key",
+    "sector_risk_score",
+    "theme_group_key",
+    "theme_risk_score",
     "group_risk_score",
     "slow_decline_risk_score",
     "high_level_distribution_score",
@@ -673,16 +681,41 @@ class ForecastDecisionPolicy:
 
 def build_forecast_risk_context(
     histories: Mapping[str, pd.DataFrame],
+    assignments=None,
 ) -> pd.DataFrame:
     """Return causal remembered-risk rows for explicitly modeled tickers."""
     if not isinstance(histories, Mapping):
         raise TypeError("histories must be a mapping")
+    dynamic_membership = assignments is not None
+    groups = (
+        resolved_market_groups(assignments, histories)
+        if dynamic_membership
+        else modeled_market_groups()
+    )
+    assignment_by_ticker = (
+        _normalized_assignments(assignments) if dynamic_membership else {}
+    )
+    groups_by_key = {group.key: group for group in groups}
+    if dynamic_membership:
+        groups_by_key = _evidence_groups(
+            groups_by_key,
+            assignment_by_ticker,
+            histories,
+        )
+    group_states = {}
     frames = []
     seen_tickers = set()
-    for group in modeled_market_groups():
+    for group in groups:
         mapped = tuple(
             dict.fromkeys(
-                (*group.constituent_tickers, *group.related_tickers)
+                (
+                    group.constituent_tickers
+                    if dynamic_membership
+                    else (
+                        *group.constituent_tickers,
+                        *group.related_tickers,
+                    )
+                )
             )
         )
         duplicates = seen_tickers.intersection(mapped)
@@ -716,6 +749,10 @@ def build_forecast_risk_context(
             selected,
             histories,
             group,
+            groups_by_key,
+            group_states,
+            assignment_by_ticker,
+            dynamic_membership=dynamic_membership,
         )
         if not selected.empty:
             frames.append(selected)
@@ -731,23 +768,124 @@ def build_forecast_risk_context(
     return result.loc[:, RISK_CONTEXT_COLUMNS]
 
 
-def _attach_additional_risk_sources(selected, histories, group):
-    group_state = build_group_regime_state(histories, group)
+def _normalized_assignments(assignments):
+    normalized = {}
+    for raw_ticker, assignment in assignments.items():
+        ticker = str(raw_ticker).strip().upper()
+        if (
+            not ticker
+            or ticker in normalized
+            or not isinstance(assignment, Mapping)
+            or assignment.get("state", "assigned") != "assigned"
+        ):
+            continue
+        normalized[ticker] = assignment
+    return normalized
+
+
+def _evidence_groups(groups_by_key, assignment_by_ticker, histories):
+    available = {
+        str(ticker).strip().upper()
+        for ticker in histories
+        if str(ticker).strip()
+    }
+    sector_members = {key: set() for key in SECTOR_ETFS}
+    for ticker, assignment in assignment_by_ticker.items():
+        sector_key, _ = _assignment_group_keys(assignment)
+        if sector_key is not None and ticker in available:
+            sector_members[sector_key].add(ticker)
+    return {
+        key: (
+            replace(
+                group,
+                constituent_tickers=tuple(sorted(sector_members[key])),
+            )
+            if key in sector_members
+            else group
+        )
+        for key, group in groups_by_key.items()
+    }
+
+
+def _attach_additional_risk_sources(
+    selected,
+    histories,
+    group,
+    groups_by_key,
+    group_states,
+    assignment_by_ticker,
+    *,
+    dynamic_membership,
+):
+    group_state = _cached_group_state(
+        histories,
+        group.key,
+        groups_by_key,
+        group_states,
+    )
     slow_state = build_slow_decline_state(histories, group)
     top_state = _build_high_level_states(histories, group, group_state)
-    dates = selected.index.get_level_values("observation_date")
-    selected["group_risk_raw_score"] = group_state["raw_score"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_score"] = group_state["state_score"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_state"] = group_state["state"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_age"] = group_state[
-        "memory_age_sessions"
-    ].reindex(dates).to_numpy()
+    ticker_keys = selected.index.get_level_values("ticker")
+    if dynamic_membership:
+        sector_keys = tuple(
+            _assignment_group_keys(assignment_by_ticker.get(ticker))[0]
+            for ticker in ticker_keys
+        )
+        theme_keys = tuple(
+            _assignment_group_keys(assignment_by_ticker.get(ticker))[1]
+            for ticker in ticker_keys
+        )
+    else:
+        sector_key = group.key if group.key in SECTOR_ETFS else None
+        theme_key = None if sector_key is not None else group.key
+        sector_keys = (sector_key,) * len(selected)
+        theme_keys = (theme_key,) * len(selected)
+    selected["sector_group_key"] = sector_keys
+    selected["theme_group_key"] = theme_keys
+    for prefix, keys in (("sector", sector_keys), ("theme", theme_keys)):
+        selected[f"{prefix}_risk_raw_score"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "raw_score",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+        selected[f"{prefix}_risk_score"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "state_score",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+        selected[f"{prefix}_risk_state"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "state",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=False,
+        )
+        selected[f"{prefix}_risk_age"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "memory_age_sessions",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+    selected["group_risk_raw_score"] = selected[
+        ["sector_risk_raw_score", "theme_risk_raw_score"]
+    ].max(axis=1, skipna=True)
+    combined_group = selected.apply(_combined_group_state, axis=1)
+    selected["group_risk_score"] = combined_group.map(lambda value: value[0])
+    selected["group_risk_state"] = combined_group.map(lambda value: value[1])
+    selected["group_risk_age"] = combined_group.map(lambda value: value[2])
     aligned_slow = slow_state.reindex(selected.index)
     selected["slow_decline_risk_raw_score"] = aligned_slow["raw_score"]
     selected["slow_decline_risk_score"] = aligned_slow["state_score"]
@@ -854,6 +992,96 @@ def _attach_additional_risk_sources(selected, histories, group):
         for source, (_, row) in zip(source_name, selected.iterrows())
     ]
     return selected
+
+
+def _assignment_group_keys(assignment):
+    if not isinstance(assignment, Mapping):
+        return None, None
+    sector_key = str(assignment.get("sector_key") or "").strip()
+    if sector_key not in SECTOR_ETFS:
+        sector_key = None
+    primary_key = str(assignment.get("primary_model_group") or "").strip()
+    theme_keys = tuple(
+        str(value).strip()
+        for value in (assignment.get("theme_keys") or ())
+        if str(value).strip()
+    )
+    theme_key = (
+        primary_key
+        if primary_key in theme_keys and primary_key not in SECTOR_ETFS
+        else None
+    )
+    return sector_key, theme_key
+
+
+def _cached_group_state(histories, key, groups_by_key, group_states):
+    if key not in groups_by_key:
+        return None
+    if key not in group_states:
+        group_states[key] = build_group_regime_state(
+            histories,
+            groups_by_key[key],
+        )
+    return group_states[key]
+
+
+def _aligned_group_state(
+    index,
+    keys,
+    field,
+    histories,
+    groups_by_key,
+    group_states,
+    *,
+    numeric,
+):
+    result = pd.Series(
+        np.nan if numeric else None,
+        index=index,
+        dtype=float if numeric else object,
+    )
+    dates = index.get_level_values("observation_date")
+    for key in dict.fromkeys(keys):
+        if key is None:
+            continue
+        state = _cached_group_state(
+            histories,
+            key,
+            groups_by_key,
+            group_states,
+        )
+        if state is None or field not in state:
+            continue
+        positions = np.flatnonzero(
+            np.fromiter((candidate == key for candidate in keys), dtype=bool)
+        )
+        if not len(positions):
+            continue
+        aligned = state[field].reindex(dates.take(positions))
+        values = (
+            pd.to_numeric(aligned, errors="coerce").to_numpy(dtype=float)
+            if numeric
+            else aligned.astype(object).to_numpy()
+        )
+        result.iloc[positions] = values
+    return result
+
+
+def _combined_group_state(row):
+    available = []
+    for prefix in ("theme", "sector"):
+        score = row[f"{prefix}_risk_score"]
+        if pd.notna(score):
+            available.append(
+                (
+                    float(score),
+                    row[f"{prefix}_risk_state"],
+                    row[f"{prefix}_risk_age"],
+                )
+            )
+    if not available:
+        return np.nan, "unavailable", np.nan
+    return max(available, key=lambda value: value[0])
 
 
 def _build_high_level_states(histories, group, group_state):
