@@ -105,6 +105,58 @@ function unavailableText(reason) {
     : t("market.available");
 }
 
+const REFERENCE_FACTOR_KEYS = Object.freeze([
+  "qqq_above_ema20",
+  "qqq_above_sma50",
+  "breadth_above_ema20",
+  "breadth_above_sma50",
+  "distribution_count_20_safe",
+  "atr20_ratio_safe",
+]);
+
+function renderReferenceFactors(evidence = []) {
+  const root = document.querySelector("#market-reference-factors");
+  if (!root) return;
+  const byKey = new Map(evidence.map((row) => [row.key, row]));
+  const cards = [];
+  for (const key of REFERENCE_FACTOR_KEYS) {
+    const row = byKey.get(key);
+    if (!row) continue;
+    const card = element("article", "market-reference-factor");
+    card.dataset.state = row.state || "unavailable";
+    const heading = element("div", "market-reference-factor-heading");
+    heading.append(
+      text(element("strong"), localized(`market.evidence.${key}`, key)),
+      text(
+        element("span", "market-reference-factor-state"),
+        localized(`market.state.${row.state}`, row.state),
+      ),
+      helpMarker(key),
+    );
+    const values = element("p", "market-reference-factor-values");
+    text(
+      values,
+      `${t("market.value")} ${row.value ?? "—"} · `
+      + `${t("market.threshold")} ${row.threshold ?? "—"} · `
+      + `${row.window || "—"}`,
+    );
+    const missing = element("small", "market-unavailable-reason");
+    text(
+      missing,
+      row.unavailable_reason ? unavailableText(row.unavailable_reason) : "",
+    );
+    card.append(heading, values, missing);
+    cards.push(card);
+  }
+  if (!cards.length) {
+    root.replaceChildren(
+      text(element("p", "market-empty"), t("market.evidence.empty")),
+    );
+    return;
+  }
+  root.replaceChildren(...cards);
+}
+
 function renderPosture(posture = {}, gate = {}) {
   const root = document.querySelector("#market-posture");
   const coverage = Number(posture.coverage || 0);
@@ -363,6 +415,7 @@ function renderEvents(events = []) {
 function render(payload) {
   state.payload = payload;
   renderPosture(payload.market_posture, payload.market_gate);
+  renderReferenceFactors(payload.market_posture?.evidence || []);
   renderMacroRisk(payload.macro_risk);
   renderSectorHeatmap(
     payload.sectors || [],

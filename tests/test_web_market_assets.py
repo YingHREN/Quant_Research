@@ -131,6 +131,26 @@ class MarketAssetTest(unittest.TestCase):
         self.assertNotIn("const semiconductor = {", source)
         self.assertNotIn("const software = {", source)
 
+    def test_market_posture_exposes_compact_reference_factors(self):
+        template = (ROOT / "web/templates/market.html").read_text()
+        source = (ROOT / "web/static/js/market.js").read_text()
+        styles = (ROOT / "web/static/css/market.css").read_text()
+
+        self.assertIn('id="market-reference-factors"', template)
+        self.assertIn("function renderReferenceFactors(", source)
+        for key in (
+            "qqq_above_ema20",
+            "qqq_above_sma50",
+            "breadth_above_ema20",
+            "breadth_above_sma50",
+            "distribution_count_20_safe",
+            "atr20_ratio_safe",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(f'"{key}"', source)
+        self.assertIn(".market-reference-factors", styles)
+        self.assertIn(".market-reference-factor", styles)
+
     def test_locale_change_renders_current_request_status(self):
         source = (ROOT / "web/static/js/market.js").read_text()
 
