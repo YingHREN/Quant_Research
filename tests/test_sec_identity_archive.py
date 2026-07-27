@@ -150,6 +150,44 @@ class SecIdentityArchiveTests(unittest.TestCase):
         ):
             build_identity_index([record, dict(record)])
 
+    def test_normalizes_recent_filing_columns_for_header_sampling(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "submissions.zip"
+            payload = {
+                "cik": "123",
+                "name": "Example",
+                "filings": {
+                    "recent": {
+                        "accessionNumber": ["0000000123-20-000001"],
+                        "filingDate": ["2020-03-01"],
+                        "acceptanceDateTime": ["20200301210000"],
+                        "form": ["10-K"],
+                        "primaryDocument": ["example.htm"],
+                    },
+                    "files": [],
+                },
+            }
+            with ZipFile(path, "w") as archive:
+                archive.writestr(
+                    "CIK0000000123.json",
+                    json.dumps(payload),
+                )
+
+            record = tuple(iter_submission_records(path))[0]
+
+        self.assertEqual(
+            record["recent_filings"],
+            (
+                {
+                    "accession_number": "0000000123-20-000001",
+                    "filing_date": "2020-03-01",
+                    "acceptance_datetime": "20200301210000",
+                    "form": "10-K",
+                    "primary_document": "example.htm",
+                },
+            ),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

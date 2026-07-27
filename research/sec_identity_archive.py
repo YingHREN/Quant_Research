@@ -77,6 +77,9 @@ def iter_submission_records(path):
                     payload.get("sicDescription") or ""
                 ).strip(),
                 "former_names": tuple(former_names),
+                "recent_filings": _recent_filings(
+                    filings.get("recent") or {}
+                ),
                 "filing_files": tuple(filings.get("files") or ()),
             }
 
@@ -154,3 +157,25 @@ def find_sec_candidates(sample_row, index):
 
 def _iso_date(value):
     return date.fromisoformat(str(value or "")).isoformat()
+
+
+def _recent_filings(recent):
+    accessions = recent.get("accessionNumber") or ()
+    rows = []
+    fields = (
+        ("filing_date", "filingDate"),
+        ("acceptance_datetime", "acceptanceDateTime"),
+        ("form", "form"),
+        ("primary_document", "primaryDocument"),
+    )
+    for index, accession in enumerate(accessions):
+        row = {"accession_number": str(accession)}
+        for output, source in fields:
+            values = recent.get(source) or ()
+            row[output] = (
+                str(values[index])
+                if index < len(values) and values[index] is not None
+                else None
+            )
+        rows.append(row)
+    return tuple(rows)
