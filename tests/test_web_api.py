@@ -456,6 +456,38 @@ class FakeForecastFactory:
         return provider
 
 
+class AlwaysAvailableForecastProvider(FakeForecastProvider):
+    def forecast_series(self, ticker, dates, horizons):
+        dates = tuple(pd.Timestamp(value).normalize() for value in dates)
+        horizons = tuple(horizons)
+        self.calls.append((ticker, dates, horizons))
+        return [
+            ForecastResult(
+                ticker=ticker,
+                asof_date=asof,
+                horizon_sessions=horizon,
+                direction="up",
+                predicted_return=horizon / 1000,
+                up_probability=None,
+                confidence_status="uncalibrated",
+                confidence_reason="insufficient_calibration_samples",
+                training_sample_count=40,
+                training_cutoff=asof - pd.offsets.BDay(1),
+                model_key=self.model_key,
+                model_version=self.model_version,
+            )
+            for asof in dates
+            for horizon in horizons
+        ]
+
+
+class AlwaysAvailableForecastFactory(FakeForecastFactory):
+    def __call__(self, _frame):
+        provider = AlwaysAvailableForecastProvider()
+        self.providers.append(provider)
+        return provider
+
+
 class FalseyForecastFactory(FakeForecastFactory):
     def __bool__(self):
         return False
@@ -2438,7 +2470,7 @@ class WebApiTest(unittest.TestCase):
         research_repository = ResearchRepository()
         assignments = SndkGroupAssignmentRepository()
         forecast_service = ForecastService(
-            provider_factory=FakeForecastFactory(),
+            provider_factory=AlwaysAvailableForecastFactory(),
             evaluator=fake_forecast_evaluation,
             max_forecast_dates=1,
         )
@@ -2457,16 +2489,26 @@ class WebApiTest(unittest.TestCase):
         historical = client.get(
             "/api/stocks/SNDK/forecasts/2026-06-26"
         )
+        fading = {
+            raw_date: client.get(
+                f"/api/stocks/SNDK/forecasts/{raw_date}"
+            )
+            for raw_date in ("2026-06-29", "2026-06-30", "2026-07-01")
+        }
 
         self.assertEqual(latest.status_code, 200)
         self.assertEqual(latest.json["top_risk"]["status"], "available")
         events = latest.json["top_risk"]["events"]
-        self.assertIn(
-            ("2026-06-26", "top_risk_watch", "watch"),
+        event_states = {
+            (event["time"], event["type"], event["state"])
+            for event in events
+        }
+        self.assertTrue(
             {
-                (event["time"], event["type"], event["state"])
-                for event in events
-            },
+                ("2026-06-16", "top_risk_watch", "watch"),
+                ("2026-06-26", "top_risk_watch", "watch"),
+                ("2026-07-02", "top_risk_confirmed", "confirmed"),
+            }.issubset(event_states)
         )
         june_26 = next(
             row
@@ -2484,6 +2526,19 @@ class WebApiTest(unittest.TestCase):
             ],
             "up",
         )
+        for raw_date, response in fading.items():
+            self.assertEqual(response.status_code, 200)
+            decision = response.json["forecasts"]["by_date"][raw_date]["20"][
+                "decision"
+            ]
+            self.assertEqual(
+                decision["high_level_distribution_state"],
+                "fading",
+            )
+            self.assertGreater(
+                decision["high_level_distribution_score"],
+                0.0,
+            )
         self.assertIn(
             (
                 tuple(sorted(sndk_top_risk_histories())),
