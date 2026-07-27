@@ -1,0 +1,45 @@
+{
+  "schema_version": "point_in_time_universe_access_audit_v1",
+  "observation_date": "2026-07-27",
+  "status": "pipeline_ready_source_partially_blocked",
+  "historical_components": {
+    "endpoint": "https://eodhd.com/api/fundamentals/GSPC.INDX?filter=HistoricalTickerComponents",
+    "http_status": 403,
+    "available": false,
+    "reason": "current_subscription_does_not_include_historical_index_components"
+  },
+  "symbol_change_history": {
+    "endpoint": "https://eodhd.com/api/symbol-change-history",
+    "http_status": 403,
+    "available": false,
+    "reason": "current_subscription_does_not_include_symbol_change_history"
+  },
+  "delisted_common_stock_catalog": {
+    "endpoint": "https://eodhd.com/api/exchange-symbol-list/US?delisted=1&type=common_stock",
+    "http_status": 200,
+    "available": true,
+    "raw_bytes": 4428804,
+    "rows": 32371,
+    "unique_codes": 32371,
+    "existing_research_database_overlap": 0,
+    "exchange_counts": {
+      "NASDAQ": 10525,
+      "PINK": 9227,
+      "NYSE": 5363,
+      "OTCGREY": 2637,
+      "OTCQB": 1052,
+      "OTCMKTS": 921,
+      "OTCBB": 768,
+      "OTCCE": 658,
+      "NYSE MKT": 481,
+      "OTCQX": 449,
+      "US": 180,
+      "AMEX": 38,
+      "NYSE ARCA": 27,
+      "BATS": 26,
+      "NMFQS": 19
+    },
+    "limitation": "catalog_has_no_listing_or_delisting_effective_dates_and_cannot_be_used_as_membership_intervals"
+  },
+  "production_effect": "none"
+}
