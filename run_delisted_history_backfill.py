@@ -430,6 +430,7 @@ def _write_reports(result, csv_path, json_path, markdown_path):
             handle,
             fieldnames=fieldnames,
             extrasaction="ignore",
+            lineterminator="\n",
         )
         writer.writeheader()
         writer.writerows(audits)

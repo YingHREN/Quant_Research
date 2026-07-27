@@ -157,6 +157,7 @@ class DelistedHistoryBackfillRunnerTest(unittest.TestCase):
         with self.csv_path.open(encoding="utf-8") as handle:
             csv_rows = list(csv.DictReader(handle))
         self.assertEqual(len(csv_rows), 4)
+        self.assertNotIn(b"\r\n", self.csv_path.read_bytes())
         self.assertEqual(
             {row["ticker"] for row in csv_rows},
             {"AAA", "BBB", "CCC", "DDD"},
