@@ -584,6 +584,7 @@ export function createLinkedCharts(priceEl, volumeEl, detailEl, options = {}) {
       const canRequestForecast = (
         date !== null
         && (!forecast || typeof forecast.target_date !== "string")
+        && selectedForecastIndex.model?.status !== "unavailable"
         && typeof options.onForecastDate === "function"
       );
       if (

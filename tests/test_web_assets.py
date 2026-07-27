@@ -2259,6 +2259,48 @@ class WebAssetTest(unittest.TestCase):
             assert.match(textTree(detail), /Forecast calculation failed for 2026-07-16/);
             assert.equal(requestCount, 1);
             controller.destroy();
+
+            let researchRequestCount = 0;
+            const researchDetail = node();
+            const researchController = createLinkedCharts(
+              {{clientWidth: 800, clientHeight: 400}},
+              {{clientWidth: 800, clientHeight: 180}},
+              researchDetail,
+              {{locale: 'en', forecastRequestDelayMs: 0, onForecastDate: async () => {{
+                researchRequestCount += 1;
+                throw new Error('research forecasts must not be requested');
+              }}}},
+            );
+            researchController.setChartData({{
+              analysis_scope: 'research_diagnostic',
+              pool_membership: {{active: false, research: true}},
+              chart: [{{
+                time: '2026-07-24', open: 1551.17, high: 1573.09, low: 1411.5,
+                close: 1436.56, volume: 14081144, daily_return: -0.1079,
+              }}],
+              forecasts: {{
+                model: {{
+                  key: 'ridge_direction_v1',
+                  version: 'v3',
+                  status: 'unavailable',
+                  unavailable_reason: 'research_pool_diagnostic_only',
+                }},
+                by_date: {{}},
+                date_coverage: {{
+                  computed_dates: [],
+                  policy: 'unavailable',
+                  omitted_reason: 'research_pool_diagnostic_only',
+                }},
+              }},
+            }});
+            await new Promise(resolve => setTimeout(resolve, 0));
+            assert.equal(researchRequestCount, 0);
+            assert.match(
+              textTree(researchDetail),
+              /Research-pool diagnostics do not provide Ridge historical forecasts/,
+            );
+            assert.doesNotMatch(textTree(researchDetail), /calculation failed/i);
+            researchController.destroy();
         """
         result = subprocess.run(
             ["node", "--input-type=module", "-e", script],
