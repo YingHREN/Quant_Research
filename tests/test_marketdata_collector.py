@@ -23,9 +23,17 @@ class FakeStore:
         self.sessions = []
         self.reconciliations = []
         self.active_symbols = ()
+        self.subscription_request = {
+            "revision": 0,
+            "user_symbols": [],
+            "updated_at": None,
+        }
 
     def initialize(self):
         pass
+
+    def read_subscription_request(self):
+        return dict(self.subscription_request)
 
     def record_capabilities(self, capability, at):
         self.capabilities.append((capability, at))
@@ -590,6 +598,37 @@ class PartialAckThenFailUpdateProvider(FakeProvider):
 
 
 class IntradayCollectorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_persisted_revision_hot_updates_running_subscription(self):
+        provider = FakeProvider()
+        store = FakeStore()
+        collector = IntradayCollector(
+            provider,
+            store,
+            retry_delays=(60,),
+            subscription_poll_interval=0.01,
+        )
+        run_task = asyncio.create_task(collector.run())
+        try:
+            await eventually(lambda: collector.snapshot()["state"] == "running")
+            store.subscription_request = {
+                "revision": 1,
+                "user_symbols": ["NVDA", "AMD"],
+                "updated_at": "2026-07-27T12:00:00+00:00",
+            }
+            await eventually(lambda: len(provider.updated) == 1)
+
+            self.assertEqual(
+                provider.updated[0],
+                ("SPY", "QQQ", "SOXX", "NVDA", "AMD"),
+            )
+            await asyncio.sleep(0.03)
+            self.assertEqual(len(provider.updated), 1)
+        finally:
+            await collector.stop()
+            run_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run_task
+
     async def test_fenced_event_batch_is_dropped_and_counted(self):
         provider = BurstProvider((market_event(1),))
         store = FencedBatchStore()
