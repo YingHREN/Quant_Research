@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from research.expanded_market_data import ExpandedMarketDataUnavailable
 from web.services.macro_history import MacroHistoryService
 
 
@@ -76,7 +77,119 @@ class FakeMacroRiskService:
         return ("macro", 1)
 
 
+class FakeResearchRepository:
+    def __init__(self, histories=None, error=None, token=("research", 1)):
+        self.histories = histories or {}
+        self.error = error
+        self.token = token
+        self.calls = []
+
+    def load_universe_histories(self, *, asof=None, tickers=None):
+        self.calls.append((asof, tuple(tickers or ())))
+        if self.error is not None:
+            raise self.error
+        cutoff = pd.Timestamp(asof or "2262-04-11")
+        return {
+            ticker: self.histories[ticker].loc[
+                self.histories[ticker].index <= cutoff
+            ].copy()
+            for ticker in tickers or ()
+            if ticker in self.histories
+        }
+
+    def cache_token(self):
+        return self.token
+
+
 class MacroHistoryServiceTest(unittest.TestCase):
+    def test_all_range_prefers_long_research_benchmark_history(self):
+        market = FakeRepository({"SPY": benchmark_history(periods=520)})
+        research_history = benchmark_history(periods=2513)
+        research = FakeResearchRepository({"SPY": research_history})
+        service = MacroHistoryService(
+            market,
+            FakeMacroRiskService(),
+            benchmark_repository=research,
+        )
+
+        payload = service.build(
+            asof="2026-07-23",
+            range_key="all",
+            benchmark="SPY",
+        )
+
+        self.assertEqual(len(payload["rows"]), 2513)
+        self.assertEqual(
+            payload["rows"][0]["time"],
+            research_history.index[0].date().isoformat(),
+        )
+        self.assertLess(
+            payload["rows"][0]["time"],
+            market.histories["SPY"].index[0].date().isoformat(),
+        )
+        self.assertEqual(research.calls, [("2026-07-23", ("SPY",))])
+
+    def test_research_benchmark_respects_asof(self):
+        research = FakeResearchRepository(
+            {"SPY": benchmark_history(periods=2513)}
+        )
+        service = MacroHistoryService(
+            FakeRepository({"SPY": benchmark_history(periods=520)}),
+            FakeMacroRiskService(),
+            benchmark_repository=research,
+        )
+
+        payload = service.build(
+            asof="2025-12-31",
+            range_key="all",
+            benchmark="SPY",
+        )
+
+        self.assertLessEqual(payload["rows"][-1]["time"], "2025-12-31")
+
+    def test_missing_research_benchmark_falls_back_to_market_history(self):
+        service = MacroHistoryService(
+            FakeRepository({"SPY": benchmark_history(periods=520)}),
+            FakeMacroRiskService(),
+            benchmark_repository=FakeResearchRepository({}),
+        )
+
+        payload = service.build(range_key="all", benchmark="SPY")
+
+        self.assertEqual(len(payload["rows"]), 520)
+
+    def test_research_unavailability_falls_back_to_market_history(self):
+        research = FakeResearchRepository(
+            error=ExpandedMarketDataUnavailable("unavailable")
+        )
+        service = MacroHistoryService(
+            FakeRepository({"SPY": benchmark_history(periods=520)}),
+            FakeMacroRiskService(),
+            benchmark_repository=research,
+        )
+
+        payload = service.build(range_key="all", benchmark="SPY")
+
+        self.assertEqual(len(payload["rows"]), 520)
+
+    def test_research_revision_invalidates_cached_history(self):
+        macro = FakeMacroRiskService()
+        research = FakeResearchRepository(
+            {"SPY": benchmark_history(periods=2513)},
+            token=("research", 1),
+        )
+        service = MacroHistoryService(
+            FakeRepository({"SPY": benchmark_history(periods=520)}),
+            macro,
+            benchmark_repository=research,
+        )
+        service.build(range_key="all", benchmark="SPY")
+        research.token = ("research", 2)
+
+        service.build(range_key="all", benchmark="SPY")
+
+        self.assertEqual(len(macro.calls), 2)
+
     def test_builds_range_filtered_rows_with_normalized_benchmark(self):
         macro = FakeMacroRiskService()
         service = MacroHistoryService(

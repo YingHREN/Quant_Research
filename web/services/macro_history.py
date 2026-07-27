@@ -7,6 +7,8 @@ from threading import RLock
 
 import pandas as pd
 
+from research.expanded_market_data import ExpandedMarketDataUnavailable
+
 
 VALID_RANGES = ("1y", "3y", "5y", "all")
 VALID_BENCHMARKS = ("SPY", "QQQ")
@@ -31,11 +33,13 @@ class MacroHistoryService:
         macro_risk_service,
         revision_getter=lambda: 0,
         max_cache_size=8,
+        benchmark_repository=None,
     ):
         self._repository = repository
         self._macro_risk_service = macro_risk_service
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
+        self._benchmark_repository = benchmark_repository
         self._cache = {}
         self._lock = RLock()
 
@@ -50,23 +54,23 @@ class MacroHistoryService:
             benchmark,
             self._revision_getter(),
             self._macro_risk_service.cache_token(),
+            self._benchmark_cache_token(),
         )
         with self._lock:
             cached = self._cache.get(key)
             if cached is not None:
                 return deepcopy(cached)
 
-        snapshot = self._repository.load_market_overview_snapshot(asof)
-        history = snapshot.histories.get(benchmark)
+        history, observation_date = self._benchmark_history(asof, benchmark)
         if history is None or history.empty or "Close" not in history:
             payload = self._unavailable_payload(
-                snapshot.observation_date,
+                observation_date,
                 range_key,
                 benchmark,
             )
         else:
             payload = self._build_payload(
-                snapshot.observation_date,
+                observation_date,
                 history,
                 range_key,
                 benchmark,
@@ -76,6 +80,31 @@ class MacroHistoryService:
             while len(self._cache) > self._max_cache_size:
                 self._cache.pop(next(iter(self._cache)))
         return deepcopy(payload)
+
+    def _benchmark_history(self, asof, benchmark):
+        if self._benchmark_repository is not None:
+            try:
+                histories = self._benchmark_repository.load_universe_histories(
+                    asof=asof,
+                    tickers=(benchmark,),
+                )
+            except ExpandedMarketDataUnavailable:
+                histories = {}
+            history = histories.get(benchmark)
+            if (
+                history is not None
+                and not history.empty
+                and "Close" in history
+            ):
+                observation_date = history.index[-1].date().isoformat()
+                return history, observation_date
+        snapshot = self._repository.load_market_overview_snapshot(asof)
+        return snapshot.histories.get(benchmark), snapshot.observation_date
+
+    def _benchmark_cache_token(self):
+        if self._benchmark_repository is None:
+            return ("research_prices", "not_configured")
+        return self._benchmark_repository.cache_token()
 
     def _build_payload(self, asof, history, range_key, benchmark):
         close = pd.to_numeric(history["Close"], errors="coerce").dropna()
