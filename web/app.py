@@ -36,6 +36,7 @@ from web.forecasts.model_outputs import (
 from research.canslim_technical import evaluate_technical_gate
 from research.expanded_market_data import ExpandedMarketDataRepository
 from research.market_context import build_group_score_frame
+from research.market_gate import build_market_gate_frame, latest_market_gate
 from research.risk_memory import (
     RISK_MEMORY_HALF_LIFE_SESSIONS,
     RISK_MEMORY_WINDOW_SESSIONS,
@@ -476,6 +477,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             ),
         )
         chart[-1]["canslim_technical_gate"] = technical_gate
+        market_gate = _attach_market_gate_rows(chart, peer_histories)
 
         try:
             forecast_arguments = (
@@ -556,6 +558,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             ),
             "top_risk": top_risk,
             "technical_gate": technical_gate,
+            "market_gate": market_gate,
         }
         return _json_response(payload)
 
@@ -640,6 +643,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             history,
             _forecast_observation_dates(payload),
         )
+        _attach_market_gate_rows(chart, snapshot.histories)
         _attach_model_outputs(payload, chart)
         return _json_response(payload)
 
@@ -790,6 +794,38 @@ def _attach_technical_gate_rows(
             raw_date,
             stale=bool(stale_latest and raw_date == latest_date),
         )
+
+
+def _attach_market_gate_rows(chart, histories):
+    """Attach the same-date broad-market gate without altering forecasts."""
+    frame = build_market_gate_frame(histories)
+    rows = {
+        row.get("time"): row
+        for row in chart
+        if isinstance(row, dict) and isinstance(row.get("time"), str)
+    }
+    for timestamp, gate_row in frame.iterrows():
+        raw_date = timestamp.date().isoformat()
+        row = rows.get(raw_date)
+        if row is None:
+            continue
+        row["market_regime_gate"] = {
+            "state": gate_row["gate_state"],
+            "market_state": gate_row["market_state"],
+            "state_start": gate_row["market_state_start"],
+            "follow_through_date": gate_row["follow_through_date"],
+            "rally_day_count": int(gate_row["rally_day_count"]),
+            "distribution_days": int(gate_row["distribution_days"]),
+            "breadth_above_ema20": _optional_number(
+                gate_row["breadth_above_ema20"]
+            ),
+            "breadth_above_sma50": _optional_number(
+                gate_row["breadth_above_sma50"]
+            ),
+            "reason_codes": list(gate_row["reason_codes"]),
+            "version": gate_row["gate_version"],
+        }
+    return latest_market_gate(histories)
 
 
 def _attach_model_outputs(payload, chart, structures=None):

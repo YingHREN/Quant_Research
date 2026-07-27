@@ -521,6 +521,33 @@ function renderStockHeader(payload) {
     "title",
     t("universe.gate.explanation", {}, locale),
   );
+  const marketGate = payload.market_gate || {};
+  const marketGateState = ["pass", "fail", "missing"].includes(marketGate.state)
+    ? marketGate.state
+    : "missing";
+  const regimeKey = `market.gate.regime.${marketGate.market_state || "unavailable"}`;
+  const regimeLabel = t(regimeKey, {}, locale);
+  if (elements.marketRegimeGateState) {
+    setText(
+      elements.marketRegimeGateState,
+      t(
+        `market.gate.${marketGateState}`,
+        {
+          regime: regimeLabel === regimeKey
+            ? marketGate.market_state || "—"
+            : regimeLabel,
+        },
+        locale,
+      ),
+    );
+    elements.marketRegimeGateState.dataset.tone = marketGateState === "pass"
+      ? "current"
+      : marketGateState === "fail" ? "danger" : "unavailable";
+    elements.marketRegimeGateState.setAttribute(
+      "title",
+      t("market.gate.explanation", {}, locale),
+    );
+  }
   renderTopRiskBadge(payload.top_risk, elements.topRiskState, locale);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
@@ -856,6 +883,7 @@ function captureElements() {
     securityRsState: byId("security-rs-state"),
     securityPoolState: byId("security-pool-state"),
     securityGateState: byId("security-gate-state"),
+    marketRegimeGateState: byId("market-regime-gate-state"),
     topRiskState: byId("top-risk-state"),
     securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),

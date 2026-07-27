@@ -652,6 +652,7 @@ class WebApiTest(unittest.TestCase):
                 "relative_strength_summary",
                 "pool_summary",
                 "research_pool_status",
+                "market_gate",
             },
         )
         self.assertEqual(response.json["asof"], "2026-07-21")
@@ -691,6 +692,8 @@ class WebApiTest(unittest.TestCase):
                 "rs_model_version",
                 "pool_membership",
                 "technical_gate",
+                "market_gate_state",
+                "formal_candidate_state",
             },
         )
         self.assertEqual(
@@ -988,11 +991,12 @@ class WebApiTest(unittest.TestCase):
                 "analysis_scope",
                 "pool_membership",
                 "technical_gate",
+                "market_gate",
             },
         )
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         self.assertEqual(
             payload["feature_provenance_registry"]["version"],
@@ -1354,7 +1358,7 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(
             response.json["model_output_registry"]["version"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         self.assertIn(
             "canslim_technical_gate_v1",
@@ -1436,11 +1440,11 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         self.assertEqual(
             outputs["registry_ref"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         self.assertNotIn("registry", outputs)
 

@@ -17,6 +17,7 @@ from research.market_outcomes import (
     attach_market_outcomes,
     calibrate_score_probability,
 )
+from research.market_gate import latest_market_gate
 from web.market_groups import market_group
 
 
@@ -67,6 +68,7 @@ class MarketOverviewService:
             horizon,
             group.key,
             "market_evidence_v1",
+            "market_regime_gate_v1",
             _macro_cache_token(self._macro_risk_service),
         )
         with self._lock:
@@ -83,6 +85,7 @@ class MarketOverviewService:
                 group,
                 horizon,
             )
+            payload["market_gate"] = latest_market_gate(snapshot.histories)
             score_frame = build_group_score_frame(
                 snapshot.histories,
                 group,
@@ -137,6 +140,7 @@ def _empty_payload(horizon, sector):
         "changed_events": [],
         "calibration": {},
         "macro_risk": _macro_payload(None, None),
+        "market_gate": latest_market_gate({}),
     }
 
 

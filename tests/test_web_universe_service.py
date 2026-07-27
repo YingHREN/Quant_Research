@@ -261,6 +261,13 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         payload = service.build()
 
         self.assertEqual(payload["asof"], "2026-07-21")
+        self.assertIn(payload["market_gate"]["state"], {"pass", "fail", "missing"})
+        self.assertTrue(
+            all(
+                row["formal_candidate_state"] in {"pass", "fail", "missing"}
+                for row in payload["tickers"]
+            )
+        )
         self.assertEqual(repository.snapshot_calls, 2)
         self.assertEqual(service.cache_size, 1)
 

@@ -78,6 +78,18 @@ def forecast_payload():
 def chart_row():
     return {
         "time": "2026-07-01",
+        "market_regime_gate": {
+            "state": "fail",
+            "market_state": "uptrend_under_pressure",
+            "state_start": "2026-06-26",
+            "follow_through_date": "2026-06-10",
+            "rally_day_count": 0,
+            "distribution_days": 4,
+            "breadth_above_ema20": 0.42,
+            "breadth_above_sma50": 0.51,
+            "reason_codes": ["distribution_days_ge_4"],
+            "version": "market_regime_gate_v1",
+        },
         "reversal_signal_count": 2,
         "reversal_candidate": True,
         "prior_high_breakout": True,
@@ -311,12 +323,16 @@ class ModelOutputContractTest(unittest.TestCase):
         )
         self.assertEqual(
             [item["key"] for item in outputs["macro_context"]],
-            ["macro_risk_v1"],
+            ["market_regime_gate_v1", "macro_risk_v1"],
         )
-        self.assertEqual(outputs["macro_context"][0]["score"], 68.0)
-        self.assertEqual(outputs["macro_context"][0]["status"], "active")
         self.assertEqual(
-            outputs["macro_context"][0]["decision_permission"],
+            outputs["macro_context"][0]["market_state"],
+            "uptrend_under_pressure",
+        )
+        self.assertEqual(outputs["macro_context"][1]["score"], 68.0)
+        self.assertEqual(outputs["macro_context"][1]["status"], "active")
+        self.assertEqual(
+            outputs["macro_context"][1]["decision_permission"],
             "advisory",
         )
         immediate = outputs["downside"][0]
@@ -446,7 +462,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(registered, emitted)
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         self.assertEqual(
             outputs["decision"]["decision_permission"],

@@ -16,6 +16,7 @@ from research.canslim_technical import (
     evaluate_technical_gate,
     unavailable_technical_gate,
 )
+from research.market_gate import latest_market_gate
 from research.vcp import detect_vcp
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
@@ -24,7 +25,7 @@ from web.services.analysis import AnalysisContext
 UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-UNIVERSE_ALGORITHM_VERSION = "universe_summary_v5"
+UNIVERSE_ALGORITHM_VERSION = "universe_summary_v6"
 
 
 class UniverseSnapshotService:
@@ -94,6 +95,7 @@ class UniverseSnapshotService:
                 histories,
                 self._factor_registry,
             )
+            market_gate = latest_market_gate(histories)
             research_snapshot = self._build_research_snapshot(asof)
             rows, pool_summary = merge_research_pool(
                 rows,
@@ -110,12 +112,25 @@ class UniverseSnapshotService:
                 [row["ticker"] for row in rows]
             )
             merge_relative_strength(rows, relative_strength)
+            for row in rows:
+                row["market_gate_state"] = market_gate["state"]
+                technical_state = row.get("technical_gate", {}).get("state")
+                row["formal_candidate_state"] = (
+                    "pass"
+                    if technical_state == "pass"
+                    and market_gate["state"] == "pass"
+                    else "missing"
+                    if technical_state == "missing"
+                    or market_gate["state"] == "missing"
+                    else "fail"
+                )
             payload = {
                 "asof": asof,
                 "freshness": freshness,
                 "tickers": rows,
                 "pool_summary": pool_summary,
                 "research_pool_status": _research_status(research_snapshot),
+                "market_gate": market_gate,
                 "factor_groups": factor_groups(self._factor_registry),
                 "classification_summary": {
                     key: deepcopy(value)

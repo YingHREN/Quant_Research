@@ -211,6 +211,18 @@ def _default_registry():
         lambda context: _supply_pressure(context["chart_row"]),
     )
     register(
+        "market_regime_gate_v1",
+        "macro_context",
+        60,
+        "market_regime_gate_v1",
+        "state_machine_gate",
+        "production",
+        "close_confirmed",
+        "advisory",
+        "model.marketGate",
+        lambda context: _market_regime_gate(context["chart_row"]),
+    )
+    register(
         "macro_risk_v1",
         "macro_context",
         70,
@@ -603,6 +615,71 @@ def _macro_risk(row):
             for key, value in components.items()
         ],
     }
+
+
+def _market_regime_gate(row):
+    gate = _mapping(row.get("market_regime_gate"))
+    state = gate.get("state") or "missing"
+    market_state = gate.get("market_state") or "unavailable"
+    available = state in {"pass", "fail"}
+    return {
+        **_identity(
+            "market_regime_gate_v1",
+            gate.get("version") or "market_regime_gate_v1",
+            "state_machine_gate",
+            "production",
+            (
+                "active"
+                if state == "pass"
+                else "inactive"
+                if state == "fail"
+                else "unavailable"
+            ),
+            "close_confirmed",
+            "model.marketGate",
+        ),
+        "state": state,
+        "market_state": market_state,
+        "state_start": gate.get("state_start"),
+        "follow_through_date": gate.get("follow_through_date"),
+        "rally_day_count": gate.get("rally_day_count"),
+        "distribution_days": gate.get("distribution_days"),
+        "breadth_above_ema20": json_safe(
+            gate.get("breadth_above_ema20")
+        ),
+        "breadth_above_sma50": json_safe(
+            gate.get("breadth_above_sma50")
+        ),
+        "conditions": list(gate.get("reason_codes") or ()),
+        "unavailable_reason": (
+            None if available else "market_gate_evidence_unavailable"
+        ),
+        "metrics": [
+            {
+                "label_key": "modelOutput.metric.marketDistributionDays",
+                "value": gate.get("distribution_days"),
+                "format": "number",
+            },
+            {
+                "label_key": "modelOutput.metric.marketBreadthEma20",
+                "value": _percent_value(gate.get("breadth_above_ema20")),
+                "format": "percent",
+            },
+            {
+                "label_key": "modelOutput.metric.marketBreadthSma50",
+                "value": _percent_value(gate.get("breadth_above_sma50")),
+                "format": "percent",
+            },
+        ],
+    }
+
+
+def _percent_value(value):
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric * 100.0
 
 
 def _supply_demand_score(

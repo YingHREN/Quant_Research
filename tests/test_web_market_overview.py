@@ -124,6 +124,7 @@ class MarketOverviewServiceTest(unittest.TestCase):
         self.assertEqual(payload["asof"], "2026-07-23")
         self.assertEqual(payload["evidence_tier"], "daily_proxy")
         self.assertEqual(payload["requested_horizon"], 5)
+        self.assertIn(payload["market_gate"]["state"], {"pass", "fail", "missing"})
         self.assertEqual(
             set(payload["calibration"]),
             {"opportunity", "downside_risk"},
@@ -151,6 +152,7 @@ class MarketOverviewServiceTest(unittest.TestCase):
             "market_data_unavailable",
         )
         self.assertEqual(payload["intraday"]["state"], "unavailable")
+        self.assertEqual(payload["market_gate"]["state"], "missing")
 
     def test_revision_change_rebuilds_same_date_corrected_history(self):
         histories = fixture_histories()

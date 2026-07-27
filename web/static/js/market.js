@@ -105,10 +105,27 @@ function unavailableText(reason) {
     : t("market.available");
 }
 
-function renderPosture(posture = {}) {
+function renderPosture(posture = {}, gate = {}) {
   const root = document.querySelector("#market-posture");
   const coverage = Number(posture.coverage || 0);
+  const gateState = gate.state || "missing";
+  const marketState = gate.market_state || "unavailable";
   root.replaceChildren(
+    scoreBlock(
+      t("market.gate.title"),
+      localized(`market.gate.${gateState}`, gateState).replace(
+        "{regime}",
+        localized(`market.gate.regime.${marketState}`, marketState),
+      ),
+      t("market.gate.explanation"),
+    ),
+    scoreBlock(
+      t("market.gate.regimeLabel"),
+      localized(`market.gate.regime.${marketState}`, marketState),
+      t("market.gate.memory", {
+        count: gate.values?.distribution_days ?? "—",
+      }),
+    ),
     scoreBlock(
       t("market.score"),
       formatScore(posture.score),
@@ -345,7 +362,7 @@ function renderEvents(events = []) {
 
 function render(payload) {
   state.payload = payload;
-  renderPosture(payload.market_posture);
+  renderPosture(payload.market_posture, payload.market_gate);
   renderMacroRisk(payload.macro_risk);
   renderSectorHeatmap(
     payload.sectors || [],

@@ -80,7 +80,7 @@ class ModelOutputRegistryTest(unittest.TestCase):
         )
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v4",
+            "model_output_registry_v5",
         )
         json.dumps(outputs)
 
