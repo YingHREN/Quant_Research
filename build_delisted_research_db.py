@@ -54,7 +54,8 @@ def build_database(
     connection.execute("PRAGMA journal_mode = OFF")
     connection.execute("PRAGMA synchronous = OFF")
     connection.execute("PRAGMA temp_store = MEMORY")
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_time = datetime.now(timezone.utc)
+    started_at = started_time.isoformat()
     totals = Counter()
     reasons = Counter()
     try:
@@ -99,7 +100,8 @@ def build_database(
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
             raise ValueError(f"SQLite integrity check failed: {integrity}")
-        completed_at = datetime.now(timezone.utc).isoformat()
+        completed_time = datetime.now(timezone.utc)
+        completed_at = completed_time.isoformat()
         with connection:
             connection.execute(
                 """
@@ -145,6 +147,11 @@ def build_database(
             "catalog_sha256": candidates["catalog_sha256"],
             "snapshot_date": candidates["finish_date"],
             "imported_at": imported_at,
+            "started_at": started_at,
+            "completed_at": completed_at,
+            "duration_seconds": (
+                completed_time - started_time
+            ).total_seconds(),
             "security_count": totals["security_count"],
             "raw_rows": totals["raw_rows"],
             "daily_rows": totals["daily_rows"],
@@ -473,6 +480,7 @@ def _markdown(result):
             f"- 空响应：{result['empty_responses']:,}",
             f"- 历史段：{result['segment_count']:,}",
             f"- 数据库字节：{result['database_bytes']:,}",
+            f"- 构建耗时：{result['duration_seconds']:.3f} 秒",
             f"- SQLite 完整性：{result['integrity']}",
             "- 边界：独立暂存库，不代表历史指数或板块成员关系。",
             "",

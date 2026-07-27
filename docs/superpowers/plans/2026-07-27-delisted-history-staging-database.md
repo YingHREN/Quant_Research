@@ -80,15 +80,15 @@
 - Create after import: `reports/delisted-history-staging-import.json`
 - Create after import: `reports/delisted-history-staging-import.md`
 
-- [ ] 在隔离工作树运行全量测试、`git diff --check` 和新增差异密钥扫描。
-- [ ] 本地非快进合入 `main`，并在合并结果上再次运行全量测试。
-- [ ] 从 `main` 构建 `data/delisted_research_prices.db`；记录运行时间、数据库
+- [x] 在隔离工作树运行全量测试、`git diff --check` 和新增差异密钥扫描。
+- [x] 本地非快进合入 `main`，并在合并结果上再次运行全量测试。
+- [x] 从 `main` 构建 `data/delisted_research_prices.db`；记录运行时间、数据库
   字节数、证券/有效行/拒绝行/空响应/segment 数和拒绝原因分布。
-- [ ] 使用只读连接验证 `13,039 / 5,913,990 / 3,832 / 6,239` 守恒、
+- [x] 使用只读连接验证 `13,039 / 5,913,990 / 3,832 / 6,239` 守恒、
   `foreign_key_check` 为空、`integrity_check=ok`，并确认现有两个价格库的
   构建前后 SHA-256 不变。
-- [ ] 验证目标数据库和 `.tmp` 的 Git 忽略状态、报告可跟踪、无 token、
+- [x] 验证目标数据库和 `.tmp` 的 Git 忽略状态、报告可跟踪、无 token、
   无残留临时文件。
-- [ ] 更新中文 TODO，只关闭退市日线暂存导入；继续保留历史行业分类、点时
+- [x] 更新中文 TODO，只关闭退市日线暂存导入；继续保留历史行业分类、点时
   成员区间和跨库模型实验。
-- [ ] 提交真实报告和 TODO，运行最终 768+ 项全量测试并记录完成。
+- [x] 提交真实报告和 TODO，运行最终 768+ 项全量测试并记录完成。

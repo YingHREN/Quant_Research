@@ -150,6 +150,9 @@ class BuildDelistedResearchDatabaseTest(unittest.TestCase):
         self.assertEqual(result["daily_rows"], 3)
         self.assertEqual(result["rejected_rows"], 1)
         self.assertEqual(result["empty_responses"], 1)
+        self.assertGreaterEqual(result["duration_seconds"], 0)
+        self.assertIn("started_at", result)
+        self.assertIn("completed_at", result)
         self.assertEqual(
             connection.execute(
                 "SELECT COUNT(*) FROM security_master "

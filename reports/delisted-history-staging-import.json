@@ -1,0 +1,24 @@
+{
+  "catalog_sha256": "fa432000e8f77577175d2b13590dd0be65d44fef5ceceed433f3d33752ad80b0",
+  "completed_at": "2026-07-27T07:26:24.228265+00:00",
+  "daily_rows": 5913990,
+  "database_bytes": 1538666496,
+  "database_schema_version": "delisted_research_prices_v1",
+  "duration_seconds": 63.870542,
+  "empty_responses": 6239,
+  "foreign_key_errors": 0,
+  "import_version": "delisted_history_staging_import_v1",
+  "imported_at": "2026-07-27T07:25:20.297463+00:00",
+  "integrity": "ok",
+  "raw_rows": 5917822,
+  "reason_counts": {
+    "invalid_ohlc": 65,
+    "non_positive_price": 3767
+  },
+  "rejected_rows": 3832,
+  "schema_version": "delisted_history_staging_import_report_v1",
+  "security_count": 13039,
+  "segment_count": 7021,
+  "snapshot_date": "2026-07-27",
+  "started_at": "2026-07-27T07:25:20.357723+00:00"
+}
