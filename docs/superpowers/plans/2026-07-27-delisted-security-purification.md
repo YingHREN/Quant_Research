@@ -178,7 +178,7 @@ git commit -m "data: build purified delisted catalog"
 关闭“证券类型二次净化和身份契约”部分；保留正式退市日线下载、SEC 历史行业和
 历史成员区间为未完成。
 
-- [ ] **Step 4: 全量验证**
+- [x] **Step 4: 全量验证**
 
 Run:
 `LOKY_MAX_CPU_COUNT=8 PYTHONWARNINGS=error ../../venv/bin/python -m unittest discover -s tests -q`
