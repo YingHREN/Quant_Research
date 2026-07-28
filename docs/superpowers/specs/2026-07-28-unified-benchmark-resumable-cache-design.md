@@ -119,8 +119,9 @@ manifest 中显示 `disabled_dirty_worktree`。测试可以注入固定代码指
 6. 执行阶段级语义验证。
 
 任一步失败都视为 miss 并冷计算；损坏产物不会自动覆盖。只有显式
-`--rebuild-cache` 才能为相同研究输入生成新的合法身份或替换经确认损坏的
-本地缓存记录。
+`--rebuild-cache` 且存储层重新验证旧行确实存在 checksum、解压、schema
+或语义损坏时，才允许在单事务中修复该精确主键。合法旧行即使在 rebuild
+模式下也不可被不同 payload 覆盖。
 
 ## 阶段边界
 

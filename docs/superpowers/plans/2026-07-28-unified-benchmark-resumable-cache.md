@@ -162,7 +162,7 @@ git commit -m "research: add safe benchmark cache codec"
   - `BenchmarkCacheArtifact`
   - `BenchmarkCacheRead`
   - `UnifiedBenchmarkCacheStore.read(identity) -> BenchmarkCacheRead`
-  - `UnifiedBenchmarkCacheStore.commit(artifacts) -> int`
+  - `UnifiedBenchmarkCacheStore.commit(artifacts, *, repair_corrupt: bool = False) -> int`
   - `UnifiedBenchmarkCacheStore.status() -> pd.DataFrame`
   - `UnifiedBenchmarkCacheStore.verify() -> pd.DataFrame`
   - `UnifiedBenchmarkCacheStore.prune(keep_per_stage: int, apply: bool = False) -> pd.DataFrame`
@@ -221,9 +221,11 @@ created timestamp. Enable WAL, foreign keys, and `busy_timeout=5000`.
 
 Validate every artifact and every existing key before inserts. Use one
 `BEGIN IMMEDIATE` transaction. Exact checksum retry is idempotent. A different
-checksum for an existing key raises `ValueError` and rolls back all pending
-rows. SQLite failures become stable `RuntimeError` messages without raw SQL or
-paths.
+checksum for an existing valid key raises `ValueError` and rolls back all
+pending rows. With `repair_corrupt=True`, replacement is allowed only after the
+store rereads the exact existing row and proves checksum, codec, schema, or
+semantic corruption; repair happens inside the same transaction. SQLite
+failures become stable `RuntimeError` messages without raw SQL or paths.
 
 - [ ] **Step 5: Write and pass read/verify/corruption tests**
 
@@ -356,7 +358,8 @@ After `load_inputs`, compute identities. For each stage:
 5. build rule identity with statistical artifact key;
 6. run labels, strata, metrics and report normally;
 7. after `_publish_atomic` succeeds, commit both pending artifacts in one
-   transaction.
+   transaction; pass `repair_corrupt=True` only for explicit
+   `--rebuild-cache`.
 
 Cache read/write exceptions degrade to cold computation or
 `cache_write_failed`; builder, label, evaluation, and report exceptions retain
