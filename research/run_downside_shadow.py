@@ -27,6 +27,7 @@ from research.downside_shadow import (
 from research.downside_shadow_store import (
     DownsideShadowStore,
     ShadowExperiment,
+    ShadowOutcome,
     ShadowPrediction,
 )
 
@@ -51,6 +52,7 @@ class ShadowConfig:
     candidate_tickers: int = 600
     minimum_history: int = 260
     horizons: tuple[int, ...] = (5, 10, 20)
+    output_directory: Path = Path("reports")
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,14 @@ class ShadowDependencies:
     ridge_features: tuple[str, ...]
     direction_features: tuple[str, ...]
     pressure_features: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ShadowEvaluationArtifacts:
+    manifest: dict
+    metrics: pd.DataFrame
+    outcomes: pd.DataFrame
+    output_paths: tuple[Path, ...]
 
 
 def freeze_experiment(config, dependencies=None):
@@ -259,6 +269,55 @@ def capture_latest(config, dependencies=None):
     }
 
 
+def evaluate_shadow(config, dependencies=None):
+    """Attach only mature future paths and publish audited shadow reports."""
+    checked = _validate_config(config)
+    runtime = dependencies or default_dependencies()
+    store = DownsideShadowStore(checked.shadow_database)
+    experiment = store.load_experiment(checked.experiment_id)
+    if experiment is None:
+        raise ValueError("shadow experiment does not exist")
+    read_shadow_model_bundle(
+        experiment.model_artifact_path,
+        expected_checksum=experiment.model_artifact_checksum,
+    )
+    predictions = store.load_predictions(checked.experiment_id)
+    snapshot = _validated_snapshot(runtime.load_inputs(checked))
+    new_outcomes = _mature_outcomes(
+        experiment,
+        predictions,
+        store.load_outcomes(checked.experiment_id),
+        snapshot,
+        runtime.now,
+    )
+    inserted = store.append_outcomes(
+        checked.experiment_id,
+        new_outcomes,
+    )
+    outcomes = store.load_outcomes(checked.experiment_id)
+    metrics = _shadow_metrics(predictions, outcomes)
+    manifest = _evaluation_manifest(
+        experiment,
+        predictions,
+        outcomes,
+        metrics,
+        snapshot,
+        inserted,
+    )
+    output_paths = _shadow_output_paths(
+        checked.output_directory,
+        checked.experiment_id,
+    )
+    artifacts = ShadowEvaluationArtifacts(
+        manifest=manifest,
+        metrics=metrics,
+        outcomes=outcomes,
+        output_paths=output_paths,
+    )
+    _publish_shadow_reports(artifacts)
+    return artifacts
+
+
 def default_dependencies():
     from research.run_expanded_walkforward_study import expanded_feature_sets
     from research.run_pressure_downside_study import SPECIALIST_FEATURE_COLUMNS
@@ -417,6 +476,537 @@ def _prediction_snapshot(
     return rows
 
 
+def _mature_outcomes(
+    experiment,
+    predictions,
+    existing_outcomes,
+    snapshot,
+    now,
+):
+    if predictions.empty:
+        return []
+    from research.unified_downside_benchmark import (
+        attach_next_open_path_targets,
+    )
+
+    prices = _price_frame(snapshot.histories, experiment.universe)
+    targets = attach_next_open_path_targets(
+        prices,
+        horizons=experiment.horizons,
+    )
+    existing_times = {}
+    if not existing_outcomes.empty:
+        for row in existing_outcomes.to_dict(orient="records"):
+            key = (
+                row["specification"],
+                row["ticker"],
+                row["observation_date"],
+                int(row["horizon"]),
+            )
+            existing_times[key] = row["matured_at"]
+    default_matured_at = _aware_now(now)
+    rows = []
+    for prediction in predictions.to_dict(orient="records"):
+        ticker = str(prediction["ticker"])
+        observation_date = pd.Timestamp(prediction["observation_date"])
+        horizon = int(prediction["horizon"])
+        target_key = (ticker, observation_date, horizon)
+        if target_key not in targets.index:
+            continue
+        target = targets.loc[target_key]
+        if not bool(target["mature"]):
+            continue
+        history = snapshot.histories.get(ticker)
+        entry_date, label_end_date = _path_dates(
+            history,
+            observation_date,
+            horizon,
+        )
+        key = (
+            str(prediction["specification"]),
+            ticker,
+            observation_date.date().isoformat(),
+            horizon,
+        )
+        matured_at = (
+            _aware_timestamp(existing_times[key])
+            if key in existing_times
+            else default_matured_at
+        )
+        signature = _snapshot_fingerprint(
+            snapshot,
+            (ticker,),
+            label_end_date,
+        )
+        rows.append(
+            ShadowOutcome(
+                experiment_id=experiment.experiment_id,
+                specification=key[0],
+                ticker=ticker,
+                observation_date=key[2],
+                horizon=horizon,
+                entry_date=entry_date,
+                entry_open=float(target["entry_open"]),
+                label_end_date=label_end_date,
+                terminal_return=float(target["terminal_return"]),
+                mae=float(target["mae"]),
+                mfe=float(target["mfe"]),
+                actual_event=bool(target["actual_event"]),
+                matured_at=matured_at,
+                market_signature=signature,
+            )
+        )
+    return rows
+
+
+def _price_frame(histories, universe):
+    parts = []
+    for ticker in universe:
+        history = histories.get(ticker)
+        if not isinstance(history, pd.DataFrame) or history.empty:
+            continue
+        required = ("Open", "High", "Low", "Close")
+        if any(column not in history for column in required):
+            continue
+        selected = history.loc[:, required].copy(deep=True)
+        selected.index = pd.DatetimeIndex(selected.index).tz_localize(None)
+        selected.index.name = "observation_date"
+        selected.insert(0, "ticker", ticker)
+        selected = selected.reset_index().set_index(
+            ["ticker", "observation_date"]
+        )
+        parts.append(selected)
+    if not parts:
+        raise ValueError("shadow evaluation has no cohort price histories")
+    return pd.concat(parts).sort_index()
+
+
+def _path_dates(history, observation_date, horizon):
+    if not isinstance(history, pd.DataFrame) or history.empty:
+        raise ValueError("mature target history is unavailable")
+    dates = pd.DatetimeIndex(history.index).tz_localize(None).sort_values()
+    positions = np.flatnonzero(dates == observation_date)
+    if len(positions) != 1 or positions[0] + horizon >= len(dates):
+        raise ValueError("mature target dates are inconsistent")
+    position = int(positions[0])
+    return (
+        dates[position + 1].date().isoformat(),
+        dates[position + horizon].date().isoformat(),
+    )
+
+
+def _shadow_metrics(predictions, outcomes):
+    columns = (
+        "specification",
+        "horizon",
+        "status",
+        "sample_count",
+        "actual_event_rate",
+        "signal_rate",
+        "precision",
+        "recall",
+        "specificity",
+        "balanced_accuracy",
+        "f1",
+        "roc_auc",
+        "pr_auc",
+        "availability_rate",
+        "applicability_rate",
+        "mean_signal_terminal_return",
+        "mean_nonsignal_terminal_return",
+        "maximum_drawdown",
+    )
+    if predictions.empty:
+        return pd.DataFrame(columns=columns)
+    keys = [
+        "experiment_id",
+        "specification",
+        "ticker",
+        "observation_date",
+        "horizon",
+    ]
+    joined = predictions.merge(
+        outcomes,
+        on=keys,
+        how="inner",
+        validate="one_to_one",
+        suffixes=("", "_outcome"),
+    )
+    joined = joined.loc[
+        joined["status"] == "available"
+    ].copy()
+    rows = []
+    for (specification, horizon), group in joined.groupby(
+        ["specification", "horizon"], sort=True
+    ):
+        actual = group["actual_event"].astype(bool)
+        predicted = group["predicted_event"].astype(bool)
+        positives = int(actual.sum())
+        negatives = int((~actual).sum())
+        true_positive = int((actual & predicted).sum())
+        true_negative = int((~actual & ~predicted).sum())
+        precision_denominator = int(predicted.sum())
+        precision = (
+            true_positive / precision_denominator
+            if precision_denominator
+            else np.nan
+        )
+        recall = true_positive / positives if positives else np.nan
+        specificity = true_negative / negatives if negatives else np.nan
+        balanced = (
+            (recall + specificity) / 2.0
+            if np.isfinite(recall) and np.isfinite(specificity)
+            else np.nan
+        )
+        signal_returns = pd.to_numeric(
+            group.loc[predicted]
+            .sort_values(["observation_date", "ticker"])[
+                "terminal_return"
+            ],
+            errors="coerce",
+        )
+        nonsignal_returns = pd.to_numeric(
+            group.loc[~predicted, "terminal_return"],
+            errors="coerce",
+        )
+        all_prediction_rows = predictions.loc[
+            (predictions["specification"] == specification)
+            & (predictions["horizon"] == horizon)
+        ]
+        applicable = all_prediction_rows["status"] != "not_applicable"
+        available = all_prediction_rows["status"] == "available"
+        f1 = (
+            2.0 * precision * recall / (precision + recall)
+            if np.isfinite(precision)
+            and np.isfinite(recall)
+            and precision + recall > 0.0
+            else np.nan
+        )
+        roc_auc, pr_auc = _probability_metrics(
+            specification,
+            actual,
+            group["predicted_score"],
+        )
+        rows.append(
+            {
+                "specification": specification,
+                "horizon": int(horizon),
+                "status": (
+                    "ok"
+                    if len(group) >= 50 and positives and negatives
+                    else "insufficient"
+                ),
+                "sample_count": int(len(group)),
+                "actual_event_rate": float(actual.mean()),
+                "signal_rate": float(predicted.mean()),
+                "precision": precision,
+                "recall": recall,
+                "specificity": specificity,
+                "balanced_accuracy": balanced,
+                "f1": f1,
+                "roc_auc": roc_auc,
+                "pr_auc": pr_auc,
+                "availability_rate": float(available.mean()),
+                "applicability_rate": float(applicable.mean()),
+                "mean_signal_terminal_return": (
+                    float(signal_returns.mean())
+                    if len(signal_returns)
+                    else np.nan
+                ),
+                "mean_nonsignal_terminal_return": (
+                    float(nonsignal_returns.mean())
+                    if len(nonsignal_returns)
+                    else np.nan
+                ),
+                "maximum_drawdown": _maximum_drawdown(signal_returns),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _probability_metrics(specification, actual, score):
+    if specification not in (
+        "general_logistic",
+        "pressure_downside_logistic",
+    ):
+        return np.nan, np.nan
+    numeric = pd.to_numeric(score, errors="coerce")
+    valid = numeric.notna()
+    if valid.sum() < 2 or actual.loc[valid].nunique() < 2:
+        return np.nan, np.nan
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    truth = actual.loc[valid].astype(bool)
+    return (
+        float(roc_auc_score(truth, numeric.loc[valid])),
+        float(average_precision_score(truth, numeric.loc[valid])),
+    )
+
+
+def _maximum_drawdown(returns):
+    clean = pd.to_numeric(returns, errors="coerce").dropna()
+    if clean.empty:
+        return np.nan
+    equity = (1.0 + clean).cumprod()
+    drawdown = equity / equity.cummax() - 1.0
+    return float(drawdown.min())
+
+
+def _evaluation_manifest(
+    experiment,
+    predictions,
+    outcomes,
+    metrics,
+    snapshot,
+    inserted,
+):
+    captured_dates = (
+        sorted(predictions["observation_date"].unique().tolist())
+        if not predictions.empty
+        else []
+    )
+    latest = _latest_common_reference_session(snapshot)
+    planned = [
+        value.date().isoformat()
+        for value in _common_reference_sessions(snapshot)
+        if experiment.frozen_market_asof
+        < value.date().isoformat()
+        <= latest
+    ]
+    gaps = sorted(set(planned).difference(captured_dates))
+    gate = _promotion_gate(
+        metrics,
+        predictions,
+        outcomes,
+        captured_dates,
+    )
+    return {
+        "schema_version": "downside-shadow-report-v1",
+        "experiment_id": experiment.experiment_id,
+        "study_version": experiment.study_version,
+        "frozen_market_asof": experiment.frozen_market_asof,
+        "latest_market_asof": latest,
+        "online_authority": "none",
+        "prospective_only": True,
+        "captured_observation_dates": captured_dates,
+        "planned_observation_dates": planned,
+        "capture_gap_dates": gaps,
+        "capture_gap_count": len(gaps),
+        "prediction_count": int(len(predictions)),
+        "mature_outcome_count": int(len(outcomes)),
+        "inserted_outcomes": int(inserted),
+        "promotion_gate": gate,
+    }
+
+
+def _promotion_gate(metrics, predictions, outcomes, captured_dates):
+    reasons = []
+    if len(captured_dates) < 60:
+        reasons.append("captured_sessions_below_60")
+    joined = predictions.merge(
+        outcomes,
+        on=[
+            "experiment_id",
+            "specification",
+            "ticker",
+            "observation_date",
+            "horizon",
+        ],
+        how="inner",
+    ) if not predictions.empty and not outcomes.empty else pd.DataFrame()
+    for horizon in (5, 20):
+        pressure = _metric(metrics, "pressure_downside_logistic", horizon)
+        ridge = _metric(metrics, "ridge_current", horizon)
+        pressure_samples = (
+            0 if pressure is None else int(pressure["sample_count"])
+        )
+        if pressure_samples < 1_000:
+            reasons.append(f"pressure_{horizon}_samples_below_1000")
+        if (
+            pressure is None
+            or ridge is None
+            or not np.isfinite(pressure["balanced_accuracy"])
+            or not np.isfinite(ridge["balanced_accuracy"])
+            or pressure["balanced_accuracy"] <= ridge["balanced_accuracy"]
+        ):
+            reasons.append(f"pressure_{horizon}_does_not_beat_ridge")
+        if (
+            pressure is None
+            or not np.isfinite(pressure["recall"])
+            or pressure["recall"] < 0.45
+        ):
+            reasons.append(f"pressure_{horizon}_recall_below_0_45")
+        if (
+            pressure is None
+            or not np.isfinite(pressure["specificity"])
+            or pressure["specificity"] < 0.55
+        ):
+            reasons.append(f"pressure_{horizon}_specificity_below_0_55")
+        if (
+            pressure is None
+            or ridge is None
+            or not np.isfinite(pressure["maximum_drawdown"])
+            or not np.isfinite(ridge["maximum_drawdown"])
+            or pressure["maximum_drawdown"]
+            < ridge["maximum_drawdown"] - 0.02
+        ):
+            reasons.append(f"pressure_{horizon}_drawdown_gate_failed")
+    if joined.empty:
+        group_counts = {}
+    else:
+        group_counts = (
+            joined.loc[joined["status"] == "available"]
+            .drop_duplicates(
+                ["ticker", "observation_date", "horizon"]
+            )
+            .groupby("group_key")
+            .size()
+            .to_dict()
+        )
+    for group in ("semiconductor", "software"):
+        if int(group_counts.get(group, 0)) < 250:
+            reasons.append(f"{group}_samples_below_250")
+    return {
+        "eligible_for_human_review": not reasons,
+        "online_authority": "none",
+        "audit_violation_count": 0,
+        "failed_conditions": reasons,
+    }
+
+
+def _metric(metrics, specification, horizon):
+    if metrics.empty:
+        return None
+    selected = metrics.loc[
+        (metrics["specification"] == specification)
+        & (metrics["horizon"] == horizon)
+    ]
+    return None if selected.empty else selected.iloc[0]
+
+
+def _shadow_output_paths(directory, experiment_id):
+    root = Path(directory)
+    return (
+        root / f"{experiment_id}.json",
+        root / f"{experiment_id}.csv",
+        root / f"{experiment_id}.md",
+    )
+
+
+def _publish_shadow_reports(artifacts):
+    json_path, csv_path, markdown_path = artifacts.output_paths
+    for path in artifacts.output_paths:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "manifest": artifacts.manifest,
+        "metrics": _records(artifacts.metrics),
+    }
+    rendered_json = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        allow_nan=False,
+    ) + "\n"
+    rendered_csv = artifacts.metrics.to_csv(index=False)
+    rendered_markdown = _render_shadow_markdown(artifacts)
+    for path, content in (
+        (json_path, rendered_json),
+        (csv_path, rendered_csv),
+        (markdown_path, rendered_markdown),
+    ):
+        temporary = path.with_name(f".{path.name}.tmp")
+        try:
+            temporary.write_text(content, encoding="utf-8")
+            temporary.replace(path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
+
+def _render_shadow_markdown(artifacts):
+    manifest = artifacts.manifest
+    lines = [
+        "# 前瞻向下风险影子评估",
+        "",
+        "这是冻结日之后的前瞻影子结果，不是历史回填。",
+        "即使达到研究门槛，也不具备线上否决权。",
+        "",
+        f"- 实验：`{manifest['experiment_id']}`",
+        f"- 冻结日：{manifest['frozen_market_asof']}",
+        f"- 已捕获交易日：{len(manifest['captured_observation_dates'])}",
+        f"- 捕获缺口：{manifest['capture_gap_count']}",
+        f"- 成熟结果：{manifest['mature_outcome_count']}",
+        f"- 线上权限：`{manifest['online_authority']}`",
+        "",
+        "## 模型结果",
+        "",
+    ]
+    if artifacts.metrics.empty:
+        lines.append("尚无成熟样本。")
+    else:
+        lines.extend(
+            [
+                "| 模型 | 周期 | 样本 | 状态 | 召回率 | 特异度 | 平衡准确率 |",
+                "|---|---:|---:|---|---:|---:|---:|",
+            ]
+        )
+        for row in artifacts.metrics.to_dict(orient="records"):
+            lines.append(
+                "| {specification} | {horizon} | {sample_count} | "
+                "{status} | {recall} | {specificity} | "
+                "{balanced_accuracy} |".format(
+                    **{
+                        **row,
+                        "recall": _display_metric(row["recall"]),
+                        "specificity": _display_metric(
+                            row["specificity"]
+                        ),
+                        "balanced_accuracy": _display_metric(
+                            row["balanced_accuracy"]
+                        ),
+                    }
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "## 晋级门槛",
+            "",
+            (
+                "允许进入人工评审。"
+                if manifest["promotion_gate"][
+                    "eligible_for_human_review"
+                ]
+                else "尚未达到人工评审门槛。"
+            ),
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _records(frame):
+    records = []
+    for row in frame.to_dict(orient="records"):
+        records.append(
+            {
+                key: (
+                    None
+                    if isinstance(value, (float, np.floating))
+                    and not np.isfinite(value)
+                    else _canonical_scalar(value)
+                )
+                for key, value in row.items()
+            }
+        )
+    return records
+
+
+def _display_metric(value):
+    return "—" if not np.isfinite(value) else f"{float(value):.3f}"
+
+
 def _memory_prediction(rule_frame, key):
     if (
         not isinstance(rule_frame, pd.DataFrame)
@@ -456,6 +1046,13 @@ def _select_frozen_cohort(snapshot, cutoff, config):
 
 
 def _latest_common_reference_session(snapshot):
+    common = _common_reference_sessions(snapshot)
+    if not len(common):
+        raise ValueError("required references have no common market session")
+    return common[-1].date().isoformat()
+
+
+def _common_reference_sessions(snapshot):
     common = None
     for ticker in snapshot.reference_tickers:
         history = snapshot.histories.get(ticker)
@@ -465,9 +1062,7 @@ def _latest_common_reference_session(snapshot):
             pd.DatetimeIndex(history.index).tz_localize(None).normalize()
         )
         common = dates if common is None else common.intersection(dates)
-    if not common:
-        raise ValueError("required references have no common market session")
-    return max(common).date().isoformat()
+    return pd.DatetimeIndex(sorted(common or ()))
 
 
 def _snapshot_fingerprint(snapshot, cohort, cutoff):
@@ -491,6 +1086,16 @@ def _snapshot_fingerprint(snapshot, cohort, cutoff):
         snapshot.assignments["ticker"].astype(str).str.upper().isin(cohort)
     ].copy(deep=True)
     if not assignments.empty:
+        start_column = (
+            "effective_from"
+            if "effective_from" in assignments
+            else "effective_date"
+        )
+        starts = pd.to_datetime(
+            assignments[start_column],
+            errors="coerce",
+        )
+        assignments = assignments.loc[starts <= limit]
         records = [
             {
                 str(column): _canonical_scalar(value)
@@ -673,7 +1278,7 @@ def _canonical_scalar(value):
         return None
     if isinstance(value, (tuple, list)):
         return [_canonical_scalar(item) for item in value]
-    if isinstance(value, pd.Timestamp):
+    if isinstance(value, (pd.Timestamp, datetime)):
         return None if pd.isna(value) else value.isoformat()
     try:
         if pd.isna(value):
@@ -697,7 +1302,9 @@ def _git_commit():
 
 def _parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("freeze", "capture"))
+    parser.add_argument(
+        "command", choices=("freeze", "capture", "evaluate")
+    )
     parser.add_argument("--research-database", type=Path, required=True)
     parser.add_argument("--shadow-database", type=Path, required=True)
     parser.add_argument("--model-artifact", type=Path, required=True)
@@ -716,11 +1323,22 @@ def main(argv=None):
         experiment_id=arguments.experiment_id,
     )
     try:
-        result = (
-            freeze_experiment(config)
-            if arguments.command == "freeze"
-            else capture_latest(config)
-        )
+        if arguments.command == "freeze":
+            result = freeze_experiment(config)
+        elif arguments.command == "capture":
+            result = capture_latest(config)
+        else:
+            artifacts = evaluate_shadow(config)
+            result = {
+                "experiment_id": config.experiment_id,
+                "inserted_outcomes": artifacts.manifest[
+                    "inserted_outcomes"
+                ],
+                "mature_outcome_count": artifacts.manifest[
+                    "mature_outcome_count"
+                ],
+                "online_authority": "none",
+            }
     except (TypeError, ValueError, RuntimeError, OSError):
         print(json.dumps({"ok": False, "error_code": "shadow_command_failed"}))
         return 1

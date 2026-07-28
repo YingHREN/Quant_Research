@@ -16,6 +16,7 @@ from research.run_downside_shadow import (
     ShadowDependencies,
     ShadowInputSnapshot,
     capture_latest,
+    evaluate_shadow,
     freeze_experiment,
     main,
 )
@@ -32,6 +33,7 @@ class RunDownsideShadowTest(unittest.TestCase):
             max_tickers=2,
             minimum_history=8,
             horizons=(5, 10, 20),
+            output_directory=root / "reports",
         )
 
     def tearDown(self):
@@ -129,6 +131,48 @@ class RunDownsideShadowTest(unittest.TestCase):
         payload = output.getvalue()
         self.assertIn('"error_code": "shadow_command_failed"', payload)
         self.assertNotIn("secret-token-value", payload)
+
+    def test_evaluate_writes_only_complete_next_open_paths(self):
+        config = replace(self.config, horizons=(5, 20))
+        freeze_experiment(
+            config,
+            dependencies=_dependencies(_snapshot("2026-07-24")),
+        )
+        capture_latest(
+            config,
+            dependencies=_dependencies(_snapshot("2026-07-27")),
+        )
+        evaluation = _snapshot("2026-08-03")
+
+        artifacts = evaluate_shadow(
+            config,
+            dependencies=_dependencies(evaluation),
+        )
+        retry = evaluate_shadow(
+            config,
+            dependencies=replace(
+                _dependencies(_snapshot("2026-08-04")),
+                now=lambda: datetime(
+                    2026, 8, 4, 3, 0, tzinfo=timezone.utc
+                ),
+            ),
+        )
+
+        self.assertEqual(set(artifacts.outcomes["horizon"]), {5})
+        self.assertEqual(len(artifacts.outcomes), 8)
+        self.assertEqual(retry.manifest["inserted_outcomes"], 0)
+        row = artifacts.outcomes.iloc[0]
+        self.assertEqual(row["entry_date"], "2026-07-28")
+        self.assertEqual(row["label_end_date"], "2026-08-03")
+        self.assertEqual(artifacts.manifest["online_authority"], "none")
+        self.assertFalse(
+            artifacts.manifest["promotion_gate"][
+                "eligible_for_human_review"
+            ]
+        )
+        markdown = artifacts.output_paths[2].read_text(encoding="utf-8")
+        self.assertIn("不是历史回填", markdown)
+        self.assertIn("不具备线上否决权", markdown)
 
 
 def _dependencies(snapshot):
