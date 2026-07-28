@@ -77,7 +77,13 @@ export function createResearchPoolControl({
 
   return Object.freeze({
     setSelection(ticker, nextMembership = {}) {
-      selectedTicker = ticker ? String(ticker).toUpperCase() : null;
+      const nextTicker = ticker ? String(ticker).toUpperCase() : null;
+      if (status && nextTicker !== selectedTicker) {
+        status.textContent = "";
+        status.removeAttribute?.("data-tone");
+        if (status.dataset) delete status.dataset.tone;
+      }
+      selectedTicker = nextTicker;
       membership = { ...nextMembership };
       render();
     },

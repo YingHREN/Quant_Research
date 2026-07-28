@@ -580,6 +580,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                         normalized_ticker,
                         research_snapshot,
                         scenario_provider,
+                        entry_signal_service,
                         forecast_payload=forecast_payload,
                         top_risk=top_risk,
                         research_member=research_member,
@@ -1394,6 +1395,7 @@ def _research_stock_payload(
     ticker,
     snapshot,
     scenario_provider,
+    entry_signal_service,
     *,
     forecast_payload=None,
     top_risk=None,
@@ -1415,6 +1417,10 @@ def _research_stock_payload(
         benchmark_history=benchmark,
     )
     chart = build_chart_rows(context)
+    chart = merge_entry_signal_rows(
+        chart,
+        entry_signal_service.build(ticker, history),
+    )
     technical_gate = evaluate_technical_gate(
         history,
         observation_date,
@@ -1596,6 +1602,11 @@ def _structure_payload(factors, chart, top_risk=None):
             "vcp_breakout_confirmed",
             "vcp_breakout_confirmed",
             "VCP breakout confirmed",
+        ),
+        (
+            "tight_platform_start",
+            "tight_platform",
+            "Bullish breakout setup (tight platform)",
         ),
         ("pocket_pivot", "pocket_pivot", "Pocket Pivot"),
     )

@@ -554,8 +554,9 @@ class RevisionAwareInjectedForecastService(InjectedForecastService):
 
 
 class InjectedEntrySignalService:
-    def __init__(self, active_latest=False):
+    def __init__(self, active_latest=False, tight_latest=False):
         self.active_latest = active_latest
+        self.tight_latest = tight_latest
         self.calls = []
 
     def build(self, ticker, history):
@@ -563,6 +564,7 @@ class InjectedEntrySignalService:
         rows = []
         for position, timestamp in enumerate(history.index):
             active = self.active_latest and position == len(history) - 1
+            tight = self.tight_latest and position == len(history) - 1
             rows.append(
                 {
                     "time": pd.Timestamp(timestamp).date().isoformat(),
@@ -585,13 +587,17 @@ class InjectedEntrySignalService:
                         ),
                         "vcp_pivot": 141.5 if active else None,
                     },
-                    "tight_platform_active": False,
-                    "tight_platform_start": False,
-                    "tight_platform_pivot": None,
-                    "tight_platform_reject_reason": "not_sideways",
+                    "tight_platform_active": tight,
+                    "tight_platform_start": tight,
+                    "tight_platform_pivot": 140.0 if tight else None,
+                    "tight_platform_reject_reason": (
+                        None if tight else "not_sideways"
+                    ),
                     "tight_platform_evidence": {
-                        "active": False,
-                        "reject_reason": "not_sideways",
+                        "active": tight,
+                        "is_platform": tight,
+                        "platform_pivot": 140.0 if tight else None,
+                        "reject_reason": None if tight else "not_sideways",
                     },
                     "vcp_breakout_confirmed": False,
                     "vcp_breakout_price_confirmed": False,
@@ -2671,11 +2677,16 @@ class WebApiTest(unittest.TestCase):
             evaluator=fake_forecast_evaluation,
             max_forecast_dates=1,
         )
+        entry_signal_service = InjectedEntrySignalService(
+            active_latest=True,
+            tight_latest=True,
+        )
         client = create_app(
             test_config(
                 RESEARCH_UNIVERSE_REPOSITORY=research_repository,
                 RESEARCH_POOL_MEMBERSHIP_STORE=MembershipStore(),
                 RESEARCH_FORECAST_SERVICE=research_forecast_service,
+                ENTRY_SIGNAL_SERVICE=entry_signal_service,
             ),
             self.repository,
             self.manager,
@@ -2695,6 +2706,26 @@ class WebApiTest(unittest.TestCase):
             "up",
         )
         self.assertIn("research_pool_on_demand_forecast", latest.json["warnings"])
+        self.assertEqual(len(entry_signal_service.calls), 2)
+        self.assertTrue(
+            all(call[0] == "RESEARCH" for call in entry_signal_service.calls)
+        )
+        self.assertTrue(latest.json["chart"][-1]["strict_vcp_active"])
+        self.assertTrue(latest.json["structures"]["strict_vcp"]["accepted"])
+        self.assertIn(
+            "strict_vcp_start",
+            {
+                annotation["type"]
+                for annotation in latest.json["structures"]["annotations"]
+            },
+        )
+        self.assertIn(
+            "tight_platform",
+            {
+                annotation["type"]
+                for annotation in latest.json["structures"]["annotations"]
+            },
+        )
         self.assertIn("SOXX", research_repository.request[2])
         self.assertEqual(historical.status_code, 200)
         self.assertEqual(

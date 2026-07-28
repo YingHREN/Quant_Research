@@ -123,6 +123,10 @@ class WebAssetTest(unittest.TestCase):
             assert.deepEqual(calls, [['AAA', true]]);
             assert.equal(button.textContent, '退出研究池');
             assert.equal(status.textContent, 'AAA 已加入研究池');
+            controller.setSelection('BBB', {{active: false, research: false}});
+            assert.equal(status.textContent, '');
+            assert.equal(button.textContent, '加入研究池');
+            controller.setSelection('AAA', {{active: true, research: true}});
             await button.handler();
             assert.deepEqual(calls, [['AAA', true], ['AAA', false]]);
             assert.equal(button.textContent, '加入研究池');

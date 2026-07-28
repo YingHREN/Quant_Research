@@ -516,7 +516,9 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
             by_ticker["BBB"]["pool_membership"],
             {"active": False, "research": True},
         )
-        self.assertEqual(by_ticker["BBB"]["shape_state"], "unavailable")
+        self.assertEqual(by_ticker["BBB"]["shape_state"], "none")
+        self.assertFalse(by_ticker["BBB"]["strict_vcp"])
+        self.assertFalse(by_ticker["BBB"]["tight_platform"])
         self.assertIn(by_ticker["BBB"]["technical_gate"]["state"], {"pass", "fail"})
         self.assertEqual(research_repository.calls, [("2026-07-21", 260)])
 

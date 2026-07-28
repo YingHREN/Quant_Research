@@ -359,6 +359,7 @@ def _research_only_row(member, history, asof, technical_gate_evaluator):
         else 0
     )
     stale = bool(member.stale)
+    structure = build_structure_summary(history)
     return {
         "ticker": member.ticker,
         "latest_date": latest_date,
@@ -369,10 +370,7 @@ def _research_only_row(member, history, asof, technical_gate_evaluator):
         "data_status": "stale" if stale else "current",
         "name": member.name,
         "exchange": member.exchange,
-        "strict_vcp": None,
-        "tight_platform": None,
-        "near_pivot": None,
-        "shape_state": "unavailable",
+        **structure,
         "momentum_percentile": None,
         "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
         "momentum_percentile_unit": "percentile_0_100",
