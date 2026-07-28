@@ -26,6 +26,8 @@ class ForecastArtifactIdentity:
     model_version: str
     feature_version: str
     risk_context_version: str
+    assignment_revision: str
+    assignment_fingerprint: str
 
     def __post_init__(self):
         for field_name in (
@@ -33,6 +35,8 @@ class ForecastArtifactIdentity:
             "model_version",
             "feature_version",
             "risk_context_version",
+            "assignment_revision",
+            "assignment_fingerprint",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value:
@@ -74,6 +78,7 @@ class ForecastArtifactStore:
                         """
                         SELECT market_signature, model_key, model_version,
                                feature_version, risk_context_version,
+                               assignment_revision, assignment_fingerprint,
                                format_version, payload_codec,
                                payload_checksum, payload
                         FROM forecast_artifacts
@@ -121,10 +126,11 @@ class ForecastArtifactStore:
                         INSERT INTO forecast_artifacts (
                             cache_key, market_signature, model_key,
                             model_version, feature_version,
-                            risk_context_version, format_version,
+                            risk_context_version, assignment_revision,
+                            assignment_fingerprint, format_version,
                             created_at, market_asof, payload_codec,
                             payload_checksum, payload
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(cache_key) DO UPDATE SET
                             created_at = excluded.created_at,
                             market_asof = excluded.market_asof,
@@ -139,6 +145,8 @@ class ForecastArtifactStore:
                             identity.model_version,
                             identity.feature_version,
                             identity.risk_context_version,
+                            identity.assignment_revision,
+                            identity.assignment_fingerprint,
                             FORMAT_VERSION,
                             datetime.now(timezone.utc).isoformat(),
                             _artifact_market_asof(artifact.coverage),
@@ -242,6 +250,8 @@ def _ensure_schema(connection):
             model_version TEXT NOT NULL,
             feature_version TEXT NOT NULL,
             risk_context_version TEXT NOT NULL,
+            assignment_revision TEXT NOT NULL,
+            assignment_fingerprint TEXT NOT NULL,
             format_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
             market_asof TEXT,
@@ -259,6 +269,20 @@ def _ensure_schema(connection):
     if "market_asof" not in columns:
         connection.execute(
             "ALTER TABLE forecast_artifacts ADD COLUMN market_asof TEXT"
+        )
+    if "assignment_revision" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE forecast_artifacts
+            ADD COLUMN assignment_revision TEXT NOT NULL DEFAULT 'legacy'
+            """
+        )
+    if "assignment_fingerprint" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE forecast_artifacts
+            ADD COLUMN assignment_fingerprint TEXT NOT NULL DEFAULT 'legacy'
+            """
         )
 
 
@@ -299,6 +323,8 @@ def _cache_key(identity, market_signature):
             identity.model_version,
             identity.feature_version,
             identity.risk_context_version,
+            identity.assignment_revision,
+            identity.assignment_fingerprint,
             FORMAT_VERSION,
         ],
         ensure_ascii=True,
@@ -325,6 +351,8 @@ def _decode_row(row, identity, market_signature):
         model_version,
         feature_version,
         risk_context_version,
+        assignment_revision,
+        assignment_fingerprint,
         format_version,
         payload_codec,
         payload_checksum,
@@ -336,6 +364,8 @@ def _decode_row(row, identity, market_signature):
         identity.model_version,
         identity.feature_version,
         identity.risk_context_version,
+        identity.assignment_revision,
+        identity.assignment_fingerprint,
         FORMAT_VERSION,
         PAYLOAD_CODEC,
     )
@@ -345,6 +375,8 @@ def _decode_row(row, identity, market_signature):
         model_version,
         feature_version,
         risk_context_version,
+        assignment_revision,
+        assignment_fingerprint,
         format_version,
         payload_codec,
     )

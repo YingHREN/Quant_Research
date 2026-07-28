@@ -39,6 +39,23 @@ def create_classification_database(path):
             agrees_with_sec INTEGER,
             conflict_reason TEXT
         );
+        CREATE TABLE group_assignments (
+            ticker TEXT NOT NULL,
+            rule_version TEXT NOT NULL,
+            effective_from TEXT NOT NULL,
+            effective_to TEXT,
+            observed_at TEXT NOT NULL,
+            sector_key TEXT NOT NULL,
+            sector_benchmark TEXT,
+            theme_keys_json TEXT NOT NULL,
+            theme_benchmarks_json TEXT NOT NULL,
+            primary_model_group TEXT NOT NULL,
+            classification_state TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            override_reason TEXT,
+            PRIMARY KEY (ticker, rule_version, effective_from)
+        );
         """
     )
     connection.executemany(
@@ -155,6 +172,33 @@ def create_classification_database(path):
         """,
         rows,
     )
+    connection.executemany(
+        """
+        INSERT INTO group_assignments
+            (ticker, rule_version, effective_from, effective_to, observed_at,
+             sector_key, sector_benchmark, theme_keys_json,
+             theme_benchmarks_json, primary_model_group,
+             classification_state, source, confidence, override_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                "AAA", "group_assignment_v1", "2026-01-01", None,
+                "2026-07-24", "technology", "XLK", '[]', '{}',
+                "technology", "classified", "sec_broad", 1.0, None,
+            ),
+            (
+                "BBB", "group_assignment_v1", "2026-01-01", None,
+                "2026-07-24", "financials", "XLF", '[]', '{}',
+                "financials", "classified", "market_behavior", 0.55, None,
+            ),
+            (
+                "CCC", "group_assignment_v1", "2026-01-01", None,
+                "2026-07-24", "unclassified_review", None, '[]', '{}',
+                "unclassified_review", "needs_review", "review", 0.0, None,
+            ),
+        ],
+    )
     connection.commit()
     connection.close()
 
@@ -171,6 +215,8 @@ class ResearchClassificationServiceTest(unittest.TestCase):
         self.assertEqual(payload["status"], "available")
         self.assertEqual(payload["asof"], "2026-07-24")
         self.assertEqual(payload["research_universe_count"], 3)
+        self.assertEqual(payload["group_assignment_coverage"], 0.75)
+        self.assertEqual(payload["group_assignment_review_count"], 1)
         self.assertEqual(payload["sector_counts"]["sec"], {"technology": 3})
         self.assertEqual(
             payload["sector_counts"]["market_behavior"],
@@ -188,6 +234,18 @@ class ResearchClassificationServiceTest(unittest.TestCase):
         self.assertEqual(behavior["common_days"], 200)
         self.assertAlmostEqual(behavior["confidence"], 0.55)
         self.assertIn("technology", behavior["conflict_reason"])
+        self.assertEqual(
+            payload["by_ticker"]["BBB"]["group_assignment"]
+            ["primary_model_group"],
+            "financials",
+        )
+        self.assertEqual(
+            payload["by_ticker"]["MISSING"]["group_assignment"],
+            {
+                "state": "missing",
+                "reason": "no_assignment_effective_at_asof",
+            },
+        )
 
     def test_missing_database_degrades_without_hiding_requested_tickers(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -200,6 +258,7 @@ class ResearchClassificationServiceTest(unittest.TestCase):
         self.assertEqual(payload["status"], "unavailable")
         self.assertEqual(payload["research_universe_count"], 0)
         self.assertEqual(payload["sector_counts"], {})
+        self.assertEqual(payload["group_assignment_coverage"], 0.0)
         self.assertEqual(
             set(payload["by_ticker"]),
             {"AAA", "BBB"},

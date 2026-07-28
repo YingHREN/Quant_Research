@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 import json
@@ -9,6 +10,7 @@ import math
 from pathlib import Path
 import sqlite3
 
+from data.group_assignments import GroupAssignment, resolve_group_assignment
 from data.point_in_time_universe import HistoricalMembership, SymbolChange
 
 
@@ -268,6 +270,25 @@ class ResearchPriceStore:
                 conflict_reason TEXT,
                 PRIMARY KEY (ticker, taxonomy, rule_version, asof)
             );
+            CREATE TABLE IF NOT EXISTS group_assignments (
+                ticker TEXT NOT NULL REFERENCES security_master(ticker),
+                rule_version TEXT NOT NULL,
+                effective_from TEXT NOT NULL,
+                effective_to TEXT,
+                observed_at TEXT NOT NULL,
+                sector_key TEXT NOT NULL,
+                sector_benchmark TEXT,
+                theme_keys_json TEXT NOT NULL,
+                theme_benchmarks_json TEXT NOT NULL,
+                primary_model_group TEXT NOT NULL,
+                classification_state TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                override_reason TEXT,
+                PRIMARY KEY (ticker, rule_version, effective_from)
+            );
+            CREATE INDEX IF NOT EXISTS idx_group_assignments_observed
+                ON group_assignments(ticker, observed_at);
             CREATE TABLE IF NOT EXISTS security_symbol_changes (
                 old_symbol TEXT NOT NULL,
                 new_symbol TEXT NOT NULL,
@@ -314,6 +335,74 @@ class ResearchPriceStore:
             self.connection.execute(
                 f"ALTER TABLE {table} ADD COLUMN {name} {declaration}"
             )
+
+    def persist_group_assignment(
+        self,
+        assignment,
+        *,
+        effective_from=None,
+        effective_to=None,
+        observed_at=None,
+    ):
+        """Store one immutable, point-in-time group assignment snapshot."""
+        if not isinstance(assignment, GroupAssignment):
+            raise TypeError("assignment must be a GroupAssignment")
+        effective_from = date.fromisoformat(
+            str(effective_from or assignment.effective_from)
+        ).isoformat()
+        effective_to = (
+            assignment.effective_to if effective_to is None else effective_to
+        )
+        effective_to = (
+            None
+            if effective_to is None
+            else date.fromisoformat(str(effective_to)).isoformat()
+        )
+        observed_at = date.fromisoformat(
+            str(observed_at or assignment.asof)
+        ).isoformat()
+        if effective_to is not None and effective_to <= effective_from:
+            raise ValueError("group assignment effective range is invalid")
+
+        self.connection.execute(
+            """
+            INSERT INTO group_assignments
+                (ticker, rule_version, effective_from, effective_to, observed_at,
+                 sector_key, sector_benchmark, theme_keys_json,
+                 theme_benchmarks_json, primary_model_group,
+                 classification_state, source, confidence, override_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(ticker, rule_version, effective_from) DO UPDATE SET
+                effective_to=excluded.effective_to,
+                observed_at=excluded.observed_at,
+                sector_key=excluded.sector_key,
+                sector_benchmark=excluded.sector_benchmark,
+                theme_keys_json=excluded.theme_keys_json,
+                theme_benchmarks_json=excluded.theme_benchmarks_json,
+                primary_model_group=excluded.primary_model_group,
+                classification_state=excluded.classification_state,
+                source=excluded.source,
+                confidence=excluded.confidence,
+                override_reason=excluded.override_reason
+            """,
+            (
+                assignment.ticker,
+                assignment.rule_version,
+                effective_from,
+                effective_to,
+                observed_at,
+                assignment.sector_key,
+                assignment.sector_benchmark,
+                _canonical_json(assignment.theme_keys),
+                _canonical_json(assignment.theme_benchmarks),
+                assignment.primary_model_group,
+                assignment.classification_state,
+                assignment.source,
+                assignment.confidence,
+                assignment.override_reason,
+            ),
+        )
+        return assignment
 
     def replace_universe_memberships(
         self,
@@ -447,6 +536,7 @@ class ResearchPriceStore:
         provider="eodhd",
         security_type="Common Stock",
         include_membership=True,
+        include_group_assignment=True,
     ):
         ticker = str(security.get("ticker") or "").strip().upper()
         if not ticker:
@@ -543,6 +633,16 @@ class ResearchPriceStore:
                         classification.get("rule_version") or "sec_sic_v1",
                         asof,
                     ),
+                )
+            if include_group_assignment:
+                assignment = resolve_group_assignment(
+                    ticker,
+                    {"sec": classification},
+                    asof,
+                )
+                self.persist_group_assignment(
+                    assignment,
+                    observed_at=asof,
                 )
             self.connection.executemany(
                 """
@@ -648,6 +748,23 @@ class ResearchPriceStore:
             split_rows=len(splits),
             dividend_rows=len(dividends),
         )
+
+
+def _canonical_json(value):
+    return json.dumps(
+        _json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _json_value(value):
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
+    return value
 
 
 def _normalize_split(row):

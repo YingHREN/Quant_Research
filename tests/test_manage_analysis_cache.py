@@ -24,6 +24,8 @@ def _forecast_identity(version):
         model_version="v4",
         feature_version=version,
         risk_context_version="risk-v1",
+        assignment_revision="11",
+        assignment_fingerprint="a" * 64,
     )
 
 

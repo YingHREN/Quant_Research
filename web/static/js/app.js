@@ -220,15 +220,201 @@ function classificationCard(titleKey, classification, kind, locale) {
   return card;
 }
 
+function groupingLabel(groupKey, kind, locale) {
+  if (!groupKey) return t("classification.unclassified", {}, locale);
+  const key = `grouping.${kind}.${groupKey}`;
+  const localized = t(key, {}, locale);
+  if (localized !== key) return localized;
+  if (kind === "sector") return sectorLabel(groupKey, locale);
+  return String(groupKey).replaceAll("_", " ");
+}
+
+function groupingReference(label, benchmarks) {
+  const references = Array.isArray(benchmarks)
+    ? benchmarks.filter((ticker) => typeof ticker === "string" && ticker)
+    : typeof benchmarks === "string" && benchmarks ? [benchmarks] : [];
+  return references.length ? `${label} / ${references.join("+")}` : label;
+}
+
+function groupingExplanation(label, explanation, locale) {
+  const details = document.createElement("details");
+  details.className = "grouping-explanation";
+  const trigger = document.createElement("summary");
+  trigger.textContent = "?";
+  trigger.setAttribute(
+    "aria-label",
+    t("grouping.explain", { label }, locale),
+  );
+  const content = document.createElement("small");
+  content.className = "classification-source";
+  content.textContent = explanation;
+  details.append(trigger, content);
+  return details;
+}
+
+function groupingLine(className, label, explanation, value, locale) {
+  const line = document.createElement("div");
+  line.className = className;
+  const text = document.createElement("span");
+  text.textContent = value;
+  line.setAttribute("aria-label", `${label}: ${value}`);
+  line.append(
+    text,
+    groupingExplanation(label, explanation, locale),
+  );
+  return line;
+}
+
+export function renderGroupAssignmentCard(assignment, locale = getLocale()) {
+  const card = document.createElement("article");
+  card.className = "classification-card classification-card-grouping";
+  const heading = document.createElement("h3");
+  heading.textContent = t("grouping.heading", {}, locale);
+  card.append(heading);
+
+  if (!assignment || assignment.state !== "assigned") {
+    card.dataset.state = "missing";
+    const unavailable = document.createElement("strong");
+    unavailable.className = "classification-sector";
+    unavailable.textContent = t("grouping.unavailable", {}, locale);
+    const unavailableLabel = t("grouping.unavailable", {}, locale);
+    card.append(
+      unavailable,
+      groupingExplanation(
+        unavailableLabel,
+        t("grouping.unavailableTooltip", {}, locale),
+        locale,
+      ),
+    );
+    if (assignment?.reason) {
+      const reason = document.createElement("small");
+      reason.className = "classification-source";
+      reason.textContent = t(
+        "grouping.reason",
+        { reason: assignment.reason },
+        locale,
+      );
+      card.append(reason);
+    }
+    return card;
+  }
+
+  const sector = groupingLabel(assignment.sector_key, "sector", locale);
+  card.append(
+    groupingLine(
+      "classification-sector grouping-sector",
+      t("grouping.sector", {}, locale),
+      t("grouping.sectorTooltip", {}, locale),
+      groupingReference(sector, assignment.sector_benchmark),
+      locale,
+    ),
+  );
+
+  const themes = Array.isArray(assignment.theme_keys)
+    ? assignment.theme_keys
+    : [];
+  themes.forEach((themeKey) => {
+    const theme = groupingLabel(themeKey, "theme", locale);
+    card.append(
+      groupingLine(
+        "classification-sector grouping-theme",
+        t("grouping.theme", {}, locale),
+        t("grouping.themeTooltip", {}, locale),
+        groupingReference(
+          theme,
+          assignment.theme_benchmarks?.[themeKey],
+        ),
+        locale,
+      ),
+    );
+  });
+
+  const primaryKey = assignment.primary_model_group;
+  const primaryKind = themes.includes(primaryKey) ? "theme" : "sector";
+  card.append(
+    groupingLine(
+      "classification-source grouping-primary",
+      t("grouping.primary", {}, locale),
+      t("grouping.primaryTooltip", {}, locale),
+      t(
+        "grouping.primaryValue",
+        { group: groupingLabel(primaryKey, primaryKind, locale) },
+        locale,
+      ),
+      locale,
+    ),
+  );
+
+  const metadata = document.createElement("div");
+  metadata.className = "classification-metadata";
+  appendClassificationText(
+    metadata,
+    "classification-chip",
+    t(
+      "grouping.source",
+      { source: assignment.source || "—" },
+      locale,
+    ),
+  );
+  if (Number.isFinite(assignment.confidence)) {
+    appendClassificationText(
+      metadata,
+      "classification-chip",
+      t(
+        "classification.confidence",
+        { value: `${Math.round(assignment.confidence * 100)}%` },
+        locale,
+      ),
+    );
+  }
+  const stateKey = `grouping.state.${assignment.classification_state}`;
+  const localizedState = t(stateKey, {}, locale);
+  appendClassificationText(
+    metadata,
+    "classification-chip",
+    localizedState === stateKey
+      ? String(assignment.classification_state || "—").replaceAll("_", " ")
+      : localizedState,
+  );
+  card.append(
+    metadata,
+    groupingExplanation(
+      t("grouping.status", {}, locale),
+      t("grouping.statusTooltip", {}, locale),
+      locale,
+    ),
+  );
+
+  if (assignment.override_reason) {
+    const reason = document.createElement("small");
+    reason.className = "classification-source";
+    reason.textContent = t(
+      "grouping.overrideReason",
+      { reason: assignment.override_reason },
+      locale,
+    );
+    card.append(reason);
+  }
+  card.dataset.state = assignment.classification_state || "assigned";
+  return card;
+}
+
 export function renderSecurityClassification(
   ticker = store.getState().selectedTicker,
   locale = store.getState().locale,
 ) {
   const container = elements.securityClassification;
   if (!container) return;
-  const row = store.getState().universe.find((item) => item.ticker === ticker);
+  const state = store.getState();
+  const row = state.universe.find((item) => item.ticker === ticker);
   const classification = row?.sector_classification;
-  if (!classification) {
+  const detailAssignment = (
+    state.stockPayload?.ticker === ticker
+      ? state.stockPayload.group_assignment
+      : null
+  );
+  const assignment = detailAssignment || row?.group_assignment;
+  if (!classification && !assignment) {
     const empty = document.createElement("p");
     empty.className = "secondary-copy";
     empty.textContent = t("classification.empty", {}, locale);
@@ -236,6 +422,11 @@ export function renderSecurityClassification(
     container.dataset.state = "unclassified";
     return;
   }
+  const visibleClassification = classification || {
+    state: "unclassified",
+    sec: null,
+    market_behavior: null,
+  };
   const stateKeys = {
     agree: "classification.agree",
     conflict: "classification.conflict",
@@ -247,7 +438,8 @@ export function renderSecurityClassification(
   heading.className = "classification-heading";
   const title = document.createElement("strong");
   title.textContent = t(
-    stateKeys[classification.state] || "classification.stateUnclassified",
+    stateKeys[visibleClassification.state]
+      || "classification.stateUnclassified",
     {},
     locale,
   );
@@ -257,41 +449,43 @@ export function renderSecurityClassification(
   grid.append(
     classificationCard(
       "classification.secHeading",
-      classification.sec,
+      visibleClassification.sec,
       "sec",
       locale,
     ),
     classificationCard(
       "classification.behaviorHeading",
-      classification.market_behavior,
+      visibleClassification.market_behavior,
       "behavior",
       locale,
     ),
+    renderGroupAssignmentCard(assignment, locale),
   );
   const children = [heading, grid];
   if (
-    classification.state === "conflict"
-    && classification.sec
-    && classification.market_behavior
+    visibleClassification.state === "conflict"
+    && visibleClassification.sec
+    && visibleClassification.market_behavior
   ) {
     const reason = document.createElement("p");
     reason.className = "classification-reason";
     reason.textContent = t(
       "classification.conflictReason",
       {
-        sec: sectorLabel(classification.sec.sector_key, locale),
+        sec: sectorLabel(visibleClassification.sec.sector_key, locale),
         behavior: sectorLabel(
-          classification.market_behavior.sector_key,
+          visibleClassification.market_behavior.sector_key,
           locale,
         ),
-        benchmark: classification.market_behavior.benchmark_ticker || "—",
+        benchmark:
+          visibleClassification.market_behavior.benchmark_ticker || "—",
       },
       locale,
     );
     children.push(reason);
   }
   container.replaceChildren(...children);
-  container.dataset.state = classification.state || "unclassified";
+  container.dataset.state = visibleClassification.state || "unclassified";
 }
 
 export function renderSecurityRelativeStrength(
@@ -558,6 +752,7 @@ function renderStockHeader(payload) {
     );
   }
   renderTopRiskBadge(payload.top_risk, elements.topRiskState, locale);
+  renderSecurityClassification(payload.ticker, locale);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
 

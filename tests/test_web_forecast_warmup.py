@@ -49,6 +49,54 @@ class ForecastCacheWarmerTest(unittest.TestCase):
         with self.assertRaises(TypeError):
             ForecastCacheWarmer(repository, mock.Mock())
 
+    def test_warmup_passes_effective_dated_assignments_to_forecast_service(self):
+        repository = mock.Mock()
+        repository.list_summaries.return_value = [
+            SimpleNamespace(latest_date="2026-07-24", inactive=False),
+        ]
+        history = pd.DataFrame(
+            {"Close": [1.0, 2.0]},
+            index=pd.DatetimeIndex(["2026-07-01", "2026-07-24"]),
+        )
+        repository.load_universe_histories.return_value = {"AAA": history}
+        assignment_repository = mock.Mock()
+        assignment_payload = {
+            "status": "available",
+            "revision": 17,
+            "by_ticker": {
+                "AAA": [
+                    {
+                        "state": "assigned",
+                        "ticker": "AAA",
+                        "effective_from": "2026-01-01",
+                        "effective_to": None,
+                    }
+                ]
+            },
+        }
+        assignment_repository.build_history.return_value = assignment_payload
+        service = mock.Mock()
+        service.prewarm.return_value = {
+            "row_count": 2,
+            "risk_row_count": 2,
+        }
+
+        ForecastCacheWarmer(
+            repository,
+            service,
+            group_assignment_repository=assignment_repository,
+        )()
+
+        assignment_repository.build_history.assert_called_once_with(
+            ("AAA",),
+            start_asof="2026-07-01",
+            end_asof="2026-07-24",
+        )
+        service.prewarm.assert_called_once_with(
+            {"AAA": history},
+            assignments=assignment_payload,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

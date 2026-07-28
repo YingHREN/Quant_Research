@@ -8,13 +8,17 @@ import json
 from pathlib import Path
 import sqlite3
 
+from data.group_assignments import (
+    audit_assignments,
+    historical_group_assignment_intervals,
+)
 from data.market_behavior import classify_market_behavior, write_market_behavior
 from data.research_store import (
     ResearchPriceStore,
     SCHEMA_VERSION,
     load_json_list,
 )
-from web.market_groups import REFERENCE_TICKERS, SECTOR_ETFS
+from web.market_groups import MARKET_GROUPS, REFERENCE_TICKERS, SECTOR_ETFS
 
 
 def _price_history(connection, ticker, asof):
@@ -34,6 +38,97 @@ def _price_history(connection, ticker, asof):
     ).fetchall()
 
 
+def _required_group_reference_tickers():
+    return frozenset(
+        ticker
+        for group in MARKET_GROUPS.values()
+        for ticker in (
+            *group.benchmark_tickers,
+            *group.fallback_benchmark_tickers,
+        )
+    )
+
+
+def _validate_reference_assets():
+    missing = sorted(
+        _required_group_reference_tickers() - set(REFERENCE_TICKERS)
+    )
+    if missing:
+        raise ValueError(
+            "missing standard reference ETF mappings: " + ", ".join(missing)
+        )
+
+
+def _validate_persisted_reference_assets(connection):
+    rows = connection.execute(
+        """
+        SELECT ticker
+        FROM security_master
+        WHERE security_type = 'ETF'
+        """
+    )
+    persisted = {str(row[0]) for row in rows}
+    missing = sorted(_required_group_reference_tickers() - persisted)
+    if missing:
+        raise ValueError(
+            "missing persisted reference ETF assets: " + ", ".join(missing)
+        )
+
+
+def _audit_failure(audit):
+    findings = {
+        key: audit.get(key, [])
+        for key in (
+            "invalid_benchmarks",
+            "invalid_benchmark_mappings",
+            "duplicate_themes",
+            "conflicting_assignments",
+            "invalid_classification_states",
+            "invalid_primary_model_groups",
+        )
+        if audit.get(key)
+    }
+    return findings or None
+
+
+def _catalog_common_stock_tickers(catalog):
+    tickers = tuple(
+        str(security.get("ticker") or "").strip().upper()
+        for security in catalog.get("securities", ())
+    )
+    duplicates = sorted(
+        ticker for ticker in set(tickers) if tickers.count(ticker) > 1
+    )
+    if duplicates:
+        raise ValueError(
+            "duplicate catalog common-stock tickers: " + ", ".join(duplicates)
+        )
+    return tickers
+
+
+def _assignment_evidence_start(connection, ticker):
+    row = connection.execute(
+        """
+        SELECT COALESCE(
+            (
+                SELECT first_date
+                FROM history_segments
+                WHERE ticker = ? AND is_current_segment = 1
+            ),
+            (
+                SELECT observed_at
+                FROM security_master
+                WHERE ticker = ?
+            )
+        )
+        """,
+        (ticker, ticker),
+    ).fetchone()
+    if row is None or row[0] is None:
+        raise ValueError(f"group assignment evidence is missing: {ticker}")
+    return row[0]
+
+
 def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     catalog_path = Path(catalog_path)
     raw_root = Path(raw_root)
@@ -41,6 +136,8 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
     imported_at = imported_at or datetime.now(timezone.utc).isoformat()
     catalog = json.loads(catalog_path.read_text())
     snapshot_date = raw_root.name
+    catalog_tickers = _catalog_common_stock_tickers(catalog)
+    _validate_reference_assets()
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     if temporary.exists():
         temporary.unlink()
@@ -60,6 +157,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     load_json_list(raw_root / "dividends" / f"{ticker}.json"),
                     snapshot_date=snapshot_date,
                     imported_at=imported_at,
+                    include_group_assignment=False,
                 )
                 summaries.append(summary)
             except Exception as exc:
@@ -87,6 +185,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     imported_at=imported_at,
                     security_type="ETF",
                     include_membership=False,
+                    include_group_assignment=False,
                 )
                 summaries.append(summary)
             except Exception as exc:
@@ -102,12 +201,14 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 f"{len(errors)} securities failed: "
                 + json.dumps(errors[:10], ensure_ascii=False)
             )
+        _validate_persisted_reference_assets(connection)
 
         reference_histories = {
             ticker: _price_history(connection, ticker, catalog["asof"])
             for ticker in ("SPY", *SECTOR_ETFS.values())
         }
         behavior_count = 0
+        assignments = []
         with connection:
             for security in catalog["securities"]:
                 ticker = security["ticker"]
@@ -119,12 +220,55 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     histories,
                     ticker,
                     SECTOR_ETFS,
-                    sec_sector=security["classification"]["sector_key"],
+                    sec_sector=(security.get("classification") or {}).get(
+                        "sector_key"
+                    ),
                     asof=catalog["asof"],
                 )
+                market_behavior = None
                 if result is not None:
                     write_market_behavior(connection, ticker, result)
                     behavior_count += 1
+                    market_behavior = {
+                        "sector_key": result.sector_key,
+                        "benchmark_ticker": result.benchmark_ticker,
+                        "confidence": result.confidence,
+                        "rule_version": result.rule_version,
+                        "observed_at": result.asof,
+                    }
+                ticker_assignments = historical_group_assignment_intervals(
+                    ticker,
+                    {
+                        "sec": security.get("classification") or {},
+                        "market_behavior": market_behavior,
+                    },
+                    observed_at=catalog["asof"],
+                    evidence_start=_assignment_evidence_start(
+                        connection,
+                        ticker,
+                    ),
+                )
+                for assignment in ticker_assignments:
+                    store.persist_group_assignment(
+                        assignment,
+                        observed_at=catalog["asof"],
+                    )
+                    assignments.append(assignment)
+            assignment_audit = audit_assignments(assignments)
+            audit_failure = _audit_failure(assignment_audit)
+            if audit_failure:
+                raise ValueError(
+                    "group assignment audit failed: "
+                    + json.dumps(audit_failure, ensure_ascii=False, sort_keys=True)
+                )
+            persisted_assignment_count = connection.execute(
+                "SELECT COUNT(DISTINCT ticker) FROM group_assignments"
+            ).fetchone()[0]
+            if persisted_assignment_count != len(catalog_tickers):
+                raise ValueError(
+                    "persisted group assignment count mismatch: "
+                    f"expected {len(catalog_tickers)}, got {persisted_assignment_count}"
+                )
             connection.execute(
                 """
                 INSERT INTO import_runs
@@ -140,6 +284,30 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                     len(summaries),
                     sum(summary.daily_rows for summary in summaries),
                 ),
+            )
+        from audit_group_assignments import audit_database, strict_failure
+
+        persisted_audit = audit_database(
+            temporary,
+            asof=catalog["asof"],
+        )
+        if strict_failure(persisted_audit):
+            raise ValueError(
+                "persisted group assignment audit failed: "
+                + json.dumps(
+                    {
+                        "coverage": persisted_audit["coverage"],
+                        "historical_coverage": persisted_audit[
+                            "historical_coverage"
+                        ],
+                        "invalid_benchmarks": persisted_audit[
+                            "invalid_benchmarks"
+                        ],
+                        "conflicts": persisted_audit["conflicts"],
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
             )
         integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
         if integrity != "ok":
@@ -161,6 +329,11 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                 "SELECT COUNT(*) FROM dividends"
             ).fetchone()[0],
             "market_behavior": behavior_count,
+            "group_assignment_count": persisted_assignment_count,
+            "group_assignment_review_count": assignment_audit[
+                "needs_review_count"
+            ],
+            "group_assignment_coverage": assignment_audit["coverage"],
             "integrity": integrity,
         }
         connection.close()

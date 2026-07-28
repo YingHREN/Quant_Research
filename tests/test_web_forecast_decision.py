@@ -1,10 +1,12 @@
 import unittest
 from unittest import mock
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
 from pandas.testing import assert_frame_equal
 
+from web.forecasts import decision as forecast_decision_module
 from web.forecasts.base import ForecastResult
 from web.forecasts.decision import (
     ForecastDecision,
@@ -211,6 +213,10 @@ class ForecastRiskContextTest(unittest.TestCase):
                 "persistent_risk_age_sessions",
                 "persistent_risk_sources",
                 "individual_risk_score",
+                "sector_group_key",
+                "sector_risk_score",
+                "theme_group_key",
+                "theme_risk_score",
                 "group_risk_score",
                 "slow_decline_risk_score",
                 "high_level_distribution_score",
@@ -333,6 +339,573 @@ class ForecastRiskContextTest(unittest.TestCase):
         self.assertEqual(
             tuple(group.key for group in groups),
             ("semiconductor", "software"),
+        )
+
+    def test_assignment_driven_context_keeps_sector_and_theme_evidence(self):
+        assignments = {
+            "SNDK": {
+                "state": "assigned",
+                "ticker": "SNDK",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "AMD": {
+                "state": "assigned",
+                "ticker": "AMD",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "NVDA": {
+                "state": "assigned",
+                "ticker": "NVDA",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "SNDK": rising(slope=0.4),
+            "AMD": rising(slope=0.35),
+            "NVDA": rising(slope=0.45),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertFalse(sndk.empty)
+        self.assertTrue(sndk["high_level_distribution_state"].notna().all())
+        self.assertEqual(set(sndk["sector_group_key"]), {"technology"})
+        self.assertEqual(set(sndk["theme_group_key"]), {"semiconductor"})
+        self.assertTrue(sndk["sector_risk_score"].notna().any())
+        self.assertTrue(sndk["theme_risk_score"].notna().any())
+
+    def test_effective_dated_membership_changes_within_one_context_build(self):
+        assignments = {
+            "SNDK": [
+                {
+                    "state": "assigned",
+                    "ticker": "SNDK",
+                    "effective_from": "2026-01-01",
+                    "effective_to": "2026-07-01",
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": ["software"],
+                    "theme_benchmarks": {"software": ["IGV", "XSW"]},
+                    "primary_model_group": "software",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "SNDK",
+                    "effective_from": "2026-07-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": ["semiconductor"],
+                    "theme_benchmarks": {
+                        "semiconductor": ["SOXX", "SMH"],
+                    },
+                    "primary_model_group": "semiconductor",
+                },
+            ]
+        }
+        histories = {
+            "QQQ": rising(end="2026-07-10"),
+            "XLK": rising(slope=0.2, end="2026-07-10"),
+            "IGV": rising(slope=0.15, end="2026-07-10"),
+            "XSW": rising(slope=0.12, end="2026-07-10"),
+            "SOXX": rising(slope=0.3, end="2026-07-10"),
+            "SMH": rising(slope=0.3, end="2026-07-10"),
+            "SNDK": rising(slope=0.4, end="2026-07-10"),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertEqual(
+            set(sndk.loc[sndk.index < "2026-07-01", "theme_group_key"]),
+            {"software"},
+        )
+        self.assertEqual(
+            set(sndk.loc[sndk.index >= "2026-07-01", "theme_group_key"]),
+            {"semiconductor"},
+        )
+
+    def test_group_rolling_state_receives_date_masked_membership_histories(self):
+        assignments = {
+            ticker: [
+                {
+                    "state": "assigned",
+                    "ticker": ticker,
+                    "effective_from": "2026-01-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                }
+            ]
+            for ticker in ("A", "B")
+        }
+        assignments["OLD"] = [
+            {
+                **assignments["A"][0],
+                "ticker": "OLD",
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["A"][0],
+                "ticker": "OLD",
+                "effective_from": "2026-07-01",
+                "sector_key": "financials",
+                "sector_benchmark": "XLF",
+                "primary_model_group": "financials",
+            },
+        ]
+        assignments["NEW"] = [
+            {
+                **assignments["OLD"][1],
+                "ticker": "NEW",
+                "effective_from": "2026-01-01",
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["OLD"][0],
+                "ticker": "NEW",
+                "effective_from": "2026-07-01",
+                "effective_to": None,
+            },
+        ]
+        histories = {
+            "QQQ": rising(periods=140, end="2026-07-20"),
+            "XLK": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "XLF": rising(periods=140, slope=0.1, end="2026-07-20"),
+            "A": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "B": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "OLD": rising(periods=140, slope=-0.3, end="2026-07-20"),
+            "NEW": rising(periods=140, slope=0.4, end="2026-07-20"),
+        }
+        observed = []
+        real_builder = forecast_decision_module.build_group_regime_state
+
+        def probe(scoped_histories, group, *, membership_intervals=None):
+            if group.key == "technology":
+                observed.append(
+                    (
+                        set(group.constituent_tickers),
+                        membership_intervals["OLD"],
+                        membership_intervals["NEW"],
+                    )
+                )
+            return real_builder(
+                scoped_histories,
+                group,
+                membership_intervals=membership_intervals,
+            )
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_regime_state",
+            side_effect=probe,
+        ):
+            context = build_forecast_risk_context(histories, assignments)
+
+        self.assertEqual(
+            observed,
+            [
+                (
+                    {"A", "B", "NEW", "OLD"},
+                    (
+                        (
+                            pd.Timestamp("2026-01-01"),
+                            pd.Timestamp("2026-07-01"),
+                        ),
+                    ),
+                    ((pd.Timestamp("2026-07-01"), None),),
+                )
+            ],
+        )
+        self.assertIn(
+            pd.Timestamp("2026-06-30"),
+            context.xs("A", level="ticker").index,
+        )
+        self.assertIn(
+            pd.Timestamp("2026-07-01"),
+            context.xs("NEW", level="ticker").index,
+        )
+
+    def test_same_group_rejoin_resets_pre_departure_risk_memory(self):
+        assignments = {
+            "T": [
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2025-12-01",
+                    "effective_to": "2026-03-02",
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2026-03-02",
+                    "effective_to": "2026-05-01",
+                    "sector_key": "financials",
+                    "sector_benchmark": "XLF",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "financials",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2026-05-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                },
+            ]
+        }
+        base = rising(periods=180, slope=0.2, end="2026-07-10")
+        shocked = base.copy(deep=True)
+        shock_dates = shocked.loc[
+            (shocked.index >= "2026-02-16")
+            & (shocked.index < "2026-03-02")
+        ].index
+        shocked.loc[shock_dates, "Close"] -= np.linspace(
+            2.0,
+            28.0,
+            len(shock_dates),
+        )
+        shocked.loc[shock_dates, "Open"] = shocked.loc[
+            shock_dates, "Close"
+        ] + 2.0
+        shocked.loc[shock_dates, "High"] = shocked.loc[
+            shock_dates, "Open"
+        ] + 1.0
+        shocked.loc[shock_dates, "Low"] = shocked.loc[
+            shock_dates, "Close"
+        ] - 1.0
+        shocked.loc[shock_dates, "Volume"] = 3_000_000.0
+        references = {
+            "QQQ": rising(periods=180, end="2026-07-10"),
+            "XLK": rising(periods=180, slope=0.2, end="2026-07-10"),
+            "XLF": rising(periods=180, slope=0.1, end="2026-07-10"),
+        }
+
+        clean_context = build_forecast_risk_context(
+            {**references, "T": base},
+            assignments,
+        ).xs("T", level="ticker")
+        shocked_context = build_forecast_risk_context(
+            {**references, "T": shocked},
+            assignments,
+        ).xs("T", level="ticker")
+        after_rejoin = clean_context.index >= "2026-05-01"
+
+        assert_frame_equal(
+            shocked_context.loc[after_rejoin],
+            clean_context.loc[after_rejoin],
+        )
+
+    def test_first_evidence_dates_do_not_create_global_full_builds(self):
+        first_dates = pd.bdate_range("2025-01-02", periods=193)
+        assignments = {
+            f"T{offset:03d}": [
+                {
+                    "state": "assigned",
+                    "ticker": f"T{offset:03d}",
+                    "effective_from": start.strftime("%Y-%m-%d"),
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                }
+            ]
+            for offset, start in enumerate(first_dates)
+        }
+        assignments["T000"] = [
+            {
+                **assignments["T000"][0],
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["T000"][0],
+                "effective_from": "2026-07-01",
+                "sector_key": "financials",
+                "sector_benchmark": "XLF",
+                "primary_model_group": "financials",
+            },
+        ]
+        histories = {
+            "QQQ": rising(periods=80, end="2026-07-10"),
+            "XLK": rising(periods=80, slope=0.2, end="2026-07-10"),
+            "XLF": rising(periods=80, slope=0.1, end="2026-07-10"),
+            **{
+                ticker: rising(
+                    periods=80,
+                    slope=0.05 + offset / 10_000,
+                    end="2026-07-10",
+                )
+                for offset, ticker in enumerate(assignments)
+            },
+        }
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            wraps=forecast_decision_module.build_group_score_frame,
+        ) as group_score_builder, mock.patch.object(
+            forecast_decision_module,
+            "build_high_level_distribution_state",
+            wraps=forecast_decision_module.build_high_level_distribution_state,
+        ) as high_level_builder:
+            started = perf_counter()
+            context = build_forecast_risk_context(histories, assignments)
+            elapsed = perf_counter() - started
+
+        self.assertEqual(group_score_builder.call_count, 2)
+        self.assertEqual(high_level_builder.call_count, 194)
+        self.assertLess(elapsed, 35.0)
+        self.assertFalse(context.empty)
+
+    def test_related_membership_does_not_duplicate_dynamic_context_rows(self):
+        assignments = {
+            "NBIS": {
+                "state": "assigned",
+                "ticker": "NBIS",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "NBIS": rising(slope=0.4),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+
+        self.assertFalse(context.index.has_duplicates)
+        self.assertEqual(
+            set(context.index.get_level_values("ticker")),
+            {"NBIS"},
+        )
+        self.assertEqual(
+            set(context.xs("NBIS", level="ticker")["sector_group_key"]),
+            {"technology"},
+        )
+
+    def test_missing_sector_and_theme_benchmarks_leave_group_risk_unavailable(self):
+        assignments = {
+            ticker: {
+                "state": "assigned",
+                "ticker": ticker,
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            }
+            for ticker in ("SNDK", "AMD", "NVDA")
+        }
+        histories = {
+            "QQQ": rising(),
+            "SNDK": rising(slope=0.4),
+            "AMD": rising(slope=0.35),
+            "NVDA": rising(slope=0.45),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertTrue(sndk["sector_risk_score"].isna().all())
+        self.assertTrue(sndk["theme_risk_score"].isna().all())
+        self.assertTrue(sndk["group_risk_score"].isna().all())
+        self.assertTrue(sndk["high_level_distribution_state"].notna().all())
+        self.assertTrue(
+            sndk["persistent_risk_sources"].map(
+                lambda sources: "group" not in sources
+            ).all()
+        )
+
+    def test_dynamic_context_invokes_full_ticker_builders_once_for_nbis(self):
+        assignments = {
+            "NBIS": {
+                "state": "assigned",
+                "ticker": "NBIS",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "NBIS": rising(slope=0.4),
+        }
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            wraps=forecast_decision_module.build_group_score_frame,
+        ) as group_score_builder, mock.patch.object(
+            forecast_decision_module,
+            "build_high_level_distribution_state",
+            wraps=forecast_decision_module.build_high_level_distribution_state,
+        ) as high_level_builder:
+            context = build_forecast_risk_context(histories, assignments)
+
+        self.assertEqual(group_score_builder.call_count, 1)
+        self.assertEqual(high_level_builder.call_count, 1)
+        self.assertEqual(
+            set(context.index.get_level_values("ticker")),
+            {"NBIS"},
+        )
+
+    def test_dynamic_context_scopes_histories_for_each_active_group(self):
+        assignments = {
+            "SNDK": {
+                "state": "assigned",
+                "ticker": "SNDK",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["semiconductor"],
+                "theme_benchmarks": {
+                    "semiconductor": ["SOXX", "SMH"],
+                },
+                "primary_model_group": "semiconductor",
+            },
+            "ADBE": {
+                "state": "assigned",
+                "ticker": "ADBE",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": ["software"],
+                "theme_benchmarks": {
+                    "software": ["IGV", "XSW"],
+                },
+                "primary_model_group": "software",
+            },
+        }
+        histories = {
+            "QQQ": rising(),
+            "XLK": rising(slope=0.2),
+            "SOXX": rising(slope=0.3),
+            "SMH": rising(slope=0.3),
+            "IGV": rising(slope=0.15),
+            "XSW": rising(slope=0.12),
+            "SNDK": rising(slope=0.4),
+            "ADBE": rising(slope=0.1),
+            "NBIS": rising(slope=0.25),
+            "UNRELATED": rising(slope=0.05),
+        }
+        observed = {"score": [], "regime": [], "slow": []}
+
+        def probe(builder, bucket):
+            def wrapped(scoped_histories, group):
+                observed[bucket].append(
+                    (group.key, frozenset(scoped_histories))
+                )
+                return builder(scoped_histories, group)
+
+            return wrapped
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            side_effect=probe(
+                forecast_decision_module.build_group_score_frame,
+                "score",
+            ),
+        ), mock.patch.object(
+            forecast_decision_module,
+            "build_group_regime_state",
+            side_effect=probe(
+                forecast_decision_module.build_group_regime_state,
+                "regime",
+            ),
+        ), mock.patch.object(
+            forecast_decision_module,
+            "build_slow_decline_state",
+            side_effect=probe(
+                forecast_decision_module.build_slow_decline_state,
+                "slow",
+            ),
+        ):
+            context = build_forecast_risk_context(histories, assignments)
+
+        score_scopes = dict(observed["score"])
+        slow_scopes = dict(observed["slow"])
+        regime_scopes = dict(observed["regime"])
+        expected_primary_scopes = {
+            "semiconductor": frozenset(
+                ("SNDK", "SOXX", "SMH", "QQQ")
+            ),
+            "software": frozenset(
+                ("ADBE", "IGV", "XSW", "XLK", "QQQ")
+            ),
+        }
+        self.assertEqual(score_scopes, expected_primary_scopes)
+        self.assertEqual(slow_scopes, expected_primary_scopes)
+        self.assertEqual(
+            regime_scopes["semiconductor"],
+            frozenset(("SNDK", "NBIS", "SOXX", "SMH", "QQQ")),
+        )
+        self.assertEqual(
+            regime_scopes["technology"],
+            frozenset(("SNDK", "ADBE", "XLK", "QQQ")),
+        )
+        self.assertNotIn(
+            "UNRELATED",
+            set().union(*(set(scope) for scope in regime_scopes.values())),
+        )
+        self.assertTrue(
+            context.xs("SNDK", level="ticker")[
+                "individual_risk_score"
+            ].notna().any()
+        )
+        self.assertTrue(
+            context.xs("ADBE", level="ticker")[
+                "individual_risk_score"
+            ].notna().any()
         )
 
 

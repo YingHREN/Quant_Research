@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from collections.abc import Mapping
 import math
 from numbers import Integral, Real
@@ -18,7 +18,12 @@ from research.high_level_distribution import (
 from research.slow_decline import build_slow_decline_state
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
-from web.market_groups import modeled_market_groups
+from web.market_groups import (
+    MARKET_GROUPS,
+    SECTOR_ETFS,
+    modeled_market_groups,
+    resolved_market_groups,
+)
 
 
 DECISION_RISK_STATES = frozenset(
@@ -37,6 +42,10 @@ RISK_CONTEXT_COLUMNS = (
     "persistent_risk_age_sessions",
     "persistent_risk_sources",
     "individual_risk_score",
+    "sector_group_key",
+    "sector_risk_score",
+    "theme_group_key",
+    "theme_risk_score",
     "group_risk_score",
     "slow_decline_risk_score",
     "high_level_distribution_score",
@@ -673,18 +682,55 @@ class ForecastDecisionPolicy:
 
 def build_forecast_risk_context(
     histories: Mapping[str, pd.DataFrame],
+    assignments=None,
 ) -> pd.DataFrame:
     """Return causal remembered-risk rows for explicitly modeled tickers."""
     if not isinstance(histories, Mapping):
         raise TypeError("histories must be a mapping")
+    assignment_histories = _effective_assignment_histories(assignments)
+    if assignment_histories is not None:
+        return _build_effective_dated_risk_context(
+            histories,
+            assignment_histories,
+        )
+    return _build_forecast_risk_context_snapshot(histories, assignments)
+
+
+def _build_forecast_risk_context_snapshot(histories, assignments):
+    dynamic_membership = assignments is not None
+    groups = (
+        resolved_market_groups(assignments, histories)
+        if dynamic_membership
+        else modeled_market_groups()
+    )
+    assignment_by_ticker = (
+        _normalized_assignments(assignments) if dynamic_membership else {}
+    )
+    groups_by_key = {group.key: group for group in groups}
+    if dynamic_membership:
+        groups_by_key = _evidence_groups(
+            groups_by_key,
+            assignment_by_ticker,
+            histories,
+        )
+    group_states = {}
     frames = []
     seen_tickers = set()
-    for group in modeled_market_groups():
+    for group in groups:
         mapped = tuple(
             dict.fromkeys(
-                (*group.constituent_tickers, *group.related_tickers)
+                (
+                    group.constituent_tickers
+                    if dynamic_membership
+                    else (
+                        *group.constituent_tickers,
+                        *group.related_tickers,
+                    )
+                )
             )
         )
+        if not mapped:
+            continue
         duplicates = seen_tickers.intersection(mapped)
         if duplicates:
             raise ValueError(
@@ -692,7 +738,16 @@ def build_forecast_risk_context(
                 + ", ".join(sorted(duplicates))
             )
         seen_tickers.update(mapped)
-        scores = build_group_score_frame(histories, group)
+        ticker_group = (
+            replace(group, related_tickers=())
+            if dynamic_membership and group.related_tickers
+            else group
+        )
+        ticker_histories = _group_scoped_histories(
+            histories,
+            ticker_group,
+        )
+        scores = build_group_score_frame(ticker_histories, ticker_group)
         if scores.empty:
             continue
         present = scores.index.get_level_values("ticker").isin(mapped)
@@ -715,7 +770,12 @@ def build_forecast_risk_context(
         selected = _attach_additional_risk_sources(
             selected,
             histories,
-            group,
+            ticker_histories,
+            ticker_group,
+            groups_by_key,
+            group_states,
+            assignment_by_ticker,
+            dynamic_membership=dynamic_membership,
         )
         if not selected.empty:
             frames.append(selected)
@@ -731,23 +791,470 @@ def build_forecast_risk_context(
     return result.loc[:, RISK_CONTEXT_COLUMNS]
 
 
-def _attach_additional_risk_sources(selected, histories, group):
-    group_state = build_group_regime_state(histories, group)
-    slow_state = build_slow_decline_state(histories, group)
-    top_state = _build_high_level_states(histories, group, group_state)
-    dates = selected.index.get_level_values("observation_date")
-    selected["group_risk_raw_score"] = group_state["raw_score"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_score"] = group_state["state_score"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_state"] = group_state["state"].reindex(
-        dates
-    ).to_numpy()
-    selected["group_risk_age"] = group_state[
-        "memory_age_sessions"
-    ].reindex(dates).to_numpy()
+def _effective_assignment_histories(assignments):
+    if assignments is None or not isinstance(assignments, Mapping):
+        return None
+    if all(isinstance(value, Mapping) for value in assignments.values()):
+        return None
+    normalized = {}
+    for raw_ticker, raw_records in assignments.items():
+        ticker = str(raw_ticker).strip().upper()
+        if not ticker:
+            continue
+        if not isinstance(raw_records, (list, tuple)):
+            raise TypeError(
+                "effective-dated assignments must contain interval lists"
+            )
+        records = []
+        for raw_record in raw_records:
+            if not isinstance(raw_record, Mapping):
+                raise TypeError("assignment history rows must be mappings")
+            if raw_record.get("state", "assigned") != "assigned":
+                continue
+            try:
+                effective_from = pd.Timestamp(
+                    raw_record["effective_from"]
+                ).normalize()
+                effective_to = (
+                    None
+                    if raw_record.get("effective_to") is None
+                    else pd.Timestamp(raw_record["effective_to"]).normalize()
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("invalid assignment history interval") from exc
+            if (
+                effective_from.tz is not None
+                or (effective_to is not None and effective_to.tz is not None)
+                or (
+                    effective_to is not None
+                    and effective_from >= effective_to
+                )
+            ):
+                raise ValueError("invalid assignment history interval")
+            record = dict(raw_record)
+            records.append((effective_from, effective_to, record))
+        records.sort(key=lambda value: value[0])
+        outer = None
+        for record in records:
+            if outer is not None and (
+                outer[1] is None or record[0] < outer[1]
+            ):
+                raise ValueError("overlapping assignment history intervals")
+            if (
+                outer is None
+                or (
+                    outer[1] is not None
+                    and (record[1] is None or outer[1] < record[1])
+                )
+            ):
+                outer = record
+        normalized[ticker] = tuple(records)
+    return normalized
+
+
+def _build_effective_dated_risk_context(histories, assignment_histories):
+    observed_indexes = [
+        history.index
+        for history in histories.values()
+        if isinstance(history, pd.DataFrame)
+        and not history.empty
+        and isinstance(history.index, pd.DatetimeIndex)
+    ]
+    if not observed_indexes:
+        return _build_forecast_risk_context_snapshot(histories, {})
+    causal_histories = _histories_from_assignment_evidence(
+        histories,
+        assignment_histories,
+    )
+    groups_by_key = _effective_evidence_groups(
+        assignment_histories,
+        causal_histories,
+    )
+    group_states = {
+        key: _build_effective_group_state(
+            causal_histories,
+            assignment_histories,
+            group,
+        )
+        for key, group in groups_by_key.items()
+    }
+    frames = []
+    for group in _effective_primary_groups(
+        assignment_histories,
+        causal_histories,
+    ):
+        for workload_group, ticker_histories in _effective_primary_workloads(
+            causal_histories,
+            assignment_histories,
+            group,
+        ):
+            scores = build_group_score_frame(
+                ticker_histories,
+                workload_group,
+            )
+            if scores.empty:
+                continue
+            selected = scores.loc[
+                :,
+                [
+                    "downside_risk_score",
+                    "downside_risk_state_score",
+                    "downside_risk_state",
+                    "downside_risk_memory_age_sessions",
+                ],
+            ].rename(
+                columns={
+                    "downside_risk_score": "individual_risk_raw_score",
+                    "downside_risk_state_score": "individual_risk_score",
+                    "downside_risk_state": "individual_risk_state",
+                    "downside_risk_memory_age_sessions": "individual_risk_age",
+                }
+            )
+            selected = _attach_additional_risk_sources(
+                selected,
+                causal_histories,
+                ticker_histories,
+                workload_group,
+                groups_by_key,
+                group_states,
+                {},
+                dynamic_membership=True,
+                assignment_histories=assignment_histories,
+            )
+            if not selected.empty:
+                frames.append(selected)
+    if not frames:
+        return _build_forecast_risk_context_snapshot(
+            causal_histories,
+            {},
+        )
+    result = pd.concat(frames).sort_index()
+    if result.index.has_duplicates:
+        raise ValueError("duplicate forecast risk context keys")
+    return result.loc[:, RISK_CONTEXT_COLUMNS]
+
+
+def _effective_primary_groups(assignment_histories, histories):
+    available = set(histories)
+    members = {key: set() for key in MARKET_GROUPS}
+    for ticker, records in assignment_histories.items():
+        if ticker not in available:
+            continue
+        for _start, _finish, record in records:
+            key = str(record.get("primary_model_group") or "").strip()
+            if key in members:
+                members[key].add(ticker)
+    return tuple(
+        replace(
+            MARKET_GROUPS[key],
+            constituent_tickers=tuple(sorted(tickers)),
+            related_tickers=(),
+        )
+        for key, tickers in members.items()
+        if tickers
+    )
+
+
+def _effective_evidence_groups(assignment_histories, histories):
+    available = set(histories)
+    members = {key: set() for key in MARKET_GROUPS}
+    for ticker, records in assignment_histories.items():
+        if ticker not in available:
+            continue
+        for _start, _finish, record in records:
+            for key in _assignment_group_keys(record):
+                if key in members:
+                    members[key].add(ticker)
+    return {
+        key: replace(
+            MARKET_GROUPS[key],
+            constituent_tickers=tuple(sorted(tickers)),
+            related_tickers=tuple(
+                ticker
+                for ticker in MARKET_GROUPS[key].related_tickers
+                if ticker in available
+            ),
+        )
+        for key, tickers in members.items()
+        if tickers
+    }
+
+
+def _build_effective_group_state(histories, assignment_histories, group):
+    scoped = _group_scoped_histories(histories, group)
+    membership_intervals = {
+        ticker: _group_membership_intervals(
+            assignment_histories.get(ticker, ()),
+            group.key,
+            membership="evidence",
+        )
+        for ticker in group.constituent_tickers
+    }
+    return _benchmark_dependent_group_state(
+        build_group_regime_state(
+            scoped,
+            group,
+            membership_intervals=membership_intervals,
+        ),
+        scoped,
+        group,
+    )
+
+
+def _effective_primary_workloads(
+    histories,
+    assignment_histories,
+    group,
+):
+    single_members = []
+    repeated = []
+    for ticker in group.constituent_tickers:
+        intervals = _group_membership_intervals(
+            assignment_histories.get(ticker, ()),
+            group.key,
+            membership="primary",
+        )
+        if len(intervals) == 1:
+            single_members.append((ticker, intervals[0]))
+        elif intervals:
+            repeated.append((ticker, intervals))
+
+    if single_members:
+        workload_group = replace(
+            group,
+            constituent_tickers=tuple(
+                ticker for ticker, _interval in single_members
+            ),
+        )
+        scoped = _group_scoped_histories(histories, workload_group)
+        for ticker, interval in single_members:
+            scoped[ticker] = _history_for_intervals(
+                histories[ticker],
+                (interval,),
+            )
+        yield workload_group, scoped
+
+    for ticker, intervals in repeated:
+        workload_group = replace(
+            group,
+            constituent_tickers=(ticker,),
+        )
+        for interval in intervals:
+            scoped = _group_scoped_histories(histories, workload_group)
+            scoped[ticker] = _history_for_intervals(
+                histories[ticker],
+                (interval,),
+            )
+            yield workload_group, scoped
+
+
+def _group_membership_intervals(records, group_key, *, membership):
+    intervals = []
+    for effective_from, effective_to, record in records:
+        if membership == "primary":
+            applies = (
+                str(record.get("primary_model_group") or "").strip()
+                == group_key
+            )
+        else:
+            applies = group_key in _assignment_group_keys(record)
+        if not applies:
+            continue
+        if intervals and intervals[-1][1] == effective_from:
+            intervals[-1] = (intervals[-1][0], effective_to)
+        else:
+            intervals.append((effective_from, effective_to))
+    return tuple(intervals)
+
+
+def _history_for_intervals(history, intervals):
+    checked = history.copy(deep=True)
+    checked.index = checked.index.tz_localize(None)
+    parts = []
+    for effective_from, effective_to in intervals:
+        selected = checked.loc[
+            (checked.index >= effective_from)
+            & (
+                True
+                if effective_to is None
+                else checked.index < effective_to
+            )
+        ]
+        if not selected.empty:
+            parts.append(selected)
+    if not parts:
+        return checked.iloc[0:0]
+    return pd.concat(parts).sort_index()
+
+
+def _histories_from_assignment_evidence(histories, assignment_histories):
+    causal = dict(histories)
+    for ticker, records in assignment_histories.items():
+        history = histories.get(ticker)
+        if (
+            not records
+            or not isinstance(history, pd.DataFrame)
+            or history.empty
+            or not isinstance(history.index, pd.DatetimeIndex)
+        ):
+            continue
+        checked = history.copy(deep=True)
+        checked.index = checked.index.tz_localize(None)
+        causal[ticker] = checked.loc[checked.index >= records[0][0]]
+    return causal
+
+
+def _normalized_assignments(assignments):
+    normalized = {}
+    for raw_ticker, assignment in assignments.items():
+        ticker = str(raw_ticker).strip().upper()
+        if (
+            not ticker
+            or ticker in normalized
+            or not isinstance(assignment, Mapping)
+            or assignment.get("state", "assigned") != "assigned"
+        ):
+            continue
+        normalized[ticker] = assignment
+    return normalized
+
+
+def _group_scoped_histories(histories, group):
+    tickers = tuple(
+        dict.fromkeys(
+            (
+                *group.constituent_tickers,
+                *group.related_tickers,
+                *group.benchmark_tickers,
+                *group.fallback_benchmark_tickers,
+                "QQQ",
+            )
+        )
+    )
+    return {
+        ticker: histories[ticker]
+        for ticker in tickers
+        if ticker in histories
+    }
+
+
+def _evidence_groups(groups_by_key, assignment_by_ticker, histories):
+    available = {
+        str(ticker).strip().upper()
+        for ticker in histories
+        if str(ticker).strip()
+    }
+    sector_members = {key: set() for key in SECTOR_ETFS}
+    for ticker, assignment in assignment_by_ticker.items():
+        sector_key, _ = _assignment_group_keys(assignment)
+        if sector_key is not None and ticker in available:
+            sector_members[sector_key].add(ticker)
+    return {
+        key: (
+            replace(
+                group,
+                constituent_tickers=tuple(sorted(sector_members[key])),
+            )
+            if key in sector_members
+            else group
+        )
+        for key, group in groups_by_key.items()
+    }
+
+
+def _attach_additional_risk_sources(
+    selected,
+    histories,
+    ticker_histories,
+    group,
+    groups_by_key,
+    group_states,
+    assignment_by_ticker,
+    *,
+    dynamic_membership,
+    assignment_histories=None,
+):
+    group_state = _cached_group_state(
+        histories,
+        group.key,
+        groups_by_key,
+        group_states,
+    )
+    slow_state = build_slow_decline_state(ticker_histories, group)
+    top_state = _build_high_level_states(
+        ticker_histories,
+        group,
+        group_state,
+    )
+    ticker_keys = selected.index.get_level_values("ticker")
+    if dynamic_membership:
+        if assignment_histories is None:
+            effective_keys = tuple(
+                _assignment_group_keys(assignment_by_ticker.get(ticker))
+                for ticker in ticker_keys
+            )
+        else:
+            dates = selected.index.get_level_values("observation_date")
+            effective_keys = tuple(
+                _effective_assignment_group_keys(
+                    assignment_histories.get(ticker, ()),
+                    observation_date,
+                )
+                for ticker, observation_date in zip(ticker_keys, dates)
+            )
+        sector_keys = tuple(keys[0] for keys in effective_keys)
+        theme_keys = tuple(keys[1] for keys in effective_keys)
+    else:
+        sector_key = group.key if group.key in SECTOR_ETFS else None
+        theme_key = None if sector_key is not None else group.key
+        sector_keys = (sector_key,) * len(selected)
+        theme_keys = (theme_key,) * len(selected)
+    selected["sector_group_key"] = sector_keys
+    selected["theme_group_key"] = theme_keys
+    for prefix, keys in (("sector", sector_keys), ("theme", theme_keys)):
+        selected[f"{prefix}_risk_raw_score"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "raw_score",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+        selected[f"{prefix}_risk_score"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "state_score",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+        selected[f"{prefix}_risk_state"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "state",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=False,
+        )
+        selected[f"{prefix}_risk_age"] = _aligned_group_state(
+            selected.index,
+            keys,
+            "memory_age_sessions",
+            histories,
+            groups_by_key,
+            group_states,
+            numeric=True,
+        )
+    selected["group_risk_raw_score"] = selected[
+        ["sector_risk_raw_score", "theme_risk_raw_score"]
+    ].max(axis=1, skipna=True)
+    combined_group = selected.apply(_combined_group_state, axis=1)
+    selected["group_risk_score"] = combined_group.map(lambda value: value[0])
+    selected["group_risk_state"] = combined_group.map(lambda value: value[1])
+    selected["group_risk_age"] = combined_group.map(lambda value: value[2])
     aligned_slow = slow_state.reindex(selected.index)
     selected["slow_decline_risk_raw_score"] = aligned_slow["raw_score"]
     selected["slow_decline_risk_score"] = aligned_slow["state_score"]
@@ -854,6 +1361,145 @@ def _attach_additional_risk_sources(selected, histories, group):
         for source, (_, row) in zip(source_name, selected.iterrows())
     ]
     return selected
+
+
+def _assignment_group_keys(assignment):
+    if not isinstance(assignment, Mapping):
+        return None, None
+    sector_key = str(assignment.get("sector_key") or "").strip()
+    if sector_key not in SECTOR_ETFS:
+        sector_key = None
+    primary_key = str(assignment.get("primary_model_group") or "").strip()
+    theme_keys = tuple(
+        str(value).strip()
+        for value in (assignment.get("theme_keys") or ())
+        if str(value).strip()
+    )
+    theme_key = (
+        primary_key
+        if primary_key in theme_keys and primary_key not in SECTOR_ETFS
+        else None
+    )
+    return sector_key, theme_key
+
+
+def _effective_assignment_group_keys(records, observation_date):
+    assignment = next(
+        (
+            record
+            for effective_from, effective_to, record in records
+            if effective_from <= observation_date
+            and (
+                effective_to is None
+                or observation_date < effective_to
+            )
+        ),
+        None,
+    )
+    return _assignment_group_keys(assignment)
+
+
+def _cached_group_state(histories, key, groups_by_key, group_states):
+    if key not in groups_by_key:
+        return None
+    if key not in group_states:
+        group = groups_by_key[key]
+        scoped_histories = _group_scoped_histories(histories, group)
+        group_states[key] = _benchmark_dependent_group_state(
+            build_group_regime_state(scoped_histories, group),
+            scoped_histories,
+            group,
+        )
+    return group_states[key]
+
+
+def _benchmark_dependent_group_state(state, histories, group):
+    if state.empty:
+        return state
+    available = pd.Series(True, index=state.index, dtype=bool)
+    for ticker in group.benchmark_tickers:
+        history = histories.get(ticker)
+        if (
+            not isinstance(history, pd.DataFrame)
+            or history.empty
+            or "Close" not in history
+            or not isinstance(history.index, pd.DatetimeIndex)
+        ):
+            available[:] = False
+            break
+        close = pd.to_numeric(history["Close"], errors="coerce").copy()
+        close.index = close.index.tz_localize(None)
+        if close.index.has_duplicates:
+            available[:] = False
+            break
+        aligned = close.reindex(state.index)
+        available &= aligned.notna() & np.isfinite(aligned)
+    if not group.benchmark_tickers:
+        available[:] = False
+    checked = state.copy()
+    numeric = checked.select_dtypes(include=[np.number]).columns
+    checked.loc[:, numeric] = checked.loc[:, numeric].where(available)
+    checked["state"] = checked["state"].where(available, "unavailable")
+    return checked
+
+
+def _aligned_group_state(
+    index,
+    keys,
+    field,
+    histories,
+    groups_by_key,
+    group_states,
+    *,
+    numeric,
+):
+    result = pd.Series(
+        np.nan if numeric else None,
+        index=index,
+        dtype=float if numeric else object,
+    )
+    dates = index.get_level_values("observation_date")
+    for key in dict.fromkeys(keys):
+        if key is None:
+            continue
+        state = _cached_group_state(
+            histories,
+            key,
+            groups_by_key,
+            group_states,
+        )
+        if state is None or field not in state:
+            continue
+        positions = np.flatnonzero(
+            np.fromiter((candidate == key for candidate in keys), dtype=bool)
+        )
+        if not len(positions):
+            continue
+        aligned = state[field].reindex(dates.take(positions))
+        values = (
+            pd.to_numeric(aligned, errors="coerce").to_numpy(dtype=float)
+            if numeric
+            else aligned.astype(object).to_numpy()
+        )
+        result.iloc[positions] = values
+    return result
+
+
+def _combined_group_state(row):
+    available = []
+    for prefix in ("theme", "sector"):
+        score = row[f"{prefix}_risk_score"]
+        if pd.notna(score):
+            available.append(
+                (
+                    float(score),
+                    row[f"{prefix}_risk_state"],
+                    row[f"{prefix}_risk_age"],
+                )
+            )
+    if not available:
+        return np.nan, "unavailable", np.nan
+    return max(available, key=lambda value: value[0])
 
 
 def _build_high_level_states(histories, group, group_state):
