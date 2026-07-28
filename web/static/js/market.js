@@ -80,6 +80,13 @@ function formatPercent(value, digits = 1) {
     : `${(Number(value) * 100).toFixed(digits)}%`;
 }
 
+function formatSignedPercent(value, digits = 1) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const numeric = Number(value);
+  const prefix = numeric > 0 ? "+" : "";
+  return `${prefix}${(numeric * 100).toFixed(digits)}%`;
+}
+
 function localized(key, fallback = "") {
   const value = t(key);
   return value === key ? fallback || key : value;
@@ -239,15 +246,22 @@ function sectorButton(row) {
     element("span"),
     localized(row.label_key, row.key),
   );
-  const relative = text(
+  const periodReturn = row.return ?? row.returns?.[String(state.horizon)];
+  const absolute = text(
     element("strong"),
-    formatPercent(row.relative_return),
+    `${t("market.metric.periodReturn", { horizon: state.horizon })} `
+    + formatSignedPercent(periodReturn),
+  );
+  const relative = text(
+    element("small"),
+    `${t("market.metric.relativeQqq")} `
+    + formatSignedPercent(row.relative_return),
   );
   const risk = text(
     element("small"),
     `${t("market.risk")} ${formatScore(riskDisplayScore(row.downside_risk))}`,
   );
-  button.append(label, relative, risk);
+  button.append(label, absolute, relative, risk);
   return button;
 }
 
@@ -321,8 +335,9 @@ function renderDrilldown(group = {}, constituents = []) {
   summary.append(
     scoreBlock(
       localized(group.label_key, group.key),
-      formatPercent(group.returns?.[String(state.horizon)]),
-      `${t("market.coverage")} ${formatPercent(group.coverage)}`,
+      formatSignedPercent(group.returns?.[String(state.horizon)]),
+      `${t("market.metric.periodReturn", { horizon: state.horizon })} · `
+      + `${t("market.coverage")} ${formatPercent(group.coverage)}`,
     ),
     scoreBlock(
       t("market.opportunity"),
@@ -342,12 +357,17 @@ function renderDrilldown(group = {}, constituents = []) {
     );
     return;
   }
+  const note = text(
+    element("p", "market-drilldown-note"),
+    t("market.drilldown.relativeStrengthNote"),
+  );
   const scroll = element("div", "market-table-scroll");
   const table = element("table", "market-table");
   table.append(
     tableHeader([
       "market.column.ticker",
       "market.column.classification",
+      "market.column.dailyReturn",
       "market.column.relativeStrength",
       "market.column.opportunity",
       "market.column.risk",
@@ -364,7 +384,8 @@ function renderDrilldown(group = {}, constituents = []) {
     const values = [
       link,
       localized(`market.classification.${row.classification}`, row.classification),
-      formatPercent(row.relative_strength_20),
+      formatSignedPercent(row.daily_return),
+      formatSignedPercent(row.relative_strength_20),
       formatScore(row.reversal_opportunity?.score),
       riskCellText(row.downside_risk),
       localized(`market.pressure.${row.pressure_state}`, row.pressure_state),
@@ -380,7 +401,7 @@ function renderDrilldown(group = {}, constituents = []) {
   }
   table.append(body);
   scroll.append(table);
-  root.replaceChildren(summary, scroll);
+  root.replaceChildren(summary, note, scroll);
 }
 
 function renderEvents(events = []) {

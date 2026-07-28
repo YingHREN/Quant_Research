@@ -1032,6 +1032,10 @@ def _constituent_payloads(prepared, group, sector, asof):
                     else f"{group.key}_related"
                 ),
                 "observation_date": _iso(observation_date),
+                "daily_return": _daily_return(
+                    item.history["Close"],
+                    observation_date,
+                ),
                 "relative_strength_20": relative_strength,
                 "pressure_state": (
                     "unavailable"

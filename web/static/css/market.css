@@ -582,6 +582,13 @@
   gap: .6rem;
 }
 
+.market-drilldown-note {
+  margin: 0 0 .7rem;
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.5;
+}
+
 .market-table-scroll {
   max-width: 100%;
   overflow-x: auto;

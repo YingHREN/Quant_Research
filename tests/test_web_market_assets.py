@@ -119,7 +119,9 @@ class MarketAssetTest(unittest.TestCase):
         self.assertIn("payload.selected_group", source)
         self.assertIn("payload.theme_groups", source)
         self.assertIn('setAttribute("aria-pressed"', source)
+        self.assertIn('row.returns?.[String(state.horizon)]', source)
         self.assertIn("row.relative_return", source)
+        self.assertIn("row.daily_return", source)
         self.assertIn("row.downside_risk", source)
         self.assertIn("function riskDisplayScore(", source)
         self.assertIn("risk.state_score", source)
@@ -189,6 +191,11 @@ class MarketAssetTest(unittest.TestCase):
             "market.group.software",
             "market.sector.technology",
             "market.sector.utilities",
+            "market.metric.periodReturn",
+            "market.metric.relativeQqq",
+            "market.column.dailyReturn",
+            "market.column.relativeStrength",
+            "market.drilldown.relativeStrengthNote",
             "market.macro.history.title",
             "market.macro.history.locked",
             "market.macro.history.unlocked",

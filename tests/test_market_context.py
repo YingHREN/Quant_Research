@@ -77,6 +77,11 @@ class MarketContextTest(unittest.TestCase):
             result["constituents"][0]["classification"],
             "software_constituent",
         )
+        adbe_close = histories["ADBE"]["Close"]
+        self.assertAlmostEqual(
+            result["constituents"][0]["daily_return"],
+            float(adbe_close.iloc[-1] / adbe_close.iloc[-2] - 1.0),
+        )
 
     def test_software_uses_declared_xlk_fallback_without_fabricating_primary_coverage(self):
         histories = {
