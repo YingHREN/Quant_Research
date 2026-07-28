@@ -1099,6 +1099,15 @@ function bindControls() {
     });
     paintUniverse();
   });
+  elements.poolScope.addEventListener("change", (event) => {
+    store.setState({
+      filters: {
+        ...store.getState().filters,
+        poolScope: event.currentTarget.value || "all",
+      },
+    });
+    paintUniverse();
+  });
   document.querySelectorAll("[data-filter]").forEach((control) => {
     control.addEventListener("change", () => {
       const filters = { ...store.getState().filters, [control.dataset.filter]: control.checked };
@@ -1191,6 +1200,7 @@ function captureElements() {
     universeSearch: byId("universe-search"),
     sectorTaxonomy: byId("sector-taxonomy"),
     sectorKey: byId("sector-key"),
+    poolScope: byId("pool-scope"),
     sectorMembershipSummary: byId("sector-membership-summary"),
     sortKey: byId("sort-key"),
     sortDirection: byId("sort-direction"),

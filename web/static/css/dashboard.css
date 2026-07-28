@@ -281,6 +281,13 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .filter-set legend { padding: 0 4px; color: var(--muted); font-size: 0.75rem; font-weight: 700; }
 .filter-set label { display: inline-flex; gap: 6px; align-items: center; font-size: 0.76rem; }
 .filter-set input { width: auto; min-height: auto; accent-color: var(--accent); }
+.filter-set .filter-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+.filter-scope select { width: 100%; min-width: 0; }
 
 .inline-status { min-height: 1.25rem; margin: 8px 0; color: var(--muted); font-size: 0.78rem; }
 .inline-status[data-tone="error"] { color: var(--danger); }

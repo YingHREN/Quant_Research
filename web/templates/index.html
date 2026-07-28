@@ -114,8 +114,15 @@
 
       <fieldset class="filter-set">
         <legend data-i18n="universe.filters.legend">Filters</legend>
-        <label><input type="checkbox" data-filter="activePool"> <span data-i18n="universe.filters.activePool">Active pool</span></label>
-        <label><input type="checkbox" data-filter="researchOnly"> <span data-i18n="universe.filters.researchOnly">Research-only pool</span></label>
+        <label class="filter-scope" for="pool-scope">
+          <span data-i18n="universe.poolScope.label">Stock scope</span>
+          <select id="pool-scope">
+            <option value="all" data-i18n="universe.poolScope.all">All stocks</option>
+            <option value="active" data-i18n="universe.poolScope.active">Active pool</option>
+            <option value="research" data-i18n="universe.poolScope.research">Research pool</option>
+            <option value="catalog" data-i18n="universe.poolScope.catalog">Catalog</option>
+          </select>
+        </label>
         <label><input type="checkbox" data-filter="gatePass"> <span data-i18n="universe.filters.gatePass">Technical gate passed</span></label>
         <label><input type="checkbox" data-filter="gateFail"> <span data-i18n="universe.filters.gateFail">Technical gate failed</span></label>
         <label><input type="checkbox" data-filter="gateMissing"> <span data-i18n="universe.filters.gateMissing">Technical gate unavailable</span></label>

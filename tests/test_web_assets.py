@@ -148,6 +148,20 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(actual["button"], "Join research pool")
         self.assertIn("仍保留在候选库", actual["status"])
 
+    def test_dashboard_pool_scope_filters_locally_without_reloading_stock(self):
+        actual = self.run_dashboard_runtime("pool-scope")
+        self.assertEqual(
+            actual,
+            {
+                "all": "3/3",
+                "active": "1/3",
+                "research": "1/3",
+                "catalog": "1/3",
+                "stockAttempts": 1,
+                "selectedTicker": "AAA",
+            },
+        )
+
     def test_marker_layer_preferences(self):
         self.assertTrue(
             (STATIC / "js/marker_layers.js").exists(),
@@ -674,8 +688,11 @@ class WebAssetTest(unittest.TestCase):
         for key in (
             "header.latestDate",
             "universe.filters.strictVcp",
-            "universe.filters.activePool",
-            "universe.filters.researchOnly",
+            "universe.poolScope.label",
+            "universe.poolScope.all",
+            "universe.poolScope.active",
+            "universe.poolScope.research",
+            "universe.poolScope.catalog",
             "universe.filters.gatePass",
             "universe.gate.explanation",
             "security.state.stale",
@@ -688,7 +705,8 @@ class WebAssetTest(unittest.TestCase):
         for marker in (
             'data-i18n="header.latestDate"',
             'data-i18n="universe.filters.strictVcp"',
-            'data-i18n="universe.filters.activePool"',
+            'id="pool-scope"',
+            'value="all" data-i18n="universe.poolScope.all"',
             'data-i18n="universe.filters.gatePass"',
             'data-i18n="factor.title"',
             'data-i18n="scenario.disclaimer"',
@@ -696,6 +714,8 @@ class WebAssetTest(unittest.TestCase):
             'data-i18n-aria-label="chart.volumeAria"',
         ):
             self.assertIn(marker, html)
+        self.assertNotIn('data-filter="activePool"', html)
+        self.assertNotIn('data-filter="researchOnly"', html)
         css = (STATIC / "css/dashboard.css").read_text()
         for marker in (
             ".locale-control",

@@ -86,7 +86,7 @@ function byClass(node, className) {
 
 const ids = [
   "universe-list", "universe-count", "universe-status", "universe-retry",
-  "universe-search", "sort-key",
+  "universe-search", "sort-key", "pool-scope",
   "security-pool-state", "security-gate-state", "security-gate-details",
   "research-pool-toggle", "research-pool-action-status",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
@@ -103,6 +103,7 @@ const activeIds = mode === "missing-top-risk-element"
   ? ids.filter((id) => id !== "top-risk-state")
   : ids;
 const elements = new Map(activeIds.map((id) => [id, new Element("div", id)]));
+elements.get("pool-scope").value = "all";
 for (const id of ["universe-retry", "stock-retry"]) {
   if (elements.has(id)) elements.get(id).hidden = true;
 }
@@ -244,6 +245,22 @@ const universe = {
     key: "trend", label: "Trend", methodology: "Moving-average position diagnostics.", overview: true,
   }],
 };
+if (mode === "pool-scope") {
+  universe.tickers.push(
+    {
+      ...universe.tickers[0],
+      ticker: "BBB",
+      shape_state: "tight_platform",
+      pool_membership: { active: false, research: true, research_catalog: true },
+    },
+    {
+      ...universe.tickers[0],
+      ticker: "CCC",
+      shape_state: "none",
+      pool_membership: { active: false, research: false, research_catalog: true },
+    },
+  );
+}
 const row = {
   time: "2026-07-22", open: 99, high: 102, low: 98, close: 101, volume: 1200,
   volume_ma20: 1000, volume_ratio: 1.2, volume_ratio_change: 0.15, ema20: 100,
@@ -768,5 +785,20 @@ if (mode === "success") {
     button: button.textContent,
     status: status.textContent,
     pool: elements.get("security-pool-state").textContent,
+  }));
+} else if (mode === "pool-scope") {
+  const scope = elements.get("pool-scope");
+  const counts = { all: elements.get("universe-count").textContent };
+  for (const value of ["active", "research", "catalog"]) {
+    scope.value = value;
+    scope.dispatch("change");
+    counts[value] = elements.get("universe-count").textContent;
+  }
+  assert.equal(elements.get("selected-ticker").textContent, "AAA");
+  assert.equal(stockAttempts, 1);
+  console.log(JSON.stringify({
+    ...counts,
+    stockAttempts,
+    selectedTicker: elements.get("selected-ticker").textContent,
   }));
 }
