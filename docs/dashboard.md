@@ -26,6 +26,51 @@ under the local-storage key `quant-dashboard-locale`. Chart ticks are always
 `MM-DD`, while details and observation dates are always ISO `YYYY-MM-DD`; both
 formats are deliberately independent of browser and operating-system locale.
 
+## Prospective downside shadow evaluation
+
+The shadow experiment is an offline research workflow. It does not run inside
+Flask requests and has no authority to change Ridge, TOPRISK, or the final
+forecast direction. The frozen model artifact is tracked in Git; the append-only
+SQLite ledger is local data and must not be committed.
+
+Freeze a new immutable experiment only once:
+
+```bash
+./venv/bin/python -m research.run_downside_shadow freeze \
+  --research-database data/research_prices.db \
+  --shadow-database data/downside_shadow.db \
+  --model-artifact reports/downside-shadow-v1-model.json \
+  --experiment-id downside-shadow-v1
+```
+
+After a genuinely new completed US market session has been added to the
+research database, capture only that latest session:
+
+```bash
+./venv/bin/python -m research.run_downside_shadow capture \
+  --research-database data/research_prices.db \
+  --shadow-database data/downside_shadow.db \
+  --model-artifact reports/downside-shadow-v1-model.json \
+  --experiment-id downside-shadow-v1
+```
+
+`capture` never replays missed dates and rejects the freeze date or any earlier
+date. A same-day retry is idempotent; changed payloads fail closed. Finally,
+settle only future paths whose 5/10/20-session windows are complete:
+
+```bash
+./venv/bin/python -m research.run_downside_shadow evaluate \
+  --research-database data/research_prices.db \
+  --shadow-database data/downside_shadow.db \
+  --model-artifact reports/downside-shadow-v1-model.json \
+  --experiment-id downside-shadow-v1
+```
+
+The generated report explicitly identifies prospective results, capture gaps,
+unavailable/not-applicable outputs, and `online_authority=none`. Reaching its
+research gate permits human review only; it never grants an automatic downside
+veto.
+
 ## Free intraday collector
 
 The collector is a separate foreground process so opening or hovering the
