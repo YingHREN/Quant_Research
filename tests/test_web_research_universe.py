@@ -60,11 +60,19 @@ def _create_database(path, member_count=3):
             """
         )
         memberships = [
-            ("research", "AAA", "2020-01-01", None, "fixture"),
-            ("research", "FUTURE", "2027-01-01", None, "fixture"),
-            ("research", "ENDED", "2020-01-01", "2026-07-24", "fixture"),
+            ("research", "AAA", "2020-01-01", "2026-01-01", "fixture", 8_000_000_000),
+            ("research", "AAA", "2026-01-01", None, "fixture", 12_000_000_000),
+            ("research", "FUTURE", "2027-01-01", None, "fixture", None),
+            (
+                "research",
+                "ENDED",
+                "2020-01-01",
+                "2026-07-24",
+                "fixture",
+                None,
+            ),
         ]
-        if member_count > 3:
+        if member_count > 4:
             memberships.extend(
                 (
                     "research",
@@ -72,14 +80,16 @@ def _create_database(path, member_count=3):
                     "2020-01-01",
                     None,
                     "fixture",
+                    None,
                 )
-                for number in range(member_count - 3)
+                for number in range(member_count - 4)
             )
         connection.executemany(
             """
             INSERT INTO universe_memberships (
-                universe_key, ticker, effective_from, effective_to, selection_rule
-            ) VALUES (?, ?, ?, ?, ?)
+                universe_key, ticker, effective_from, effective_to,
+                selection_rule, market_cap
+            ) VALUES (?, ?, ?, ?, ?, ?)
             """,
             memberships,
         )
@@ -147,6 +157,8 @@ class ResearchUniverseRepositoryTest(unittest.TestCase):
         self.assertEqual([member.ticker for member in snapshot.members], ["AAA"])
         self.assertTrue(snapshot.members[0].stale)
         self.assertEqual(snapshot.members[0].latest_date, "2026-07-23")
+        self.assertEqual(snapshot.members[0].market_cap, 12_000_000_000)
+        self.assertEqual(snapshot.members[0].market_cap_asof, "2026-01-01")
         self.assertLessEqual(len(snapshot.histories["AAA"]), 260)
         self.assertEqual(snapshot.histories["AAA"].index.max().date().isoformat(), "2026-07-23")
 

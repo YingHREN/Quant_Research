@@ -37,6 +37,8 @@ class ResearchUniverseMember:
     stale: bool
     name: str | None = None
     exchange: str | None = None
+    market_cap: float | None = None
+    market_cap_asof: str | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +265,12 @@ def _members_from_metadata(rows, histories, asof):
                 stale=latest != asof,
                 name=row["name"],
                 exchange=row["exchange"],
+                market_cap=(
+                    float(row["market_cap"])
+                    if row["market_cap"] is not None
+                    else None
+                ),
+                market_cap_asof=iso_date(row["market_cap_asof"]),
             )
         )
     return tuple(members)
@@ -316,18 +324,27 @@ ORDER BY prices.ticker, prices.date
 
 
 _MEMBER_METADATA_SQL = """
-WITH eligible AS (
-    SELECT DISTINCT ticker
+WITH ranked_memberships AS (
+    SELECT ticker,
+           market_cap,
+           effective_from,
+           ROW_NUMBER() OVER (
+               PARTITION BY ticker
+               ORDER BY effective_from DESC
+           ) AS membership_rank
     FROM universe_memberships
     WHERE effective_from <= ?
       AND (effective_to IS NULL OR ? < effective_to)
 )
-SELECT eligible.ticker AS ticker,
+SELECT membership.ticker AS ticker,
        security_master.name AS name,
-       security_master.exchange AS exchange
-FROM eligible
-LEFT JOIN security_master ON security_master.ticker = eligible.ticker
-ORDER BY eligible.ticker
+       security_master.exchange AS exchange,
+       membership.market_cap AS market_cap,
+       membership.effective_from AS market_cap_asof
+FROM ranked_memberships AS membership
+LEFT JOIN security_master ON security_master.ticker = membership.ticker
+WHERE membership.membership_rank = 1
+ORDER BY membership.ticker
 """
 
 
