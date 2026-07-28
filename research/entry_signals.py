@@ -25,6 +25,7 @@ def build_entry_signal_rows(history: pd.DataFrame) -> list[dict]:
     active_event = None
     seen_event_ids = set()
     prior_platform_active = False
+    prior_near_pivot = False
 
     for position in range(len(history)):
         prefix = history.iloc[: position + 1]
@@ -35,6 +36,9 @@ def build_entry_signal_rows(history: pd.DataFrame) -> list[dict]:
         current_close = float(prefix["Close"].iloc[-1])
         pattern = detect_vcp(analysis_window)
         strict_evidence = pattern_evidence(pattern)
+        near_pivot = bool(pattern.accepted and pattern.stage == "near_pivot")
+        near_pivot_start = near_pivot and not prior_near_pivot
+        prior_near_pivot = near_pivot
         platform_evidence = _platform_evidence(
             tight_platform(analysis_window)
         )
@@ -87,6 +91,7 @@ def build_entry_signal_rows(history: pd.DataFrame) -> list[dict]:
                 "time": timestamp.date().isoformat(),
                 "strict_vcp_active": bool(pattern.accepted),
                 "strict_vcp_start": strict_start,
+                "strict_vcp_near_pivot_start": near_pivot_start,
                 "strict_vcp_stage": pattern.stage,
                 "strict_vcp_pivot": strict_evidence["vcp_pivot"],
                 "strict_vcp_pivot_date": strict_evidence["pivot_date"],
