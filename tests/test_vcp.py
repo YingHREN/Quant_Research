@@ -101,6 +101,36 @@ class VCPDetectorTest(unittest.TestCase):
         self.assertFalse(pattern.pending_leg.confirmed)
         self.assertNotIn(pattern.pending_leg, pattern.legs)
 
+    def test_latest_bar_more_than_five_percent_above_pivot_is_not_a_setup(self):
+        history = textbook_vcp_fixture()
+        extended = make_ohlcv(
+            [110.0],
+            start=str((history.index[-1] + pd.offsets.BDay()).date()),
+        )
+
+        pattern = detect_vcp(pd.concat([history, extended]))
+
+        self.assertFalse(pattern.accepted)
+        self.assertEqual(pattern.stage, "extended")
+        self.assertEqual(pattern.reject_reason, "extended_above_buy_zone")
+        self.assertGreater(pattern.distance_to_pivot_pct, 5.0)
+        self.assertIsNotNone(pattern.pivot)
+
+    def test_latest_bar_above_pivot_moves_from_setup_to_breakout_stage(self):
+        history = textbook_vcp_fixture()
+        breakout = make_ohlcv(
+            [107.0],
+            start=str((history.index[-1] + pd.offsets.BDay()).date()),
+        )
+
+        pattern = detect_vcp(pd.concat([history, breakout]))
+
+        self.assertFalse(pattern.accepted)
+        self.assertEqual(pattern.stage, "breakout")
+        self.assertEqual(pattern.reject_reason, "already_above_pivot")
+        self.assertGreater(pattern.distance_to_pivot_pct, 0.0)
+        self.assertLessEqual(pattern.distance_to_pivot_pct, 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

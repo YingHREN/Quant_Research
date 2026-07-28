@@ -270,7 +270,13 @@ def build_structure_summary(history):
             "shape_state": "unavailable",
         }
 
-    strict_vcp = bool(pattern.accepted)
+    strict_vcp = bool(
+        pattern.accepted
+        and (
+            pattern.distance_to_pivot_pct is None
+            or pattern.distance_to_pivot_pct <= 0.0
+        )
+    )
     platform_active = bool(platform.get("is_platform"))
     near_pivot = bool(strict_vcp and pattern.stage == "near_pivot")
     if near_pivot:

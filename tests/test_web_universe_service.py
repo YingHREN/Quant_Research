@@ -295,6 +295,33 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
             },
         )
 
+    def test_structure_summary_excludes_extended_historical_vcp(self):
+        history = _history()
+        pattern = SimpleNamespace(
+            accepted=True,
+            stage="forming",
+            distance_to_pivot_pct=13.82,
+        )
+
+        with (
+            patch("web.services.universe.detect_vcp", return_value=pattern),
+            patch(
+                "web.services.universe.tight_platform",
+                return_value={"is_platform": False},
+            ),
+        ):
+            summary = build_structure_summary(history)
+
+        self.assertEqual(
+            summary,
+            {
+                "strict_vcp": False,
+                "tight_platform": False,
+                "near_pivot": False,
+                "shape_state": "none",
+            },
+        )
+
     def test_cache_is_revision_scoped_bounded_and_returns_copies(self):
         repository = FakeRepository()
         revision = [3]

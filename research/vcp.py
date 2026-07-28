@@ -343,13 +343,28 @@ def detect_vcp(history: pd.DataFrame, asof: pd.Timestamp | None = None) -> VCPPa
     pivot_date = pd.Timestamp(frame.index[pivot_index])
     distance = (price - pivot) / pivot * 100 if pivot else None
     pending = _pending_leg(frame, pivots, live)
-    stage = "near_pivot" if distance is not None and -5.0 <= distance <= 0.0 else "forming"
+    if distance is not None and distance > 5.0:
+        accepted = False
+        stage = "extended"
+        reject_reason = "extended_above_buy_zone"
+    elif distance is not None and distance > 0.0:
+        accepted = False
+        stage = "breakout"
+        reject_reason = "already_above_pivot"
+    else:
+        accepted = True
+        stage = (
+            "near_pivot"
+            if distance is not None and -5.0 <= distance <= 0.0
+            else "forming"
+        )
+        reject_reason = None
     depths = np.asarray([leg.depth_pct for leg in legs], dtype=float)
     volume_ratio = float(frame["Volume"].iloc[-10:].mean() / frame["Volume"].iloc[-50:].mean())
 
     return VCPPattern(
         asof_date=pd.Timestamp(history.index[-1]),
-        accepted=True,
+        accepted=accepted,
         stage=stage,
         base_start=pd.Timestamp(frame.index[0]),
         base_end=pd.Timestamp(frame.index[-1]),
@@ -358,7 +373,7 @@ def detect_vcp(history: pd.DataFrame, asof: pd.Timestamp | None = None) -> VCPPa
         pivot=pivot,
         pivot_date=pivot_date,
         distance_to_pivot_pct=distance,
-        reject_reason=None,
+        reject_reason=reject_reason,
         metrics={
             "adaptive_pct": threshold_pct,
             "base_length": float(len(frame)),
