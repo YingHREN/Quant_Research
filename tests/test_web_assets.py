@@ -769,6 +769,22 @@ class WebAssetTest(unittest.TestCase):
         self.assertEqual(unavailable["zh"]["tone"], "unavailable")
         self.assertEqual(unavailable["en"]["text"], "Top risk unavailable")
 
+    def test_selected_gate_lists_failed_and_missing_conditions(self):
+        actual = self.run_dashboard_runtime("technical-gate-details")
+        self.assertIn("未达", actual["zh"]["text"])
+        self.assertIn("均线斜率均为正", actual["zh"]["text"])
+        self.assertIn("当前 -0.60%", actual["zh"]["text"])
+        self.assertIn("数据缺失", actual["zh"]["text"])
+        self.assertIn("距 52 周高点不超过 20%", actual["zh"]["text"])
+        self.assertEqual(actual["zh"]["tone"], "danger")
+        self.assertIn("Unmet", actual["en"]["text"])
+        self.assertIn("Both moving-average slopes positive", actual["en"]["text"])
+        self.assertIn("Current -0.60%", actual["en"]["text"])
+        self.assertIn("Missing data", actual["en"]["text"])
+        self.assertTrue(actual["pass"]["hidden"])
+        self.assertEqual(actual["pass"]["text"], "")
+        self.assertIn('id="security-gate-details"', HTML.read_text())
+
     def test_current_script_survives_template_without_optional_top_risk_badge(self):
         actual = self.run_dashboard_runtime("missing-top-risk-element")
         self.assertEqual(actual, {"count": "1/1", "ticker": "AAA"})

@@ -79,6 +79,85 @@ function formatNumber(value) {
     : "—";
 }
 
+const TECHNICAL_GATE_CONDITIONS = Object.freeze({
+  close_above_sma50: "closeAboveSma50",
+  ema10_above_ema20: "ema10AboveEma20",
+  moving_average_slopes_positive: "movingAverageSlopesPositive",
+  within_20pct_of_52_week_high: "within20PctOf52WeekHigh",
+});
+
+function formatGatePercent(value) {
+  return Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "—";
+}
+
+function technicalGateConditionText(key, condition, locale) {
+  const conditionName = TECHNICAL_GATE_CONDITIONS[key];
+  if (!conditionName) return null;
+  const label = t(`universe.gate.condition.${conditionName}`, {}, locale);
+  if (condition.state === "missing") {
+    const reasonKey = `universe.gate.reason.${condition.reason || "unavailable"}`;
+    const reason = t(reasonKey, {}, locale);
+    return reason === reasonKey
+      ? label
+      : t("universe.gate.details.missingValue", { label, reason }, locale);
+  }
+  if (condition.state !== "fail") return null;
+  const operator = key === "within_20pct_of_52_week_high" ? "≥" : ">";
+  return t(
+    "universe.gate.details.failedValue",
+    {
+      label,
+      actual: formatGatePercent(condition.actual),
+      operator,
+      threshold: formatGatePercent(condition.threshold),
+    },
+    locale,
+  );
+}
+
+export function renderTechnicalGateDetails(element, gate, locale = getLocale()) {
+  if (!element) return;
+  element.replaceChildren();
+  const conditions = gate && typeof gate.conditions === "object"
+    ? gate.conditions
+    : {};
+  const groups = [
+    ["fail", "unmet"],
+    ["missing", "missing"],
+  ];
+  let visibleGroups = 0;
+  for (const [state, labelKey] of groups) {
+    const details = Object.entries(conditions)
+      .filter(([, condition]) => condition?.state === state)
+      .map(([key, condition]) => technicalGateConditionText(key, condition, locale))
+      .filter(Boolean);
+    if (!details.length) continue;
+    const group = document.createElement("span");
+    group.className = "security-gate-detail-group";
+    group.dataset.state = state;
+    group.textContent = t(
+      `universe.gate.details.${labelKey}`,
+      { details: details.join(t("universe.gate.details.separator", {}, locale)) },
+      locale,
+    );
+    element.append(group);
+    visibleGroups += 1;
+  }
+  element.hidden = visibleGroups === 0;
+  if (element.hidden) {
+    element.removeAttribute("data-tone");
+    element.removeAttribute("aria-label");
+    return;
+  }
+  element.dataset.tone = Object.values(conditions).some(
+    (condition) => condition?.state === "fail",
+  ) ? "danger" : "unavailable";
+  element.setAttribute(
+    "aria-label",
+    t("universe.gate.details.aria", {}, locale),
+  );
+}
+
 export function formatDailyReturn(value, unit = "fraction") {
   if (!Number.isFinite(value)) return "—";
   const percent = unit === "fraction" ? value * 100 : value;
@@ -724,6 +803,7 @@ function renderStockHeader(payload) {
     "title",
     t("universe.gate.explanation", {}, locale),
   );
+  renderTechnicalGateDetails(elements.securityGateDetails, gate, locale);
   const marketGate = payload.market_gate || {};
   const marketGateState = ["pass", "fail", "missing"].includes(marketGate.state)
     ? marketGate.state
@@ -804,6 +884,7 @@ async function selectTicker(ticker) {
   elements.researchStatus.removeAttribute("data-tone");
   if (!preserveExistingDetails) {
     renderTopRiskBadge(null, elements.topRiskState, locale);
+    renderTechnicalGateDetails(elements.securityGateDetails, null, locale);
     clearStockQuote(elements);
     renderWarnings([]);
     clearResearchPanels();
@@ -1125,6 +1206,7 @@ function captureElements() {
     researchPoolToggle: byId("research-pool-toggle"),
     researchPoolActionStatus: byId("research-pool-action-status"),
     securityGateState: byId("security-gate-state"),
+    securityGateDetails: byId("security-gate-details"),
     marketRegimeGateState: byId("market-regime-gate-state"),
     topRiskState: byId("top-risk-state"),
     securityClassification: byId("security-classification"),

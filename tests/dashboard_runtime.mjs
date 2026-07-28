@@ -87,7 +87,7 @@ function byClass(node, className) {
 const ids = [
   "universe-list", "universe-count", "universe-status", "universe-retry",
   "universe-search", "sort-key",
-  "security-pool-state", "security-gate-state",
+  "security-pool-state", "security-gate-state", "security-gate-details",
   "research-pool-toggle", "research-pool-action-status",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
   "market-date", "market-coverage", "selected-ticker", "selected-close",
@@ -395,6 +395,28 @@ if (mode === "top-risk-unavailable") {
     events: [],
   };
 }
+if (mode === "technical-gate-details") {
+  stock.technical_gate = {
+    state: "fail",
+    passed_conditions: 2,
+    condition_count: 4,
+    conditions: {
+      close_above_sma50: {
+        state: "pass", actual: 0.04, threshold: 0, reason: null,
+      },
+      ema10_above_ema20: {
+        state: "pass", actual: 0.02, threshold: 0, reason: null,
+      },
+      moving_average_slopes_positive: {
+        state: "fail", actual: -0.006, threshold: 0, reason: null,
+      },
+      within_20pct_of_52_week_high: {
+        state: "missing", actual: null, threshold: -0.2,
+        reason: "insufficient_252_session_history",
+      },
+    },
+  };
+}
 
 function jsonResponse(payload, status = 200) {
   return { ok: status >= 200 && status < 300, status, async json() { return payload; } };
@@ -591,6 +613,27 @@ if (mode === "success") {
     tone: elements.get("top-risk-state").dataset.tone,
   };
   console.log(JSON.stringify({ zh, en }));
+} else if (mode === "technical-gate-details") {
+  const details = elements.get("security-gate-details");
+  const zh = { text: textTree(details), tone: details.dataset.tone };
+  enButton.dispatch("click");
+  const en = { text: textTree(details), tone: details.dataset.tone };
+  const passingGate = {
+    state: "pass",
+    passed_conditions: 4,
+    condition_count: 4,
+    conditions: Object.fromEntries(
+      Object.keys(stock.technical_gate.conditions).map(
+        (key) => [key, { state: "pass", actual: 0.01, threshold: 0 }],
+      ),
+    ),
+  };
+  app.renderTechnicalGateDetails(details, passingGate, "zh-CN");
+  console.log(JSON.stringify({
+    zh,
+    en,
+    pass: { hidden: details.hidden, text: textTree(details) },
+  }));
 } else if (mode === "universe-error") {
   const zh = {
     universe: elements.get("universe-status").textContent,

@@ -208,6 +208,22 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   align-items: center;
   justify-content: flex-end;
 }
+.security-gate-details {
+  display: grid;
+  gap: 4px;
+  justify-items: end;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  text-align: right;
+}
+.security-gate-detail-group {
+  max-width: min(58rem, 100%);
+  overflow-wrap: anywhere;
+}
+.security-gate-detail-group[data-state="fail"] { color: var(--danger); }
+.security-gate-detail-group[data-state="missing"] { color: var(--muted); }
 .state-badge[data-tone="current"] { border-color: #257c71; color: var(--accent); }
 .state-badge[data-tone="watch"] { border-color: #8a6a2b; color: var(--warning); }
 .state-badge[data-tone="danger"] { border-color: #7c3947; color: var(--danger); }
