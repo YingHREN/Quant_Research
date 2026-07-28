@@ -251,6 +251,50 @@ class GroupAssignmentTest(unittest.TestCase):
             all(assignment.asof == "2026-07-24" for assignment in assignments)
         )
 
+    def test_behavior_boundary_inside_override_does_not_split_override(self):
+        assignments = historical_group_assignment_intervals(
+            "CHIP",
+            {
+                "sec": {"sector_key": "unclassified"},
+                "market_behavior": {
+                    "sector_key": "financials",
+                    "confidence": 0.8,
+                    "rule_version": "market_behavior_v1",
+                    "observed_at": "2026-07-24",
+                },
+            },
+            observed_at="2026-07-24",
+            evidence_start="2026-06-01",
+            overrides=[
+                {
+                    "ticker": "CHIP",
+                    "effective_from": "2026-07-01",
+                    "effective_to": "2026-08-01",
+                    "sector_key": "technology",
+                    "theme_keys": [],
+                    "primary_model_group": "technology",
+                    "reason": "spanning fixture override",
+                    "rule_version": "security_group_overrides_v1",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            [
+                (
+                    assignment.effective_from,
+                    assignment.effective_to,
+                    assignment.source,
+                    assignment.sector_key,
+                )
+                for assignment in assignments
+            ],
+            [
+                ("2026-06-01", "2026-07-01", "review", "unclassified_review"),
+                ("2026-07-01", "2026-08-01", "override", "technology"),
+            ],
+        )
+
     def test_audit_reports_invalid_benchmarks_duplicate_themes_and_conflicts(self):
         valid = resolve_group_assignment(
             "CHIP",

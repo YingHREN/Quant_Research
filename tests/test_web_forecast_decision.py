@@ -1,5 +1,6 @@
 import unittest
 from unittest import mock
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -446,6 +447,253 @@ class ForecastRiskContextTest(unittest.TestCase):
             set(sndk.loc[sndk.index >= "2026-07-01", "theme_group_key"]),
             {"semiconductor"},
         )
+
+    def test_group_rolling_state_receives_date_masked_membership_histories(self):
+        assignments = {
+            ticker: [
+                {
+                    "state": "assigned",
+                    "ticker": ticker,
+                    "effective_from": "2026-01-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                }
+            ]
+            for ticker in ("A", "B")
+        }
+        assignments["OLD"] = [
+            {
+                **assignments["A"][0],
+                "ticker": "OLD",
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["A"][0],
+                "ticker": "OLD",
+                "effective_from": "2026-07-01",
+                "sector_key": "financials",
+                "sector_benchmark": "XLF",
+                "primary_model_group": "financials",
+            },
+        ]
+        assignments["NEW"] = [
+            {
+                **assignments["OLD"][1],
+                "ticker": "NEW",
+                "effective_from": "2026-01-01",
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["OLD"][0],
+                "ticker": "NEW",
+                "effective_from": "2026-07-01",
+                "effective_to": None,
+            },
+        ]
+        histories = {
+            "QQQ": rising(periods=140, end="2026-07-20"),
+            "XLK": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "XLF": rising(periods=140, slope=0.1, end="2026-07-20"),
+            "A": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "B": rising(periods=140, slope=0.2, end="2026-07-20"),
+            "OLD": rising(periods=140, slope=-0.3, end="2026-07-20"),
+            "NEW": rising(periods=140, slope=0.4, end="2026-07-20"),
+        }
+        observed = []
+        real_builder = forecast_decision_module.build_group_regime_state
+
+        def probe(scoped_histories, group, *, membership_intervals=None):
+            if group.key == "technology":
+                observed.append(
+                    (
+                        set(group.constituent_tickers),
+                        membership_intervals["OLD"],
+                        membership_intervals["NEW"],
+                    )
+                )
+            return real_builder(
+                scoped_histories,
+                group,
+                membership_intervals=membership_intervals,
+            )
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_regime_state",
+            side_effect=probe,
+        ):
+            context = build_forecast_risk_context(histories, assignments)
+
+        self.assertEqual(
+            observed,
+            [
+                (
+                    {"A", "B", "NEW", "OLD"},
+                    (
+                        (
+                            pd.Timestamp("2026-01-01"),
+                            pd.Timestamp("2026-07-01"),
+                        ),
+                    ),
+                    ((pd.Timestamp("2026-07-01"), None),),
+                )
+            ],
+        )
+        self.assertIn(
+            pd.Timestamp("2026-06-30"),
+            context.xs("A", level="ticker").index,
+        )
+        self.assertIn(
+            pd.Timestamp("2026-07-01"),
+            context.xs("NEW", level="ticker").index,
+        )
+
+    def test_same_group_rejoin_resets_pre_departure_risk_memory(self):
+        assignments = {
+            "T": [
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2025-12-01",
+                    "effective_to": "2026-03-02",
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2026-03-02",
+                    "effective_to": "2026-05-01",
+                    "sector_key": "financials",
+                    "sector_benchmark": "XLF",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "financials",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "T",
+                    "effective_from": "2026-05-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                },
+            ]
+        }
+        base = rising(periods=180, slope=0.2, end="2026-07-10")
+        shocked = base.copy(deep=True)
+        shock_dates = shocked.loc[
+            (shocked.index >= "2026-02-16")
+            & (shocked.index < "2026-03-02")
+        ].index
+        shocked.loc[shock_dates, "Close"] -= np.linspace(
+            2.0,
+            28.0,
+            len(shock_dates),
+        )
+        shocked.loc[shock_dates, "Open"] = shocked.loc[
+            shock_dates, "Close"
+        ] + 2.0
+        shocked.loc[shock_dates, "High"] = shocked.loc[
+            shock_dates, "Open"
+        ] + 1.0
+        shocked.loc[shock_dates, "Low"] = shocked.loc[
+            shock_dates, "Close"
+        ] - 1.0
+        shocked.loc[shock_dates, "Volume"] = 3_000_000.0
+        references = {
+            "QQQ": rising(periods=180, end="2026-07-10"),
+            "XLK": rising(periods=180, slope=0.2, end="2026-07-10"),
+            "XLF": rising(periods=180, slope=0.1, end="2026-07-10"),
+        }
+
+        clean_context = build_forecast_risk_context(
+            {**references, "T": base},
+            assignments,
+        ).xs("T", level="ticker")
+        shocked_context = build_forecast_risk_context(
+            {**references, "T": shocked},
+            assignments,
+        ).xs("T", level="ticker")
+        after_rejoin = clean_context.index >= "2026-05-01"
+
+        assert_frame_equal(
+            shocked_context.loc[after_rejoin],
+            clean_context.loc[after_rejoin],
+        )
+
+    def test_first_evidence_dates_do_not_create_global_full_builds(self):
+        first_dates = pd.bdate_range("2025-01-02", periods=193)
+        assignments = {
+            f"T{offset:03d}": [
+                {
+                    "state": "assigned",
+                    "ticker": f"T{offset:03d}",
+                    "effective_from": start.strftime("%Y-%m-%d"),
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                }
+            ]
+            for offset, start in enumerate(first_dates)
+        }
+        assignments["T000"] = [
+            {
+                **assignments["T000"][0],
+                "effective_to": "2026-07-01",
+            },
+            {
+                **assignments["T000"][0],
+                "effective_from": "2026-07-01",
+                "sector_key": "financials",
+                "sector_benchmark": "XLF",
+                "primary_model_group": "financials",
+            },
+        ]
+        histories = {
+            "QQQ": rising(periods=80, end="2026-07-10"),
+            "XLK": rising(periods=80, slope=0.2, end="2026-07-10"),
+            "XLF": rising(periods=80, slope=0.1, end="2026-07-10"),
+            **{
+                ticker: rising(
+                    periods=80,
+                    slope=0.05 + offset / 10_000,
+                    end="2026-07-10",
+                )
+                for offset, ticker in enumerate(assignments)
+            },
+        }
+
+        with mock.patch.object(
+            forecast_decision_module,
+            "build_group_score_frame",
+            wraps=forecast_decision_module.build_group_score_frame,
+        ) as group_score_builder, mock.patch.object(
+            forecast_decision_module,
+            "build_high_level_distribution_state",
+            wraps=forecast_decision_module.build_high_level_distribution_state,
+        ) as high_level_builder:
+            started = perf_counter()
+            context = build_forecast_risk_context(histories, assignments)
+            elapsed = perf_counter() - started
+
+        self.assertEqual(group_score_builder.call_count, 2)
+        self.assertEqual(high_level_builder.call_count, 194)
+        self.assertLess(elapsed, 35.0)
+        self.assertFalse(context.empty)
 
     def test_related_membership_does_not_duplicate_dynamic_context_rows(self):
         assignments = {

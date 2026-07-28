@@ -161,10 +161,12 @@ def historical_group_assignment_intervals(
     evidence_start,
     overrides=None,
 ):
-    """Backfill current classification only across evidenced identity history.
+    """Build evidenced history without backdating price-derived behavior.
 
-    This is deliberately an assumption rather than reconstructed taxonomy
-    history. Manual override intervals retain their explicit boundaries.
+    SEC classification is explicitly marked as an assumed historical
+    backfill. Price-derived market behavior begins only when it was observed;
+    earlier evidenced history remains in review. Manual override intervals
+    retain their explicit boundaries.
     """
     observation_date = _normalize_date(observed_at)
     history_start = _normalize_date(evidence_start)
@@ -183,8 +185,30 @@ def historical_group_assignment_intervals(
         observation_date,
         overrides=(),
     )
+    behavior_observed_at = None
+    review = None
+    if baseline.source == "market_behavior":
+        behavior = (classifications or {}).get("market_behavior") or {}
+        behavior_observed_at = _normalize_date(
+            behavior.get("observed_at") or observation_date
+        )
+        if behavior_observed_at > observation_date:
+            raise ValueError("market_behavior_observed_after_assignment")
+        review = resolve_group_assignment(
+            normalized_ticker,
+            {},
+            observation_date,
+            overrides=(),
+        )
 
-    def assumed(start, finish):
+    def derived(start, finish):
+        if behavior_observed_at is not None:
+            template = review if start < behavior_observed_at else baseline
+            return replace(
+                template,
+                effective_from=start,
+                effective_to=finish,
+            )
         return replace(
             baseline,
             asof=observation_date,
@@ -204,14 +228,32 @@ def historical_group_assignment_intervals(
         ),
         key=lambda record: record["effective_from"],
     )
-    assignments = []
-    cursor = history_start
+    boundaries = {history_start}
+    if (
+        behavior_observed_at is not None
+        and history_start < behavior_observed_at <= observation_date
+    ):
+        boundaries.add(behavior_observed_at)
     for override in applicable:
-        override_start = max(history_start, override["effective_from"])
-        if cursor < override_start:
-            assignments.append(assumed(cursor, override_start))
-        effective_start = max(cursor, override_start)
-        if effective_start < override["effective_to"]:
+        boundaries.add(max(history_start, override["effective_from"]))
+        boundaries.add(override["effective_to"])
+    ordered = sorted(boundaries)
+    assignments = []
+    for index, start in enumerate(ordered):
+        if start > observation_date:
+            break
+        finish = ordered[index + 1] if index + 1 < len(ordered) else None
+        override = next(
+            (
+                record
+                for record in applicable
+                if record["effective_from"] <= start < record["effective_to"]
+            ),
+            None,
+        )
+        if override is None:
+            assignments.append(derived(start, finish))
+        else:
             assignments.append(
                 replace(
                     _assignment_from_override(
@@ -219,13 +261,34 @@ def historical_group_assignment_intervals(
                         observation_date,
                         override,
                     ),
-                    effective_from=effective_start,
+                    effective_from=start,
+                    effective_to=finish,
                 )
             )
-        cursor = max(cursor, override["effective_to"])
-    if cursor <= observation_date:
-        assignments.append(assumed(cursor, None))
-    return tuple(assignments)
+    return _coalesce_adjacent_assignments(assignments)
+
+
+def _coalesce_adjacent_assignments(assignments):
+    coalesced = []
+    for assignment in assignments:
+        previous = coalesced[-1] if coalesced else None
+        if (
+            previous is not None
+            and previous.effective_to == assignment.effective_from
+            and replace(
+                previous,
+                effective_from=assignment.effective_from,
+                effective_to=assignment.effective_to,
+            )
+            == assignment
+        ):
+            coalesced[-1] = replace(
+                previous,
+                effective_to=assignment.effective_to,
+            )
+        else:
+            coalesced.append(assignment)
+    return tuple(coalesced)
 
 
 def audit_assignments(assignments):

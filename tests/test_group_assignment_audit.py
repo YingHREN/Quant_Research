@@ -11,7 +11,10 @@ import unittest
 from unittest.mock import patch
 
 from audit_group_assignments import audit_database, strict_failure
-from build_research_db import build_database
+from build_research_db import (
+    _validate_persisted_reference_assets,
+    build_database,
+)
 from data.group_assignments import resolve_group_assignment
 from data.market_behavior import MarketBehaviorResult
 from data.research_store import ResearchPriceStore
@@ -138,6 +141,41 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
         self.assertEqual(result["invalid_benchmarks"], [])
         self.assertIn("semiconductor", result["theme_counts"])
         self.assertEqual(result["missing"], {"count": 0, "tickers": []})
+
+    def test_historical_coverage_excludes_not_yet_listed_current_securities(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE security_master SET active = 0 WHERE ticker = 'MISSING'"
+        )
+        connection.execute(
+            """
+            INSERT INTO security_master
+                (ticker, name, security_type, active, observed_at, provider)
+            VALUES
+                ('FUTURE', 'Future Listing', 'Common Stock', 1,
+                 '2027-01-04', 'fixture')
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+
+        self.assertEqual(result["active_common_stocks"], 3)
+        self.assertEqual(result["asof_eligible_common_stocks"], 2)
+        self.assertEqual(result["assigned"], 2)
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertEqual(result["missing"], {"count": 0, "tickers": []})
+        self.assertEqual(
+            result["current_universe_diagnostic"],
+            {
+                "not_yet_asof_eligible": {
+                    "count": 1,
+                    "tickers": ["FUTURE"],
+                },
+            },
+        )
+        self.assertFalse(strict_failure(result))
 
     def test_audit_reports_invalid_sector_and_theme_references(self):
         connection = sqlite3.connect(self.database)
@@ -635,7 +673,7 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
             1,
         )
 
-    def test_behavior_fallback_persists_only_the_final_assignment(self):
+    def test_behavior_fallback_starts_only_when_behavior_is_observed(self):
         behavior = MarketBehaviorResult(
             sector_key="financials",
             benchmark_ticker="XLF",
@@ -649,6 +687,18 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
             rule_version="market_behavior_v1",
             asof="2026-07-24",
         )
+        (self.raw_root / "ZZZZ.json").write_text(
+            json.dumps(
+                [
+                    {
+                        **_daily_row()[0],
+                        "date": "2026-06-01",
+                    },
+                    _daily_row()[0],
+                ]
+            ),
+            encoding="utf-8",
+        )
 
         with patch(
             "build_research_db.classify_market_behavior",
@@ -660,19 +710,36 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
         self.assertEqual(
             connection.execute(
                 """
-                SELECT rule_version, sector_key, classification_state
+                SELECT effective_from, effective_to, rule_version, source,
+                       sector_key, classification_state
                 FROM group_assignments
                 WHERE ticker = 'ZZZZ'
+                ORDER BY effective_from
                 """
             ).fetchall(),
             [
                 (
-                    "historical_backfill_v1/market_behavior_v1",
+                    "2026-06-01",
+                    "2026-07-24",
+                    "group_assignment_v1",
+                    "review",
+                    "unclassified_review",
+                    "needs_review",
+                ),
+                (
+                    "2026-07-24",
+                    None,
+                    "market_behavior_v1",
+                    "market_behavior",
                     "financials",
                     "classified",
-                )
+                ),
             ],
         )
+        before = audit_database(self.output_path, asof="2026-06-26")
+        current = audit_database(self.output_path, asof="2026-07-24")
+        self.assertEqual(before["needs_review"], {"count": 1, "tickers": ["ZZZZ"]})
+        self.assertEqual(current["needs_review"], {"count": 0, "tickers": []})
 
     def test_build_backfills_mu_adbe_nbis_from_current_history_evidence(self):
         securities = [
@@ -868,6 +935,28 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
             self.build()
 
         self.assertFalse(self.output_path.exists())
+
+    def test_persisted_reference_validation_derives_from_canonical_groups(self):
+        connection = sqlite3.connect(":memory:")
+        ResearchPriceStore(connection).initialize()
+        canonical = (
+            "XLK", "XLC", "XLY", "XLP", "XLE", "XLF", "XLV", "XLI",
+            "XLB", "XLRE", "XLU", "SOXX", "SMH", "IGV", "XSW",
+        )
+        connection.executemany(
+            """
+            INSERT INTO security_master
+                (ticker, name, security_type, active, observed_at, provider)
+            VALUES (?, ?, 'ETF', 1, '2026-07-24', 'fixture')
+            """,
+            [(ticker, ticker) for ticker in canonical],
+        )
+
+        with patch(
+            "build_research_db.REFERENCE_TICKERS",
+            ("SPY", "QQQ", "FAKE"),
+        ):
+            _validate_persisted_reference_assets(connection)
 
     def test_failed_assignment_audit_preserves_previous_output(self):
         self.build()

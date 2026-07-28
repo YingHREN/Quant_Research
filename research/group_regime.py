@@ -22,7 +22,12 @@ GROUP_STRESS_RULES_V1 = {
 }
 
 
-def build_group_regime_state(histories, group: MarketGroup) -> pd.DataFrame:
+def build_group_regime_state(
+    histories,
+    group: MarketGroup,
+    *,
+    membership_intervals=None,
+) -> pd.DataFrame:
     """Return an equal-weighted, point-in-time group stress history."""
     if not isinstance(group, MarketGroup):
         raise TypeError("group must be a MarketGroup")
@@ -37,10 +42,23 @@ def build_group_regime_state(histories, group: MarketGroup) -> pd.DataFrame:
     if not prepared:
         return _empty_frame()
 
+    member_parts = {
+        ticker: _membership_parts(
+            prepared[ticker],
+            None
+            if membership_intervals is None
+            else membership_intervals.get(ticker),
+        )
+        for ticker in members
+    }
     union_index = pd.DatetimeIndex(
         sorted(
             set().union(
-                *(set(prepared[ticker].index) for ticker in members)
+                *(
+                    set(part.index)
+                    for parts in member_parts.values()
+                    for part in parts
+                )
             )
         )
     ) if members else pd.DatetimeIndex([])
@@ -56,26 +74,42 @@ def build_group_regime_state(histories, group: MarketGroup) -> pd.DataFrame:
         "volume_ratio": {},
     }
     for ticker in members:
-        history = prepared[ticker]
-        close = history["Close"]
-        pressure = build_pressure_rows(history)
-        daily_return = close.pct_change(fill_method=None)
-        ema20 = close.ewm(span=20, adjust=False).mean()
-        prior_low = close.shift(1).rolling(20, min_periods=20).min()
-        metrics["return_5"][ticker] = close.pct_change(5, fill_method=None)
-        metrics["above_ema20"][ticker] = (close > ema20).where(
-            ema20.notna()
-        )
-        metrics["down_volume"][ticker] = (
-            (daily_return < 0.0) & (pressure["volume_ratio"] >= 1.2)
-        ).where(daily_return.notna() & pressure["volume_ratio"].notna())
-        metrics["distribution"][ticker] = pressure[
-            "distribution_day"
-        ].where(pressure["volume_ratio"].notna())
-        metrics["new_20_low"][ticker] = (close < prior_low).where(
-            prior_low.notna()
-        )
-        metrics["volume_ratio"][ticker] = pressure["volume_ratio"]
+        ticker_metrics = {key: [] for key in metrics}
+        for history in member_parts[ticker]:
+            close = history["Close"]
+            pressure = build_pressure_rows(history)
+            daily_return = close.pct_change(fill_method=None)
+            ema20 = close.ewm(span=20, adjust=False).mean()
+            prior_low = close.shift(1).rolling(20, min_periods=20).min()
+            ticker_metrics["return_5"].append(
+                close.pct_change(5, fill_method=None)
+            )
+            ticker_metrics["above_ema20"].append(
+                (close > ema20).where(ema20.notna())
+            )
+            ticker_metrics["down_volume"].append(
+                (
+                    (daily_return < 0.0)
+                    & (pressure["volume_ratio"] >= 1.2)
+                ).where(
+                    daily_return.notna()
+                    & pressure["volume_ratio"].notna()
+                )
+            )
+            ticker_metrics["distribution"].append(
+                pressure["distribution_day"].where(
+                    pressure["volume_ratio"].notna()
+                )
+            )
+            ticker_metrics["new_20_low"].append(
+                (close < prior_low).where(prior_low.notna())
+            )
+            ticker_metrics["volume_ratio"].append(
+                pressure["volume_ratio"]
+            )
+        for key, parts in ticker_metrics.items():
+            if parts:
+                metrics[key][ticker] = pd.concat(parts).sort_index()
 
     result = pd.DataFrame(index=union_index)
     result["member_count"] = float(len(members))
@@ -131,6 +165,23 @@ def build_group_regime_state(histories, group: MarketGroup) -> pd.DataFrame:
         np.nan,
     )
     return result
+
+
+def _membership_parts(history, intervals):
+    if intervals is None:
+        return (history,)
+    parts = tuple(
+        history.loc[
+            (history.index >= effective_from)
+            & (
+                True
+                if effective_to is None
+                else history.index < effective_to
+            )
+        ]
+        for effective_from, effective_to in intervals
+    )
+    return tuple(part for part in parts if not part.empty)
 
 
 def _prepare(histories):

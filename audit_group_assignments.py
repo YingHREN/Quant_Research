@@ -1,4 +1,4 @@
-"""Audit point-in-time group coverage for every active common stock."""
+"""Audit point-in-time group coverage for as-of-eligible common stocks."""
 
 from __future__ import annotations
 
@@ -56,6 +56,12 @@ def audit_database(database_path, *, asof=None):
         connection.close()
 
     active = set(active_tickers)
+    eligible = {
+        ticker
+        for ticker in active
+        if evidence_starts[ticker] <= observation_date
+    }
+    not_yet_eligible = sorted(active - eligible)
     rows = tuple(row for row in rows if row["ticker"] in active)
     valid_rows, conflicts = _validated_interval_rows(rows)
     conflicts.extend(_range_conflicts(valid_rows))
@@ -71,6 +77,7 @@ def audit_database(database_path, *, asof=None):
     selected = {
         ticker: candidates[-1]
         for ticker, candidates in current_by_ticker.items()
+        if ticker in eligible
     }
     conflicts.extend(_current_conflicts(current_by_ticker))
 
@@ -79,7 +86,7 @@ def audit_database(database_path, *, asof=None):
         for ticker, row in selected.items()
         if row["sector_key"] == REVIEW_SECTOR_KEY
     )
-    missing = sorted(active - selected.keys())
+    missing = sorted(eligible - selected.keys())
     invalid_benchmarks = []
     decoded_assignments = {}
     for row in valid_rows:
@@ -103,7 +110,7 @@ def audit_database(database_path, *, asof=None):
             theme_counts[theme] = theme_counts.get(theme, 0) + 1
 
     assigned = len(selected)
-    total = len(active_tickers)
+    total = len(eligible)
     historical_assumptions = sorted(
         {
             row["ticker"]
@@ -114,7 +121,8 @@ def audit_database(database_path, *, asof=None):
         }
     )
     result = {
-        "active_common_stocks": total,
+        "active_common_stocks": len(active_tickers),
+        "asof_eligible_common_stocks": total,
         "asof": observation_date,
         "assigned": assigned,
         "coverage": assigned / total if total else 1.0,
@@ -134,6 +142,12 @@ def audit_database(database_path, *, asof=None):
         "missing": {
             "count": len(missing),
             "tickers": missing,
+        },
+        "current_universe_diagnostic": {
+            "not_yet_asof_eligible": {
+                "count": len(not_yet_eligible),
+                "tickers": not_yet_eligible,
+            },
         },
         "invalid_benchmarks": sorted(
             _sorted_unique(invalid_benchmarks),

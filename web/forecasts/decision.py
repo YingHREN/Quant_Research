@@ -19,6 +19,7 @@ from research.slow_decline import build_slow_decline_state
 from web.contracts import json_safe
 from web.forecasts.base import FORECAST_DIRECTIONS
 from web.market_groups import (
+    MARKET_GROUPS,
     SECTOR_ETFS,
     modeled_market_groups,
     resolved_market_groups,
@@ -861,52 +862,246 @@ def _build_effective_dated_risk_context(histories, assignment_histories):
     ]
     if not observed_indexes:
         return _build_forecast_risk_context_snapshot(histories, {})
-    history_start = min(index.min().normalize() for index in observed_indexes)
-    history_finish = max(index.max().normalize() for index in observed_indexes)
-    boundaries = {history_start, history_finish + pd.Timedelta(days=1)}
-    for records in assignment_histories.values():
-        for effective_from, effective_to, _record in records:
-            if history_start < effective_from <= history_finish:
-                boundaries.add(effective_from)
-            if (
-                effective_to is not None
-                and history_start < effective_to <= history_finish
-            ):
-                boundaries.add(effective_to)
-    ordered = sorted(boundaries)
+    causal_histories = _histories_from_assignment_evidence(
+        histories,
+        assignment_histories,
+    )
+    groups_by_key = _effective_evidence_groups(
+        assignment_histories,
+        causal_histories,
+    )
+    group_states = {
+        key: _build_effective_group_state(
+            causal_histories,
+            assignment_histories,
+            group,
+        )
+        for key, group in groups_by_key.items()
+    }
     frames = []
-    for segment_start, segment_finish in zip(ordered, ordered[1:]):
-        snapshot = {}
-        for ticker, records in assignment_histories.items():
-            active = next(
-                (
-                    record
-                    for effective_from, effective_to, record in records
-                    if effective_from <= segment_start
-                    and (
-                        effective_to is None
-                        or segment_start < effective_to
-                    )
-                ),
-                None,
+    for group in _effective_primary_groups(
+        assignment_histories,
+        causal_histories,
+    ):
+        for workload_group, ticker_histories in _effective_primary_workloads(
+            causal_histories,
+            assignment_histories,
+            group,
+        ):
+            scores = build_group_score_frame(
+                ticker_histories,
+                workload_group,
             )
-            if active is not None:
-                snapshot[ticker] = active
-        segment = _build_forecast_risk_context_snapshot(histories, snapshot)
-        if segment.empty:
-            continue
-        dates = segment.index.get_level_values("observation_date")
-        segment = segment.loc[
-            (dates >= segment_start) & (dates < segment_finish)
-        ]
-        if not segment.empty:
-            frames.append(segment)
+            if scores.empty:
+                continue
+            selected = scores.loc[
+                :,
+                [
+                    "downside_risk_score",
+                    "downside_risk_state_score",
+                    "downside_risk_state",
+                    "downside_risk_memory_age_sessions",
+                ],
+            ].rename(
+                columns={
+                    "downside_risk_score": "individual_risk_raw_score",
+                    "downside_risk_state_score": "individual_risk_score",
+                    "downside_risk_state": "individual_risk_state",
+                    "downside_risk_memory_age_sessions": "individual_risk_age",
+                }
+            )
+            selected = _attach_additional_risk_sources(
+                selected,
+                causal_histories,
+                ticker_histories,
+                workload_group,
+                groups_by_key,
+                group_states,
+                {},
+                dynamic_membership=True,
+                assignment_histories=assignment_histories,
+            )
+            if not selected.empty:
+                frames.append(selected)
     if not frames:
-        return _build_forecast_risk_context_snapshot(histories, {})
+        return _build_forecast_risk_context_snapshot(
+            causal_histories,
+            {},
+        )
     result = pd.concat(frames).sort_index()
     if result.index.has_duplicates:
         raise ValueError("duplicate forecast risk context keys")
     return result.loc[:, RISK_CONTEXT_COLUMNS]
+
+
+def _effective_primary_groups(assignment_histories, histories):
+    available = set(histories)
+    members = {key: set() for key in MARKET_GROUPS}
+    for ticker, records in assignment_histories.items():
+        if ticker not in available:
+            continue
+        for _start, _finish, record in records:
+            key = str(record.get("primary_model_group") or "").strip()
+            if key in members:
+                members[key].add(ticker)
+    return tuple(
+        replace(
+            MARKET_GROUPS[key],
+            constituent_tickers=tuple(sorted(tickers)),
+            related_tickers=(),
+        )
+        for key, tickers in members.items()
+        if tickers
+    )
+
+
+def _effective_evidence_groups(assignment_histories, histories):
+    available = set(histories)
+    members = {key: set() for key in MARKET_GROUPS}
+    for ticker, records in assignment_histories.items():
+        if ticker not in available:
+            continue
+        for _start, _finish, record in records:
+            for key in _assignment_group_keys(record):
+                if key in members:
+                    members[key].add(ticker)
+    return {
+        key: replace(
+            MARKET_GROUPS[key],
+            constituent_tickers=tuple(sorted(tickers)),
+            related_tickers=tuple(
+                ticker
+                for ticker in MARKET_GROUPS[key].related_tickers
+                if ticker in available
+            ),
+        )
+        for key, tickers in members.items()
+        if tickers
+    }
+
+
+def _build_effective_group_state(histories, assignment_histories, group):
+    scoped = _group_scoped_histories(histories, group)
+    membership_intervals = {
+        ticker: _group_membership_intervals(
+            assignment_histories.get(ticker, ()),
+            group.key,
+            membership="evidence",
+        )
+        for ticker in group.constituent_tickers
+    }
+    return _benchmark_dependent_group_state(
+        build_group_regime_state(
+            scoped,
+            group,
+            membership_intervals=membership_intervals,
+        ),
+        scoped,
+        group,
+    )
+
+
+def _effective_primary_workloads(
+    histories,
+    assignment_histories,
+    group,
+):
+    single_members = []
+    repeated = []
+    for ticker in group.constituent_tickers:
+        intervals = _group_membership_intervals(
+            assignment_histories.get(ticker, ()),
+            group.key,
+            membership="primary",
+        )
+        if len(intervals) == 1:
+            single_members.append((ticker, intervals[0]))
+        elif intervals:
+            repeated.append((ticker, intervals))
+
+    if single_members:
+        workload_group = replace(
+            group,
+            constituent_tickers=tuple(
+                ticker for ticker, _interval in single_members
+            ),
+        )
+        scoped = _group_scoped_histories(histories, workload_group)
+        for ticker, interval in single_members:
+            scoped[ticker] = _history_for_intervals(
+                histories[ticker],
+                (interval,),
+            )
+        yield workload_group, scoped
+
+    for ticker, intervals in repeated:
+        workload_group = replace(
+            group,
+            constituent_tickers=(ticker,),
+        )
+        for interval in intervals:
+            scoped = _group_scoped_histories(histories, workload_group)
+            scoped[ticker] = _history_for_intervals(
+                histories[ticker],
+                (interval,),
+            )
+            yield workload_group, scoped
+
+
+def _group_membership_intervals(records, group_key, *, membership):
+    intervals = []
+    for effective_from, effective_to, record in records:
+        if membership == "primary":
+            applies = (
+                str(record.get("primary_model_group") or "").strip()
+                == group_key
+            )
+        else:
+            applies = group_key in _assignment_group_keys(record)
+        if not applies:
+            continue
+        if intervals and intervals[-1][1] == effective_from:
+            intervals[-1] = (intervals[-1][0], effective_to)
+        else:
+            intervals.append((effective_from, effective_to))
+    return tuple(intervals)
+
+
+def _history_for_intervals(history, intervals):
+    checked = history.copy(deep=True)
+    checked.index = checked.index.tz_localize(None)
+    parts = []
+    for effective_from, effective_to in intervals:
+        selected = checked.loc[
+            (checked.index >= effective_from)
+            & (
+                True
+                if effective_to is None
+                else checked.index < effective_to
+            )
+        ]
+        if not selected.empty:
+            parts.append(selected)
+    if not parts:
+        return checked.iloc[0:0]
+    return pd.concat(parts).sort_index()
+
+
+def _histories_from_assignment_evidence(histories, assignment_histories):
+    causal = dict(histories)
+    for ticker, records in assignment_histories.items():
+        history = histories.get(ticker)
+        if (
+            not records
+            or not isinstance(history, pd.DataFrame)
+            or history.empty
+            or not isinstance(history.index, pd.DatetimeIndex)
+        ):
+            continue
+        checked = history.copy(deep=True)
+        checked.index = checked.index.tz_localize(None)
+        causal[ticker] = checked.loc[checked.index >= records[0][0]]
+    return causal
 
 
 def _normalized_assignments(assignments):
@@ -977,6 +1172,7 @@ def _attach_additional_risk_sources(
     assignment_by_ticker,
     *,
     dynamic_membership,
+    assignment_histories=None,
 ):
     group_state = _cached_group_state(
         histories,
@@ -992,14 +1188,22 @@ def _attach_additional_risk_sources(
     )
     ticker_keys = selected.index.get_level_values("ticker")
     if dynamic_membership:
-        sector_keys = tuple(
-            _assignment_group_keys(assignment_by_ticker.get(ticker))[0]
-            for ticker in ticker_keys
-        )
-        theme_keys = tuple(
-            _assignment_group_keys(assignment_by_ticker.get(ticker))[1]
-            for ticker in ticker_keys
-        )
+        if assignment_histories is None:
+            effective_keys = tuple(
+                _assignment_group_keys(assignment_by_ticker.get(ticker))
+                for ticker in ticker_keys
+            )
+        else:
+            dates = selected.index.get_level_values("observation_date")
+            effective_keys = tuple(
+                _effective_assignment_group_keys(
+                    assignment_histories.get(ticker, ()),
+                    observation_date,
+                )
+                for ticker, observation_date in zip(ticker_keys, dates)
+            )
+        sector_keys = tuple(keys[0] for keys in effective_keys)
+        theme_keys = tuple(keys[1] for keys in effective_keys)
     else:
         sector_key = group.key if group.key in SECTOR_ETFS else None
         theme_key = None if sector_key is not None else group.key
@@ -1177,6 +1381,22 @@ def _assignment_group_keys(assignment):
         else None
     )
     return sector_key, theme_key
+
+
+def _effective_assignment_group_keys(records, observation_date):
+    assignment = next(
+        (
+            record
+            for effective_from, effective_to, record in records
+            if effective_from <= observation_date
+            and (
+                effective_to is None
+                or observation_date < effective_to
+            )
+        ),
+        None,
+    )
+    return _assignment_group_keys(assignment)
 
 
 def _cached_group_state(histories, key, groups_by_key, group_states):

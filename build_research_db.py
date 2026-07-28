@@ -18,7 +18,7 @@ from data.research_store import (
     SCHEMA_VERSION,
     load_json_list,
 )
-from web.market_groups import REFERENCE_TICKERS, SECTOR_ETFS
+from web.market_groups import MARKET_GROUPS, REFERENCE_TICKERS, SECTOR_ETFS
 
 
 def _price_history(connection, ticker, asof):
@@ -38,8 +38,21 @@ def _price_history(connection, ticker, asof):
     ).fetchall()
 
 
+def _required_group_reference_tickers():
+    return frozenset(
+        ticker
+        for group in MARKET_GROUPS.values()
+        for ticker in (
+            *group.benchmark_tickers,
+            *group.fallback_benchmark_tickers,
+        )
+    )
+
+
 def _validate_reference_assets():
-    missing = sorted(set(SECTOR_ETFS.values()) - set(REFERENCE_TICKERS))
+    missing = sorted(
+        _required_group_reference_tickers() - set(REFERENCE_TICKERS)
+    )
     if missing:
         raise ValueError(
             "missing standard reference ETF mappings: " + ", ".join(missing)
@@ -55,7 +68,7 @@ def _validate_persisted_reference_assets(connection):
         """
     )
     persisted = {str(row[0]) for row in rows}
-    missing = sorted(set(REFERENCE_TICKERS) - persisted)
+    missing = sorted(_required_group_reference_tickers() - persisted)
     if missing:
         raise ValueError(
             "missing persisted reference ETF assets: " + ", ".join(missing)
@@ -221,6 +234,7 @@ def build_database(catalog_path, raw_root, output_path, *, imported_at=None):
                         "benchmark_ticker": result.benchmark_ticker,
                         "confidence": result.confidence,
                         "rule_version": result.rule_version,
+                        "observed_at": result.asof,
                     }
                 ticker_assignments = historical_group_assignment_intervals(
                     ticker,
