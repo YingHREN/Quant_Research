@@ -5,7 +5,9 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 
 from research.unified_downside_benchmark import (
+    align_model_predictions,
     attach_next_open_path_targets,
+    attach_point_in_time_strata,
 )
 
 
@@ -103,6 +105,172 @@ class UnifiedDownsidePathTargetTest(unittest.TestCase):
                 horizons=(2,),
                 adverse_thresholds={5: -0.05},
             )
+
+
+class UnifiedDownsideAlignmentTest(unittest.TestCase):
+    def test_alignment_requires_unique_keys_and_keeps_missing_unavailable(self):
+        keys = pd.DataFrame(
+            {
+                "ticker": ["AAA", "AAA"],
+                "observation_date": pd.to_datetime(
+                    ["2026-01-02", "2026-01-05"]
+                ),
+                "horizon": [5, 5],
+                "fold": [1, 1],
+            }
+        )
+        ridge = keys.iloc[[0]].assign(
+            predicted_event=True,
+            predicted_score=pd.NA,
+            model_version="ridge_direction_v1",
+        )
+
+        aligned = align_model_predictions(keys, {"ridge_down": ridge})
+
+        self.assertEqual(len(aligned), 2)
+        available = aligned.loc[
+            aligned["observation_date"] == pd.Timestamp("2026-01-02")
+        ].iloc[0]
+        missing = aligned.loc[
+            aligned["observation_date"] == pd.Timestamp("2026-01-05")
+        ].iloc[0]
+        self.assertEqual(available["status"], "available")
+        self.assertTrue(available["predicted_event"])
+        self.assertEqual(missing["status"], "unavailable")
+        self.assertTrue(pd.isna(missing["predicted_event"]))
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            align_model_predictions(
+                keys,
+                {"ridge_down": pd.concat([ridge, ridge], ignore_index=True)},
+            )
+
+    def test_alignment_rejects_model_rows_outside_frozen_test_keys(self):
+        keys = pd.DataFrame(
+            {
+                "ticker": ["AAA"],
+                "observation_date": [pd.Timestamp("2026-01-02")],
+                "horizon": [5],
+                "fold": [1],
+            }
+        )
+        outside = keys.assign(
+            observation_date=pd.Timestamp("2026-01-05"),
+            predicted_event=False,
+            predicted_score=0.0,
+            model_version="v1",
+        )
+
+        with self.assertRaisesRegex(ValueError, "outside"):
+            align_model_predictions(keys, {"ridge_down": outside})
+
+    def test_strata_use_half_open_assignment_intervals(self):
+        keys = pd.DataFrame(
+            {
+                "ticker": ["AAA"] * 3,
+                "observation_date": pd.to_datetime(
+                    ["2026-01-09", "2026-01-10", "2026-02-02"]
+                ),
+                "horizon": [5] * 3,
+                "fold": [1] * 3,
+            }
+        )
+        assignments = pd.DataFrame(
+            {
+                "ticker": ["AAA", "AAA"],
+                "theme_keys": [
+                    ("semiconductor",),
+                    ("software_cloud",),
+                ],
+                "primary_model_group": [
+                    "semiconductor",
+                    "software_cloud",
+                ],
+                "classification_state": ["classified", "classified"],
+                "effective_from": pd.to_datetime(
+                    ["2025-01-01", "2026-02-01"]
+                ),
+                "effective_to": pd.to_datetime(["2026-01-10", None]),
+                "source": ["override", "override"],
+            }
+        )
+        regimes = pd.DataFrame(
+            {
+                "observation_date": keys["observation_date"],
+                "regime": "uptrend",
+            }
+        )
+
+        stratified = attach_point_in_time_strata(
+            keys,
+            assignments,
+            regimes,
+        ).set_index("observation_date")
+
+        self.assertEqual(
+            stratified.loc[pd.Timestamp("2026-01-09"), "group_key"],
+            "semiconductor",
+        )
+        self.assertEqual(
+            stratified.loc[pd.Timestamp("2026-01-10"), "group_key"],
+            "unclassified",
+        )
+        self.assertEqual(
+            stratified.loc[pd.Timestamp("2026-02-02"), "group_key"],
+            "software_cloud",
+        )
+        self.assertEqual(
+            stratified.loc[pd.Timestamp("2026-01-09"), "market_regime"],
+            "uptrend",
+        )
+
+    def test_strata_do_not_bridge_departure_and_reentry(self):
+        dates = pd.bdate_range("2026-01-01", periods=5)
+        keys = pd.DataFrame(
+            {
+                "ticker": "AAA",
+                "observation_date": dates,
+                "horizon": 5,
+                "fold": 1,
+            }
+        )
+        assignments = pd.DataFrame(
+            {
+                "ticker": ["AAA", "AAA"],
+                "theme_keys_json": [
+                    '["semiconductor"]',
+                    '["semiconductor"]',
+                ],
+                "primary_model_group": [
+                    "semiconductor",
+                    "semiconductor",
+                ],
+                "classification_state": ["classified", "classified"],
+                "effective_from": [dates[0], dates[3]],
+                "effective_to": [dates[2], pd.NaT],
+                "source": ["sec", "sec"],
+            }
+        )
+
+        result = attach_point_in_time_strata(
+            keys,
+            assignments,
+            pd.DataFrame(),
+        )
+
+        self.assertEqual(
+            result["group_key"].tolist(),
+            [
+                "semiconductor",
+                "semiconductor",
+                "unclassified",
+                "semiconductor",
+                "semiconductor",
+            ],
+        )
+        self.assertEqual(
+            result["market_regime"].tolist(),
+            ["unavailable"] * 5,
+        )
 
 
 if __name__ == "__main__":
