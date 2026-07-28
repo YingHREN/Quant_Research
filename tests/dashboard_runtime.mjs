@@ -220,13 +220,13 @@ const universe = {
     stale: false, shape_state: "strict_vcp", momentum_percentile: 80,
     pool_membership: { active: true, research: false, research_catalog: false },
     sector_classification: {
-      state: "agree",
+      state: "conflict",
       sec: {
         sector_key: "technology", confidence: 1, source: "sec",
         rule_version: "sec_sic_v1", asof: "2026-07-24",
       },
       market_behavior: {
-        sector_key: "technology", benchmark_ticker: "XLK", confidence: 0.8,
+        sector_key: "financials", benchmark_ticker: "XLF", confidence: 0.8,
         source: "price_returns", rule_version: "market_behavior_v1",
         asof: "2026-07-24", residual_correlation: 0.42,
         residual_beta: 1.2, relative_return_63d: 0.08, common_days: 252,
@@ -464,6 +464,7 @@ if (mode === "success") {
   const volumeTitlesZh = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersZh = markerControllers[0].markers.map((marker) => marker.text);
   const topRiskZh = elements.get("top-risk-state").textContent;
+  const classificationZh = textTree(elements.get("security-classification"));
   const topRiskToneZh = elements.get("top-risk-state").dataset.tone;
   const meterZh = byClass(elements.get("factor-overview"), "factor-bar-track")[0];
   const strictInfoZh = byClass(elements.get("factor-table-body"), "factor-info").at(-1);
@@ -487,6 +488,7 @@ if (mode === "success") {
   const volumeTitlesEn = volumeChart.series.map((series) => series.options.title).filter(Boolean);
   const markersEn = markerControllers[0].markers.map((marker) => marker.text);
   const topRiskEn = elements.get("top-risk-state").textContent;
+  const classificationEn = textTree(elements.get("security-classification"));
   const topRiskToneEn = elements.get("top-risk-state").dataset.tone;
   const datesEn = [priceChart, volumeChart].map((chart) => [
     chart.options.timeScale.tickMarkFormatter("2026-07-17"),
@@ -518,6 +520,12 @@ if (mode === "success") {
   assert.deepEqual(priceLinesZh, ["向上突破准备形态（严格 VCP）枢轴点"]);
   assert.deepEqual(markersZh, ["向上突破准备形态（严格 VCP）", "预测起点 · 下跌"]);
   assert.equal(topRiskZh, "顶部风险 72 · 已确认");
+  assert.match(classificationZh, /两套分类存在差异/);
+  assert.match(
+    classificationZh,
+    /SEC 为 信息技术.*价格行为更接近 金融.*XLF/,
+  );
+  assert.equal(elements.get("security-classification").dataset.state, "conflict");
   assert.equal(topRiskToneZh, "confirmed");
   assert.ok(volumeTitlesZh.includes("成交量 MA20"));
   assert.equal(meterZh.getAttribute("aria-label"), "收盘价相对 EMA20 展示分数");
@@ -551,13 +559,19 @@ if (mode === "success") {
     ["Bullish breakout setup (Strict VCP)", "Forecast start · Down"],
   );
   assert.equal(topRiskEn, "Top risk 72 · Confirmed");
+  assert.match(classificationEn, /Classifications disagree/);
+  assert.match(
+    classificationEn,
+    /SEC: Information technology.*price behavior is closer to Financials.*XLF/,
+  );
   assert.equal(topRiskToneEn, "confirmed");
   assert.ok(volumeTitlesEn.includes("Volume MA20"));
   assert.equal(meterEn.getAttribute("aria-label"), "Close vs EMA20 display score");
   assert.deepEqual(datesEn, datesZh);
   console.log(JSON.stringify({ factorZh, tableZh, scenarioZh, structureZh, chartZh,
     modelZh, lockedModelZh, popoverZh, factorEn, tableEn, scenarioEn, structureEn,
-    chartEn, modelEn, popoverEn, topRiskZh, topRiskEn }));
+    chartEn, modelEn, popoverEn, topRiskZh, topRiskEn,
+    classificationZh, classificationEn }));
 } else if (mode === "missing-top-risk-element") {
   assert.equal(elements.get("universe-count").textContent, "1/1");
   assert.match(elements.get("research-status").textContent, /2026-07-22/);

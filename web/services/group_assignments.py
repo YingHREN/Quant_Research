@@ -60,6 +60,36 @@ class GroupAssignmentRepository:
                 self._cache.popitem(last=False)
         return deepcopy(payload)
 
+    def build_history(self, tickers, *, start_asof=None, end_asof=None):
+        """Return every assignment interval overlapping a bounded date range."""
+        normalized = _normalize_tickers(tickers)
+        start = None if start_asof is None else _normalize_date(start_asof)
+        end = None if end_asof is None else _normalize_date(end_asof)
+        if start is not None and end is not None and start > end:
+            raise ValueError("assignment history range is invalid")
+        try:
+            revision = self.database_path.stat().st_mtime_ns
+        except OSError:
+            return _unavailable_history_payload(normalized, start, end)
+        try:
+            if end is None:
+                end = self._latest_observation_date()
+            key = (revision, "history", normalized, start, end)
+            with self._lock:
+                cached = self._cache.get(key)
+                if cached is not None:
+                    self._cache.move_to_end(key)
+                    return deepcopy(cached)
+            payload = self._read_history(normalized, start, end, revision)
+        except (OSError, sqlite3.Error, ValueError, TypeError, json.JSONDecodeError):
+            return _unavailable_history_payload(normalized, start, end)
+        with self._lock:
+            self._cache[key] = deepcopy(payload)
+            self._cache.move_to_end(key)
+            while len(self._cache) > self._max_cache_size:
+                self._cache.popitem(last=False)
+        return deepcopy(payload)
+
     def _latest_observation_date(self):
         connection = _readonly_connection(self.database_path)
         try:
@@ -110,6 +140,31 @@ class GroupAssignmentRepository:
             "revision": revision,
             "coverage": (assigned_count / len(tickers)) if tickers else 1.0,
             "review_count": review_count,
+            "by_ticker": by_ticker,
+        }
+
+    def _read_history(self, tickers, start, end, revision):
+        if end is None:
+            rows = ()
+        else:
+            connection = _readonly_connection(self.database_path)
+            try:
+                rows = _assignment_history_rows(
+                    connection,
+                    tickers,
+                    start,
+                    end,
+                )
+            finally:
+                connection.close()
+        by_ticker = {ticker: [] for ticker in tickers}
+        for row in rows:
+            by_ticker[row["ticker"]].append(_assignment_dict(row))
+        return {
+            "status": "available",
+            "start_asof": start,
+            "end_asof": end,
+            "revision": revision,
             "by_ticker": by_ticker,
         }
 
@@ -179,6 +234,40 @@ def _assignment_rows(connection, tickers, asof):
     return rows
 
 
+def _assignment_history_rows(connection, tickers, start, end):
+    rows = []
+    for offset in range(0, len(tickers), _BATCH_SIZE):
+        chunk = tickers[offset : offset + _BATCH_SIZE]
+        if not chunk:
+            continue
+        placeholders = ",".join("?" for _ in chunk)
+        conditions = [
+            f"ticker IN ({placeholders})",
+            "effective_from <= ?",
+        ]
+        parameters = [*chunk, end]
+        if start is not None:
+            conditions.append("(effective_to IS NULL OR ? < effective_to)")
+            parameters.append(start)
+        rows.extend(
+            connection.execute(
+                f"""
+                SELECT
+                    ticker, rule_version, effective_from, effective_to,
+                    observed_at, sector_key, sector_benchmark,
+                    theme_keys_json, theme_benchmarks_json,
+                    primary_model_group, classification_state, source,
+                    confidence, override_reason
+                FROM group_assignments
+                WHERE {" AND ".join(conditions)}
+                ORDER BY ticker, effective_from, rule_version
+                """,
+                parameters,
+            ).fetchall()
+        )
+    return rows
+
+
 def _assignment_dict(row):
     theme_keys = json.loads(row["theme_keys_json"])
     theme_benchmarks = json.loads(row["theme_benchmarks_json"])
@@ -218,4 +307,14 @@ def _unavailable_payload(tickers, asof):
             ticker: _missing("assignment_repository_unavailable")
             for ticker in tickers
         },
+    }
+
+
+def _unavailable_history_payload(tickers, start, end):
+    return {
+        "status": "unavailable",
+        "start_asof": start,
+        "end_asof": end,
+        "revision": None,
+        "by_ticker": {ticker: [] for ticker in tickers},
     }

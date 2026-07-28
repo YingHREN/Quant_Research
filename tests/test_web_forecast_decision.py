@@ -396,6 +396,57 @@ class ForecastRiskContextTest(unittest.TestCase):
         self.assertTrue(sndk["sector_risk_score"].notna().any())
         self.assertTrue(sndk["theme_risk_score"].notna().any())
 
+    def test_effective_dated_membership_changes_within_one_context_build(self):
+        assignments = {
+            "SNDK": [
+                {
+                    "state": "assigned",
+                    "ticker": "SNDK",
+                    "effective_from": "2026-01-01",
+                    "effective_to": "2026-07-01",
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": ["software"],
+                    "theme_benchmarks": {"software": ["IGV", "XSW"]},
+                    "primary_model_group": "software",
+                },
+                {
+                    "state": "assigned",
+                    "ticker": "SNDK",
+                    "effective_from": "2026-07-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": ["semiconductor"],
+                    "theme_benchmarks": {
+                        "semiconductor": ["SOXX", "SMH"],
+                    },
+                    "primary_model_group": "semiconductor",
+                },
+            ]
+        }
+        histories = {
+            "QQQ": rising(end="2026-07-10"),
+            "XLK": rising(slope=0.2, end="2026-07-10"),
+            "IGV": rising(slope=0.15, end="2026-07-10"),
+            "XSW": rising(slope=0.12, end="2026-07-10"),
+            "SOXX": rising(slope=0.3, end="2026-07-10"),
+            "SMH": rising(slope=0.3, end="2026-07-10"),
+            "SNDK": rising(slope=0.4, end="2026-07-10"),
+        }
+
+        context = build_forecast_risk_context(histories, assignments)
+        sndk = context.xs("SNDK", level="ticker")
+
+        self.assertEqual(
+            set(sndk.loc[sndk.index < "2026-07-01", "theme_group_key"]),
+            {"software"},
+        )
+        self.assertEqual(
+            set(sndk.loc[sndk.index >= "2026-07-01", "theme_group_key"]),
+            {"semiconductor"},
+        )
+
     def test_related_membership_does_not_duplicate_dynamic_context_rows(self):
         assignments = {
             "NBIS": {

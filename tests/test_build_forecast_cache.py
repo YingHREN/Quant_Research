@@ -57,6 +57,14 @@ class BuildForecastCacheTest(unittest.TestCase):
             "risk_row_count": 45,
             "evaluation_horizons": ["5", "20", "60"],
         }
+        assignment_repository = mock.Mock()
+        assignment_repository.build_history.side_effect = (
+            lambda tickers, start_asof, end_asof: {
+                "status": "available",
+                "revision": 17,
+                "by_ticker": {ticker: [] for ticker in tickers},
+            }
+        )
         output = io.StringIO()
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
             build_forecast_cache,
@@ -66,6 +74,10 @@ class BuildForecastCacheTest(unittest.TestCase):
             build_forecast_cache,
             "ForecastService",
             return_value=service,
+        ), mock.patch.object(
+            build_forecast_cache,
+            "GroupAssignmentRepository",
+            return_value=assignment_repository,
         ), redirect_stdout(output):
             database = Path(temporary) / "prices.db"
             cache = Path(temporary) / "analysis_cache.db"
@@ -94,8 +106,22 @@ class BuildForecastCacheTest(unittest.TestCase):
         self.assertEqual(
             service.prewarm.call_args_list,
             [
-                mock.call({"AAA-2026-07-23": history}),
-                mock.call({"AAA-2026-07-24": history}),
+                mock.call(
+                    {"AAA-2026-07-23": history},
+                    assignments={
+                        "status": "available",
+                        "revision": 17,
+                        "by_ticker": {"AAA-2026-07-23": []},
+                    },
+                ),
+                mock.call(
+                    {"AAA-2026-07-24": history},
+                    assignments={
+                        "status": "available",
+                        "revision": 17,
+                        "by_ticker": {"AAA-2026-07-24": []},
+                    },
+                ),
             ],
         )
         payload = json.loads(output.getvalue())

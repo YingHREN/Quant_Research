@@ -47,6 +47,11 @@ def audit_database(database_path, *, asof=None):
             if "group_assignments" in tables
             else ()
         )
+        evidence_starts = _history_evidence_starts(
+            connection,
+            tables,
+            active_tickers,
+        )
     finally:
         connection.close()
 
@@ -54,6 +59,14 @@ def audit_database(database_path, *, asof=None):
     rows = tuple(row for row in rows if row["ticker"] in active)
     valid_rows, conflicts = _validated_interval_rows(rows)
     conflicts.extend(_range_conflicts(valid_rows))
+    historical_findings, historical_complete, historical_eligible = (
+        _historical_contract_findings(
+            valid_rows,
+            evidence_starts,
+            observation_date,
+        )
+    )
+    conflicts.extend(historical_findings)
     current_by_ticker = _current_assignments(valid_rows, observation_date)
     selected = {
         ticker: candidates[-1]
@@ -68,24 +81,52 @@ def audit_database(database_path, *, asof=None):
     )
     missing = sorted(active - selected.keys())
     invalid_benchmarks = []
-    theme_counts = {}
-    for ticker, row in sorted(selected.items()):
+    decoded_assignments = {}
+    for row in valid_rows:
         themes, theme_benchmarks, json_conflicts = _assignment_json(row)
+        decoded_assignments[id(row)] = themes
         conflicts.extend(json_conflicts)
         invalid_benchmarks.extend(
-            _benchmark_findings(ticker, row, themes, theme_benchmarks)
+            _benchmark_findings(
+                row["ticker"],
+                row,
+                themes,
+                theme_benchmarks,
+            )
         )
+        conflicts.extend(_state_conflicts(row["ticker"], row, themes))
+
+    theme_counts = {}
+    for ticker, row in sorted(selected.items()):
+        themes = decoded_assignments[id(row)]
         for theme in themes:
             theme_counts[theme] = theme_counts.get(theme, 0) + 1
-        conflicts.extend(_state_conflicts(ticker, row, themes))
 
     assigned = len(selected)
     total = len(active_tickers)
+    historical_assumptions = sorted(
+        {
+            row["ticker"]
+            for row in valid_rows
+            if str(row["source"]).startswith(
+                "historical_backfill_assumption/"
+            )
+        }
+    )
     result = {
         "active_common_stocks": total,
         "asof": observation_date,
         "assigned": assigned,
         "coverage": assigned / total if total else 1.0,
+        "historical_coverage": (
+            historical_complete / historical_eligible
+            if historical_eligible
+            else 1.0
+        ),
+        "historical_backfill_assumptions": {
+            "count": len(historical_assumptions),
+            "tickers": historical_assumptions,
+        },
         "needs_review": {
             "count": len(needs_review),
             "tickers": needs_review,
@@ -151,6 +192,7 @@ def _assignment_rows(connection):
             """
             SELECT
                 ticker, rule_version, effective_from, effective_to,
+                observed_at, source,
                 sector_key, sector_benchmark, theme_keys_json,
                 theme_benchmarks_json, primary_model_group,
                 classification_state
@@ -159,6 +201,107 @@ def _assignment_rows(connection):
             """
         )
     )
+
+
+def _history_evidence_starts(connection, tables, tickers):
+    if not tickers:
+        return {}
+    if "history_segments" in tables:
+        rows = connection.execute(
+            """
+            SELECT
+                security_master.ticker,
+                COALESCE(
+                    (
+                        SELECT first_date
+                        FROM history_segments
+                        WHERE history_segments.ticker = security_master.ticker
+                          AND is_current_segment = 1
+                    ),
+                    security_master.observed_at
+                ) AS evidence_start
+            FROM security_master
+            WHERE active = 1 AND security_type = 'Common Stock'
+            ORDER BY security_master.ticker
+            """
+        )
+    else:
+        rows = connection.execute(
+            """
+            SELECT ticker, observed_at AS evidence_start
+            FROM security_master
+            WHERE active = 1 AND security_type = 'Common Stock'
+            ORDER BY ticker
+            """
+        )
+    return {
+        row["ticker"]: _normalize_date(row["evidence_start"])
+        for row in rows
+    }
+
+
+def _historical_contract_findings(rows, evidence_starts, asof):
+    by_ticker = {}
+    for row in rows:
+        by_ticker.setdefault(row["ticker"], []).append(row)
+    findings = []
+    complete = 0
+    eligible = 0
+    for ticker, evidence_start in sorted(evidence_starts.items()):
+        if evidence_start > asof:
+            continue
+        eligible += 1
+        records = sorted(
+            by_ticker.get(ticker, ()),
+            key=lambda row: (row["effective_from"], row["rule_version"]),
+        )
+        if not records:
+            continue
+        for row in records:
+            if row["effective_from"] < evidence_start:
+                findings.append(
+                    {
+                        "effective_from": row["effective_from"],
+                        "evidence_start": evidence_start,
+                        "kind": "assignment_before_history_evidence",
+                        "rule_version": row["rule_version"],
+                        "ticker": ticker,
+                    }
+                )
+        cursor = evidence_start
+        has_gap = False
+        for row in records:
+            finish = row["effective_to"]
+            if finish is not None and finish <= cursor:
+                continue
+            if row["effective_from"] > cursor and cursor <= asof:
+                findings.append(
+                    {
+                        "effective_from": cursor,
+                        "effective_to": min(row["effective_from"], asof),
+                        "kind": "assignment_history_gap",
+                        "ticker": ticker,
+                    }
+                )
+                has_gap = True
+            if finish is None:
+                cursor = None
+                break
+            if cursor is not None and finish > cursor:
+                cursor = finish
+        if cursor is not None and cursor <= asof:
+            findings.append(
+                {
+                    "effective_from": cursor,
+                    "effective_to": asof,
+                    "kind": "assignment_history_gap",
+                    "ticker": ticker,
+                }
+            )
+            has_gap = True
+        if not has_gap:
+            complete += 1
+    return findings, complete, eligible
 
 
 def _current_assignments(rows, asof):
@@ -241,9 +384,13 @@ def _range_conflicts(rows):
                 )
             if (
                 previous is None
-                or previous["effective_to"] is None
-                or current["effective_to"] is None
-                or previous["effective_to"] < current["effective_to"]
+                or (
+                    previous["effective_to"] is not None
+                    and (
+                        current["effective_to"] is None
+                        or previous["effective_to"] < current["effective_to"]
+                    )
+                )
             ):
                 previous = current
     return findings

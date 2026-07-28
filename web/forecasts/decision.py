@@ -686,6 +686,16 @@ def build_forecast_risk_context(
     """Return causal remembered-risk rows for explicitly modeled tickers."""
     if not isinstance(histories, Mapping):
         raise TypeError("histories must be a mapping")
+    assignment_histories = _effective_assignment_histories(assignments)
+    if assignment_histories is not None:
+        return _build_effective_dated_risk_context(
+            histories,
+            assignment_histories,
+        )
+    return _build_forecast_risk_context_snapshot(histories, assignments)
+
+
+def _build_forecast_risk_context_snapshot(histories, assignments):
     dynamic_membership = assignments is not None
     groups = (
         resolved_market_groups(assignments, histories)
@@ -774,6 +784,125 @@ def build_forecast_risk_context(
             names=("ticker", "observation_date"),
         )
         return pd.DataFrame(columns=RISK_CONTEXT_COLUMNS, index=index)
+    result = pd.concat(frames).sort_index()
+    if result.index.has_duplicates:
+        raise ValueError("duplicate forecast risk context keys")
+    return result.loc[:, RISK_CONTEXT_COLUMNS]
+
+
+def _effective_assignment_histories(assignments):
+    if assignments is None or not isinstance(assignments, Mapping):
+        return None
+    if all(isinstance(value, Mapping) for value in assignments.values()):
+        return None
+    normalized = {}
+    for raw_ticker, raw_records in assignments.items():
+        ticker = str(raw_ticker).strip().upper()
+        if not ticker:
+            continue
+        if not isinstance(raw_records, (list, tuple)):
+            raise TypeError(
+                "effective-dated assignments must contain interval lists"
+            )
+        records = []
+        for raw_record in raw_records:
+            if not isinstance(raw_record, Mapping):
+                raise TypeError("assignment history rows must be mappings")
+            if raw_record.get("state", "assigned") != "assigned":
+                continue
+            try:
+                effective_from = pd.Timestamp(
+                    raw_record["effective_from"]
+                ).normalize()
+                effective_to = (
+                    None
+                    if raw_record.get("effective_to") is None
+                    else pd.Timestamp(raw_record["effective_to"]).normalize()
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("invalid assignment history interval") from exc
+            if (
+                effective_from.tz is not None
+                or (effective_to is not None and effective_to.tz is not None)
+                or (
+                    effective_to is not None
+                    and effective_from >= effective_to
+                )
+            ):
+                raise ValueError("invalid assignment history interval")
+            record = dict(raw_record)
+            records.append((effective_from, effective_to, record))
+        records.sort(key=lambda value: value[0])
+        outer = None
+        for record in records:
+            if outer is not None and (
+                outer[1] is None or record[0] < outer[1]
+            ):
+                raise ValueError("overlapping assignment history intervals")
+            if (
+                outer is None
+                or (
+                    outer[1] is not None
+                    and (record[1] is None or outer[1] < record[1])
+                )
+            ):
+                outer = record
+        normalized[ticker] = tuple(records)
+    return normalized
+
+
+def _build_effective_dated_risk_context(histories, assignment_histories):
+    observed_indexes = [
+        history.index
+        for history in histories.values()
+        if isinstance(history, pd.DataFrame)
+        and not history.empty
+        and isinstance(history.index, pd.DatetimeIndex)
+    ]
+    if not observed_indexes:
+        return _build_forecast_risk_context_snapshot(histories, {})
+    history_start = min(index.min().normalize() for index in observed_indexes)
+    history_finish = max(index.max().normalize() for index in observed_indexes)
+    boundaries = {history_start, history_finish + pd.Timedelta(days=1)}
+    for records in assignment_histories.values():
+        for effective_from, effective_to, _record in records:
+            if history_start < effective_from <= history_finish:
+                boundaries.add(effective_from)
+            if (
+                effective_to is not None
+                and history_start < effective_to <= history_finish
+            ):
+                boundaries.add(effective_to)
+    ordered = sorted(boundaries)
+    frames = []
+    for segment_start, segment_finish in zip(ordered, ordered[1:]):
+        snapshot = {}
+        for ticker, records in assignment_histories.items():
+            active = next(
+                (
+                    record
+                    for effective_from, effective_to, record in records
+                    if effective_from <= segment_start
+                    and (
+                        effective_to is None
+                        or segment_start < effective_to
+                    )
+                ),
+                None,
+            )
+            if active is not None:
+                snapshot[ticker] = active
+        segment = _build_forecast_risk_context_snapshot(histories, snapshot)
+        if segment.empty:
+            continue
+        dates = segment.index.get_level_values("observation_date")
+        segment = segment.loc[
+            (dates >= segment_start) & (dates < segment_finish)
+        ]
+        if not segment.empty:
+            frames.append(segment)
+    if not frames:
+        return _build_forecast_risk_context_snapshot(histories, {})
     result = pd.concat(frames).sort_index()
     if result.index.has_duplicates:
         raise ValueError("duplicate forecast risk context keys")

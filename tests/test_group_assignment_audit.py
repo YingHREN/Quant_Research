@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import sqlite3
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 from audit_group_assignments import audit_database, strict_failure
 from build_research_db import build_database
+from data.group_assignments import resolve_group_assignment
 from data.market_behavior import MarketBehaviorResult
 from data.research_store import ResearchPriceStore
 from web.market_groups import REFERENCE_TICKERS
@@ -37,7 +39,7 @@ def _initialize_audit_database(path):
         """
         INSERT INTO security_master
             (ticker, name, security_type, active, observed_at, provider)
-        VALUES (?, ?, 'Common Stock', 1, '2026-07-24', 'fixture')
+        VALUES (?, ?, 'Common Stock', 1, '2026-01-01', 'fixture')
         """,
         [
             ("CHIP", "Chip Fixture"),
@@ -212,6 +214,45 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
         )
         self.assertTrue(strict_failure(result))
 
+    def test_audit_rejects_missing_mapping_on_expired_historical_row(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            """
+            UPDATE group_assignments
+            SET effective_from = '2026-07-01'
+            WHERE ticker = 'CHIP'
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO group_assignments
+                (ticker, rule_version, effective_from, effective_to, observed_at,
+                 sector_key, sector_benchmark, theme_keys_json,
+                 theme_benchmarks_json, primary_model_group,
+                 classification_state, source, confidence, override_reason)
+            VALUES
+                ('CHIP', 'historical_v1', '2026-01-01', '2026-07-01',
+                 '2026-07-24', 'technology', 'XLK', '["software"]', '{}',
+                 'software', 'classified', 'fixture', 1.0, NULL)
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+
+        self.assertIn(
+            {
+                "actual": None,
+                "expected": ["IGV", "XSW"],
+                "group": "software",
+                "kind": "theme",
+                "ticker": "CHIP",
+            },
+            result["invalid_benchmarks"],
+        )
+        self.assertTrue(strict_failure(result))
+
     def test_audit_rejects_bogus_classified_state_and_primary_model_group(self):
         connection = sqlite3.connect(self.database)
         connection.execute(
@@ -293,6 +334,15 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
 
     def test_audit_reports_overlapping_ranges_but_allows_touching_ranges(self):
         connection = sqlite3.connect(self.database)
+        connection.execute(
+            """
+            INSERT INTO history_segments
+                (ticker, segment_id, first_date, last_date, row_count,
+                 break_before_days, is_current_segment)
+            VALUES
+                ('CHIP', 1, '2025-01-01', '2026-07-24', 400, NULL, 1)
+            """
+        )
         connection.executemany(
             """
             INSERT INTO group_assignments
@@ -336,6 +386,42 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
                 },
             ],
         )
+
+    def test_open_ended_outer_interval_reports_each_nested_overlap(self):
+        connection = sqlite3.connect(self.database)
+        connection.executemany(
+            """
+            INSERT INTO group_assignments
+                (ticker, rule_version, effective_from, effective_to, observed_at,
+                 sector_key, sector_benchmark, theme_keys_json,
+                 theme_benchmarks_json, primary_model_group,
+                 classification_state, source, confidence, override_reason)
+            VALUES
+                ('CHIP', ?, ?, ?, '2026-07-24', 'technology', 'XLK',
+                 '["semiconductor"]', '{"semiconductor":["SOXX","SMH"]}',
+                 'semiconductor', 'classified', 'fixture', 1.0, NULL)
+            """,
+            [
+                ("outer_v1", "2024-01-01", None),
+                ("nested_one_v1", "2024-02-01", "2024-03-01"),
+                ("nested_two_v1", "2024-04-01", "2024-05-01"),
+            ],
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-07-24")
+        overlap_pairs = {
+            (
+                finding["previous_rule_version"],
+                finding["current_rule_version"],
+            )
+            for finding in result["conflicts"]
+            if finding["kind"] == "overlapping_effective_ranges"
+        }
+
+        self.assertIn(("outer_v1", "nested_one_v1"), overlap_pairs)
+        self.assertIn(("outer_v1", "nested_two_v1"), overlap_pairs)
 
     def test_audit_rejects_malformed_and_non_positive_historical_ranges(self):
         connection = sqlite3.connect(self.database)
@@ -402,6 +488,41 @@ class GroupAssignmentAuditCliTest(unittest.TestCase):
                 },
                 result["conflicts"],
             )
+        self.assertTrue(strict_failure(result))
+
+    def test_audit_rejects_assignment_before_current_identity_history(self):
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            """
+            INSERT INTO history_segments
+                (ticker, segment_id, first_date, last_date, row_count,
+                 break_before_days, is_current_segment)
+            VALUES
+                ('CHIP', 1, '2025-01-02', '2026-07-24', 400, NULL, 1)
+            """
+        )
+        connection.execute(
+            """
+            UPDATE group_assignments
+            SET effective_from = '2024-01-01'
+            WHERE ticker = 'CHIP'
+            """
+        )
+        connection.commit()
+        connection.close()
+
+        result = audit_database(self.database, asof="2026-06-26")
+
+        self.assertIn(
+            {
+                "effective_from": "2024-01-01",
+                "evidence_start": "2025-01-02",
+                "kind": "assignment_before_history_evidence",
+                "rule_version": "fixture_v1",
+                "ticker": "CHIP",
+            },
+            result["conflicts"],
+        )
         self.assertTrue(strict_failure(result))
 
     def test_strict_cli_prints_deterministic_json_and_exits_nonzero(self):
@@ -544,8 +665,171 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
                 WHERE ticker = 'ZZZZ'
                 """
             ).fetchall(),
-            [("market_behavior_v1", "financials", "classified")],
+            [
+                (
+                    "historical_backfill_v1/market_behavior_v1",
+                    "financials",
+                    "classified",
+                )
+            ],
         )
+
+    def test_build_backfills_mu_adbe_nbis_from_current_history_evidence(self):
+        securities = [
+            {
+                "ticker": "MU",
+                "name": "Micron",
+                "exchange": "US",
+                "classification": {
+                    "sector_key": "technology",
+                    "theme_keys": ["semiconductor"],
+                    "confidence": 1.0,
+                    "rule_version": "sec_sic_v1",
+                },
+            },
+            {
+                "ticker": "ADBE",
+                "name": "Adobe",
+                "exchange": "US",
+                "classification": {
+                    "sector_key": "technology",
+                    "theme_keys": ["software"],
+                    "confidence": 1.0,
+                    "rule_version": "sec_sic_v1",
+                },
+            },
+            {
+                "ticker": "NBIS",
+                "name": "Nebius",
+                "exchange": "US",
+                "classification": {
+                    "sector_key": "technology",
+                    "theme_keys": [],
+                    "confidence": 1.0,
+                    "rule_version": "sec_sic_v1",
+                },
+            },
+        ]
+        self.replace_catalog_securities(securities)
+        historical_rows = [
+            {
+                **_daily_row()[0],
+                "date": "2026-06-01",
+            },
+            _daily_row()[0],
+        ]
+        for ticker in ("MU", "ADBE", "NBIS"):
+            (self.raw_root / f"{ticker}.json").write_text(
+                json.dumps(historical_rows),
+                encoding="utf-8",
+            )
+
+        self.build()
+
+        connection = sqlite3.connect(self.output_path)
+        rows = connection.execute(
+            """
+            SELECT ticker, effective_from, observed_at, source, rule_version
+            FROM group_assignments
+            WHERE ticker IN ('MU', 'ADBE', 'NBIS')
+            ORDER BY ticker
+            """
+        ).fetchall()
+        connection.close()
+        self.assertEqual(
+            rows,
+            [
+                (
+                    "ADBE",
+                    "2026-06-01",
+                    "2026-07-24",
+                    "historical_backfill_assumption/sec_exact",
+                    "historical_backfill_v1/sec_sic_v1",
+                ),
+                (
+                    "MU",
+                    "2026-06-01",
+                    "2026-07-24",
+                    "historical_backfill_assumption/sec_exact",
+                    "historical_backfill_v1/sec_sic_v1",
+                ),
+                (
+                    "NBIS",
+                    "2026-06-01",
+                    "2026-07-24",
+                    "historical_backfill_assumption/sec_broad",
+                    "historical_backfill_v1/sec_sic_v1",
+                ),
+            ],
+        )
+        historical = audit_database(self.output_path, asof="2026-06-26")
+        self.assertEqual(historical["coverage"], 1.0)
+        self.assertEqual(historical["missing"], {"count": 0, "tickers": []})
+        self.assertEqual(historical["historical_coverage"], 1.0)
+
+    def test_publication_rejects_noncanonical_benchmark_mappings(self):
+        malformed = (
+            {
+                "sector_benchmark": "XLF",
+            },
+            {
+                "theme_benchmarks": {"software": ("SOXX",)},
+                "theme_keys": ("software",),
+                "primary_model_group": "software",
+            },
+        )
+        for changes in malformed:
+            with self.subTest(changes=changes), patch(
+                "build_research_db.historical_group_assignment_intervals",
+            ) as resolve_intervals:
+                assignment = resolve_group_assignment(
+                    "ZZZZ",
+                    {
+                        "sec": {
+                            "sector_key": "technology",
+                            "confidence": 1.0,
+                        }
+                    },
+                    "2026-07-24",
+                    overrides=(),
+                )
+                resolve_intervals.return_value = (
+                    replace(assignment, **changes),
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "group assignment audit failed",
+                ):
+                    self.build()
+
+    def test_publication_rejects_malformed_state_and_primary_group(self):
+        malformed = (
+            {"classification_state": "bogus"},
+            {"primary_model_group": "software"},
+        )
+        for changes in malformed:
+            with self.subTest(changes=changes), patch(
+                "build_research_db.historical_group_assignment_intervals",
+            ) as resolve_intervals:
+                assignment = resolve_group_assignment(
+                    "ZZZZ",
+                    {
+                        "sec": {
+                            "sector_key": "technology",
+                            "confidence": 1.0,
+                        }
+                    },
+                    "2026-07-24",
+                    overrides=(),
+                )
+                resolve_intervals.return_value = (
+                    replace(assignment, **changes),
+                )
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "group assignment audit failed",
+                ):
+                    self.build()
 
     def test_build_rejects_missing_standard_reference_etf_before_publication(self):
         with patch("build_research_db.REFERENCE_TICKERS", ("SPY", "QQQ", "XLC")):
@@ -553,6 +837,35 @@ class GroupAssignmentPublicationGateTest(unittest.TestCase):
                 ValueError, "missing standard reference ETF mappings"
             ):
                 self.build()
+
+        self.assertFalse(self.output_path.exists())
+
+    def test_build_rejects_reference_ticker_not_persisted_as_etf(self):
+        original_import = ResearchPriceStore.import_security
+
+        def skip_xlf(store, security, *args, **kwargs):
+            if security["ticker"] == "XLF":
+                return type(
+                    "Summary",
+                    (),
+                    {
+                        "daily_rows": 0,
+                        "segment_count": 0,
+                        "split_rows": 0,
+                        "dividend_rows": 0,
+                    },
+                )()
+            return original_import(store, security, *args, **kwargs)
+
+        with patch.object(
+            ResearchPriceStore,
+            "import_security",
+            new=skip_xlf,
+        ), self.assertRaisesRegex(
+            ValueError,
+            "persisted reference ETF assets",
+        ):
+            self.build()
 
         self.assertFalse(self.output_path.exists())
 

@@ -8,6 +8,7 @@ import unittest
 
 from data.group_assignments import (
     audit_assignments,
+    historical_group_assignment_intervals,
     load_group_overrides,
     resolve_group_assignment,
 )
@@ -207,6 +208,49 @@ class GroupAssignmentTest(unittest.TestCase):
         self.assertEqual(assignment.primary_model_group, "semiconductor")
         self.assertEqual(assignment.source, "override")
 
+    def test_historical_backfill_is_evidence_bounded_and_preserves_override(self):
+        assignments = historical_group_assignment_intervals(
+            "SNDK",
+            {
+                "sec": {
+                    "sector_key": "technology",
+                    "confidence": 0.8,
+                    "rule_version": "sec_sic_v1",
+                }
+            },
+            observed_at="2026-07-24",
+            evidence_start="2025-02-13",
+        )
+
+        self.assertEqual(
+            [
+                (
+                    assignment.effective_from,
+                    assignment.effective_to,
+                    assignment.source,
+                    assignment.rule_version,
+                )
+                for assignment in assignments
+            ],
+            [
+                (
+                    "2025-02-13",
+                    "2025-02-24",
+                    "historical_backfill_assumption/sec_broad",
+                    "historical_backfill_v1/sec_sic_v1",
+                ),
+                (
+                    "2025-02-24",
+                    "9999-12-31",
+                    "override",
+                    "security_group_overrides_v1",
+                ),
+            ],
+        )
+        self.assertTrue(
+            all(assignment.asof == "2026-07-24" for assignment in assignments)
+        )
+
     def test_audit_reports_invalid_benchmarks_duplicate_themes_and_conflicts(self):
         valid = resolve_group_assignment(
             "CHIP",
@@ -229,6 +273,45 @@ class GroupAssignmentTest(unittest.TestCase):
         self.assertEqual(audit["duplicate_themes"], ["BAD"])
         self.assertEqual(audit["conflicting_assignments"], ["CHIP"])
         self.assertEqual(audit["needs_review_count"], 0)
+
+    def test_audit_rejects_missing_mapping_on_expired_historical_interval(self):
+        current = resolve_group_assignment(
+            "ADBE",
+            {
+                "sec": {
+                    "sector_key": "technology",
+                    "theme_keys": ("software",),
+                    "confidence": 1.0,
+                }
+            },
+            "2026-07-24",
+        )
+        current = replace(
+            current,
+            effective_from="2026-07-01",
+        )
+        historical = replace(
+            current,
+            rule_version="historical_v1",
+            effective_from="2026-01-01",
+            effective_to="2026-07-01",
+            theme_benchmarks={},
+        )
+
+        audit = audit_assignments((historical, current))
+
+        self.assertEqual(
+            audit["invalid_benchmark_mappings"],
+            [
+                {
+                    "actual": None,
+                    "expected": ("IGV", "XSW"),
+                    "group": "software",
+                    "kind": "theme",
+                    "ticker": "ADBE",
+                }
+            ],
+        )
 
 
 if __name__ == "__main__":

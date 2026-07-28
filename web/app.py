@@ -137,6 +137,13 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
 
     if repository is None:
         repository = MarketDataRepository(flask_app.config["MARKET_DATA_DATABASE"])
+    group_assignment_repository = flask_app.config.get(
+        "GROUP_ASSIGNMENT_REPOSITORY"
+    )
+    if group_assignment_repository is None:
+        group_assignment_repository = GroupAssignmentRepository(
+            flask_app.config["RESEARCH_DATABASE"]
+        )
     forecast_service = flask_app.config.get("FORECAST_SERVICE")
     if forecast_service is None:
         persistent_cache_enabled = bool(
@@ -195,7 +202,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
     if update_manager is None:
         cache_warmer = (
-            ForecastCacheWarmer(repository, forecast_service)
+            ForecastCacheWarmer(
+                repository,
+                forecast_service,
+                group_assignment_repository=group_assignment_repository,
+            )
             if callable(getattr(forecast_service, "prewarm", None))
             else None
         )
@@ -246,13 +257,6 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 "FACTOR_PEER_CACHE_SIZE",
                 4096,
             )
-        )
-    group_assignment_repository = flask_app.config.get(
-        "GROUP_ASSIGNMENT_REPOSITORY"
-    )
-    if group_assignment_repository is None:
-        group_assignment_repository = GroupAssignmentRepository(
-            flask_app.config["RESEARCH_DATABASE"]
         )
     universe_service = flask_app.config.get("UNIVERSE_SERVICE")
     if universe_service is None:
@@ -494,6 +498,16 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 research_snapshot.histories,
                 research_snapshot.asof,
             )
+            (
+                research_forecast_assignments,
+                research_forecast_assignment_revision,
+            ) = _load_assignment_history(
+                group_assignment_repository,
+                research_snapshot.histories,
+                research_snapshot.asof,
+                fallback_assignments=research_assignments,
+                fallback_revision=research_assignment_revision,
+            )
             if research_member:
                 research_forecast_arguments = (
                     normalized_ticker,
@@ -509,8 +523,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                     forecast_payload = _call_forecast_builder(
                         research_forecast_service.build,
                         research_forecast_arguments,
-                        research_assignments,
-                        research_assignment_revision,
+                        research_forecast_assignments,
+                        research_forecast_assignment_revision,
                     )
                 except Exception as error:
                     flask_app.logger.exception(
@@ -538,8 +552,10 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                     research_forecast_service,
                     research_forecast_arguments,
                     None,
-                    assignments=research_assignments,
-                    assignment_revision=research_assignment_revision,
+                    assignments=research_forecast_assignments,
+                    assignment_revision=(
+                        research_forecast_assignment_revision
+                    ),
                 )
             return _json_response(
                 apply_stock_research_pool_membership(
@@ -577,6 +593,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             group_assignment_repository,
             peer_histories,
             observation_date,
+        )
+        forecast_assignments, forecast_assignment_revision = (
+            _load_assignment_history(
+                group_assignment_repository,
+                peer_histories,
+                observation_date,
+                fallback_assignments=assignments,
+                fallback_revision=assignment_revision,
+            )
         )
 
         warnings = []
@@ -658,15 +683,15 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 forecast_payload = _call_forecast_builder(
                     forecast_service.build,
                     forecast_arguments,
-                    assignments,
-                    assignment_revision,
+                    forecast_assignments,
+                    forecast_assignment_revision,
                 )
             else:
                 forecast_payload = _call_forecast_builder(
                     forecast_service.build,
                     forecast_arguments,
-                    assignments,
-                    assignment_revision,
+                    forecast_assignments,
+                    forecast_assignment_revision,
                     forecast_revision,
                 )
         except ForecastRevisionChanged:
@@ -701,8 +726,8 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             forecast_service,
             forecast_arguments,
             forecast_revision,
-            assignments=assignments,
-            assignment_revision=assignment_revision,
+            assignments=forecast_assignments,
+            assignment_revision=forecast_assignment_revision,
             update_in_progress=(
                 getattr(update_snapshot, "state", None) == "running"
             ),
@@ -1113,6 +1138,56 @@ def _load_assignment_snapshot(repository, tickers, asof):
         or not isinstance(payload.get("by_ticker"), Mapping)
     ):
         return None, None
+    return payload["by_ticker"], payload.get("revision")
+
+
+def _load_assignment_history(
+    repository,
+    histories,
+    asof,
+    *,
+    fallback_assignments,
+    fallback_revision,
+):
+    builder = getattr(repository, "build_history", None)
+    if not callable(builder):
+        return fallback_assignments, fallback_revision
+    normalized_tickers = tuple(
+        sorted(
+            {
+                str(ticker).strip().upper()
+                for ticker in histories
+                if str(ticker).strip()
+            }
+        )
+    )
+    starts = [
+        pd.Timestamp(history.index.min()).date().isoformat()
+        for history in histories.values()
+        if isinstance(history, pd.DataFrame)
+        and not history.empty
+        and isinstance(history.index, pd.DatetimeIndex)
+    ]
+    if not starts:
+        return fallback_assignments, fallback_revision
+    try:
+        payload = builder(
+            normalized_tickers,
+            start_asof=min(starts),
+            end_asof=asof,
+        )
+    except Exception:
+        return fallback_assignments, fallback_revision
+    if (
+        not isinstance(payload, Mapping)
+        or payload.get("status") != "available"
+        or not isinstance(payload.get("by_ticker"), Mapping)
+        or (
+            fallback_revision is not None
+            and payload.get("revision") != fallback_revision
+        )
+    ):
+        return fallback_assignments, fallback_revision
     return payload["by_ticker"], payload.get("revision")
 
 

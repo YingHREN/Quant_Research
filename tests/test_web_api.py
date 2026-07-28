@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -2031,6 +2032,108 @@ class WebApiTest(unittest.TestCase):
             "unavailable",
         )
 
+    def test_latest_detail_passes_full_assignment_history_to_forecasting(self):
+        current = {
+            "state": "assigned",
+            "ticker": "AAA",
+            "effective_from": "2026-07-01",
+            "effective_to": None,
+            "sector_key": "technology",
+            "sector_benchmark": "XLK",
+            "theme_keys": [],
+            "theme_benchmarks": {},
+            "primary_model_group": "technology",
+        }
+        history = {
+            "AAA": [
+                {
+                    **current,
+                    "effective_from": "2026-01-01",
+                    "effective_to": "2026-07-01",
+                    "sector_key": "financials",
+                    "sector_benchmark": "XLF",
+                    "primary_model_group": "financials",
+                },
+                current,
+            ]
+        }
+
+        class AssignmentRepository:
+            def build(self, tickers, asof=None):
+                return {
+                    "status": "available",
+                    "asof": asof,
+                    "revision": 31,
+                    "by_ticker": {
+                        ticker: (
+                            current
+                            if ticker == "AAA"
+                            else {
+                                "state": "missing",
+                                "reason": "no_assignment_effective_at_asof",
+                            }
+                        )
+                        for ticker in tickers
+                    },
+                }
+
+            def build_history(self, tickers, *, start_asof=None, end_asof=None):
+                return {
+                    "status": "available",
+                    "start_asof": start_asof,
+                    "end_asof": end_asof,
+                    "revision": 31,
+                    "by_ticker": {
+                        ticker: history.get(ticker, [])
+                        for ticker in tickers
+                    },
+                }
+
+        class AssignmentAwareService(InjectedForecastService):
+            database_revision = 7
+
+            def __init__(self):
+                super().__init__()
+                self.received = []
+
+            def build(self, *args, assignments=None, **kwargs):
+                self.received.append(assignments)
+                return super().build(*args)
+
+            def build_top_risk_timeline(
+                self,
+                *args,
+                assignments=None,
+                **kwargs,
+            ):
+                self.received.append(assignments)
+                return {
+                    "status": "unavailable",
+                    "unavailable_reason": "not_available",
+                    "events": [],
+                    "latest": None,
+                }
+
+        service = AssignmentAwareService()
+        response = create_app(
+            {
+                "TESTING": True,
+                "FORECAST_SERVICE": service,
+                "GROUP_ASSIGNMENT_REPOSITORY": AssignmentRepository(),
+            },
+            self.repository,
+            self.manager,
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(service.received), 2)
+        self.assertEqual(service.received[0]["AAA"], history["AAA"])
+        self.assertEqual(service.received[1], service.received[0])
+        self.assertEqual(
+            response.json["group_assignment"]["primary_model_group"],
+            "technology",
+        )
+
     def test_stock_suppresses_forecast_if_update_starts_during_snapshot(self):
         manager = StatefulFakeManager()
         repository = FakeRepository()
@@ -3314,6 +3417,86 @@ class ForecastServiceTest(unittest.TestCase):
                 second_service.cache_status()["last_access"],
                 "disk_hit",
             )
+
+    def test_same_revision_assignment_content_change_rebuilds_artifacts(self):
+        factory = FakeForecastFactory()
+        service = ForecastService(provider_factory=factory)
+        assignments = {
+            "AAA": [
+                {
+                    "state": "assigned",
+                    "ticker": "AAA",
+                    "effective_from": "2026-01-01",
+                    "effective_to": None,
+                    "sector_key": "technology",
+                    "sector_benchmark": "XLK",
+                    "theme_keys": [],
+                    "theme_benchmarks": {},
+                    "primary_model_group": "technology",
+                }
+            ]
+        }
+        changed = deepcopy(assignments)
+        changed["AAA"][0].update(
+            {
+                "sector_key": "financials",
+                "sector_benchmark": "XLF",
+                "primary_model_group": "financials",
+            }
+        )
+
+        service.build(
+            "AAA",
+            self.chart_dates,
+            self.histories,
+            assignments=assignments,
+            assignment_revision=11,
+        )
+        first_fingerprint = next(iter(service._cache))[2]
+        service.build(
+            "AAA",
+            self.chart_dates,
+            self.histories,
+            assignments=changed,
+            assignment_revision=11,
+        )
+        second_fingerprint = next(iter(service._cache))[2]
+
+        self.assertEqual(len(factory.providers), 2)
+        self.assertNotEqual(first_fingerprint, second_fingerprint)
+
+    def test_assignment_normalization_prevents_caller_mutation(self):
+        service = ForecastService(provider_factory=FakeForecastFactory())
+        assignments = {
+            "AAA": {
+                "state": "assigned",
+                "ticker": "AAA",
+                "sector_key": "technology",
+                "sector_benchmark": "XLK",
+                "theme_keys": [],
+                "theme_benchmarks": {},
+                "primary_model_group": "technology",
+            }
+        }
+
+        def mutate_internal_copy(histories, copied):
+            result = build_forecast_risk_context(histories, copied)
+            copied["AAA"]["theme_keys"].append("internal-only")
+            return result
+
+        with mock.patch(
+            "web.services.forecasts.build_forecast_risk_context",
+            side_effect=mutate_internal_copy,
+        ):
+            service.build(
+                "AAA",
+                self.chart_dates,
+                self.histories,
+                assignments=assignments,
+                assignment_revision=11,
+            )
+
+        self.assertEqual(assignments["AAA"]["theme_keys"], [])
 
     def test_cache_is_bounded_exact_and_invalidated_by_revision(self):
         factory = FakeForecastFactory()

@@ -12,6 +12,7 @@ from marketdata.paths import DEFAULT_MARKET_DATA_DATABASE
 from web.services.forecast_artifacts import ForecastArtifactStore
 from web.services.forecast_warmup import ForecastCacheWarmer
 from web.services.forecasts import ForecastService
+from web.services.group_assignments import GroupAssignmentRepository
 from web.services.market_data import MarketDataRepository
 
 
@@ -33,6 +34,11 @@ def _parser():
         default=str(DEFAULT_CACHE),
         help="Path to the disposable analysis cache SQLite database.",
     )
+    parser.add_argument(
+        "--research-database",
+        default=str(PROJECT_ROOT / "data" / "research_prices.db"),
+        help="Path to the read-only effective-dated assignment database.",
+    )
     return parser
 
 
@@ -47,7 +53,14 @@ def main(argv=None):
             raise RuntimeError("market data has no latest date")
         store = ForecastArtifactStore(args.cache)
         service = ForecastService(artifact_store=store)
-        warmup = ForecastCacheWarmer(repository, service)()
+        assignment_repository = GroupAssignmentRepository(
+            args.research_database
+        )
+        warmup = ForecastCacheWarmer(
+            repository,
+            service,
+            group_assignment_repository=assignment_repository,
+        )()
         cohorts = warmup["cohorts"]
         if not cohorts:
             raise RuntimeError("market data has no active cohort")

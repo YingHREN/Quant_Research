@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -141,6 +142,59 @@ class GroupAssignmentRepositoryTest(unittest.TestCase):
 
         self.assertEqual(result["coverage"], 1.0)
         self.assertEqual(result["review_count"], 1)
+
+    def test_repository_returns_all_intervals_overlapping_requested_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "research.db"
+            create_assignment_database(database)
+            repository = GroupAssignmentRepository(database)
+
+            result = repository.build_history(
+                ["SNDK"],
+                start_asof="2026-06-15",
+                end_asof="2026-07-15",
+            )
+
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["start_asof"], "2026-06-15")
+        self.assertEqual(result["end_asof"], "2026-07-15")
+        self.assertEqual(
+            [
+                row["primary_model_group"]
+                for row in result["by_ticker"]["SNDK"]
+            ],
+            ["technology", "semiconductor"],
+        )
+
+    def test_repository_revision_invalidates_cached_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "research.db"
+            create_assignment_database(database)
+            repository = GroupAssignmentRepository(database)
+            first = repository.build(["SNDK"], asof="2026-07-01")
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """
+                UPDATE group_assignments
+                SET primary_model_group = 'technology'
+                WHERE ticker = 'SNDK' AND effective_from = '2026-07-01'
+                """
+            )
+            connection.commit()
+            connection.close()
+            stat = database.stat()
+            os.utime(
+                database,
+                ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000),
+            )
+
+            second = repository.build(["SNDK"], asof="2026-07-01")
+
+        self.assertNotEqual(first["revision"], second["revision"])
+        self.assertEqual(
+            second["by_ticker"]["SNDK"]["primary_model_group"],
+            "technology",
+        )
 
 
 if __name__ == "__main__":
