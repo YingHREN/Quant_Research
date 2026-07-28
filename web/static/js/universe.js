@@ -6,11 +6,31 @@ const FIELD_ALIASES = {
   nearPivot: ["near_pivot", "nearPivot"],
 };
 
+const POOL_SCOPES = new Set(["all", "active", "research", "catalog"]);
+
 function firstDefined(row, keys) {
   for (const key of keys) {
     if (row[key] !== undefined) return row[key];
   }
   return undefined;
+}
+
+function normalizedPoolScope(value) {
+  const scope = String(value || "all");
+  return POOL_SCOPES.has(scope) ? scope : "all";
+}
+
+function matchesPoolScope(membership, scope) {
+  if (scope === "active") return Boolean(membership.active);
+  if (scope === "research") return Boolean(membership.research);
+  if (scope === "catalog") {
+    return Boolean(
+      membership.research_catalog
+      && !membership.research
+      && !membership.active
+    );
+  }
+  return true;
 }
 
 export function classificationFor(row = {}, taxonomy = "sec") {
@@ -51,12 +71,8 @@ export function filterTickers(rows, query = "", filters = {}) {
       active: true,
       research: false,
     };
-    const selectedPools = [];
-    if (filters.activePool) selectedPools.push(Boolean(membership.active));
-    if (filters.researchOnly) {
-      selectedPools.push(Boolean(membership.research && !membership.active));
-    }
-    if (selectedPools.length && !selectedPools.some(Boolean)) return false;
+    const poolScope = normalizedPoolScope(filters.poolScope);
+    if (!matchesPoolScope(membership, poolScope)) return false;
     const gateState = row.technical_gate?.state
       ?? row.technicalGate?.state
       ?? "missing";

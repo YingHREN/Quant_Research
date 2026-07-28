@@ -450,7 +450,9 @@ class WebAssetTest(unittest.TestCase):
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
                 near_pivot: true, momentum_percentile: null, volatility: null, rs_rating: null,
-                pool_membership: {{active: false, research: true}},
+                pool_membership: {{
+                  active: false, research: false, research_catalog: true
+                }},
                 technical_gate: {{state: 'missing', passed_conditions: 0, condition_count: 4}},
                 sector_classification: {{state: 'unclassified',
                   sec: null, market_behavior: null}}}}
@@ -483,12 +485,19 @@ class WebAssetTest(unittest.TestCase):
             const behaviorUnclassified = filterTickers(rows, '', {{
               sectorTaxonomy: 'market_behavior', sectorKey: 'unclassified'
             }}).map(row => row.ticker);
-            const activePool = filterTickers(rows, '', {{activePool: true}})
+            const allPool = filterTickers(rows, '', {{poolScope: 'all'}})
               .map(row => row.ticker);
-            const researchOnly = filterTickers(rows, '', {{researchOnly: true}})
+            const activePool = filterTickers(rows, '', {{poolScope: 'active'}})
               .map(row => row.ticker);
-            const eitherPool = filterTickers(
-              rows, '', {{activePool: true, researchOnly: true}}
+            const researchPool = filterTickers(rows, '', {{poolScope: 'research'}})
+              .map(row => row.ticker);
+            const catalogPool = filterTickers(rows, '', {{poolScope: 'catalog'}})
+              .map(row => row.ticker);
+            const unknownPool = filterTickers(
+              rows, '', {{poolScope: 'future-value'}}
+            ).map(row => row.ticker);
+            const catalogVcp = filterTickers(
+              rows, '', {{poolScope: 'catalog', strictVcp: true}}
             ).map(row => row.ticker);
             const gatePass = filterTickers(rows, '', {{gatePass: true}})
               .map(row => row.ticker);
@@ -500,7 +509,8 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             console.log(JSON.stringify({{
               searched, filtered, eitherShape, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
-              behaviorFinancials, behaviorUnclassified, activePool, researchOnly, eitherPool,
+              behaviorFinancials, behaviorUnclassified, allPool, activePool,
+              researchPool, catalogPool, unknownPool, catalogVcp,
               gatePass, gateFail, gateMissing, gateSorted,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
@@ -527,9 +537,12 @@ class WebAssetTest(unittest.TestCase):
                 "secTechnology": ["MSFT", "AAPL"],
                 "behaviorFinancials": ["AAPL"],
                 "behaviorUnclassified": ["OLD"],
+                "allPool": ["MSFT", "AAPL", "OLD"],
                 "activePool": ["MSFT", "AAPL"],
-                "researchOnly": ["OLD"],
-                "eitherPool": ["MSFT", "AAPL", "OLD"],
+                "researchPool": ["MSFT"],
+                "catalogPool": ["OLD"],
+                "unknownPool": ["MSFT", "AAPL", "OLD"],
+                "catalogVcp": ["OLD"],
                 "gatePass": ["MSFT"],
                 "gateFail": ["AAPL"],
                 "gateMissing": ["OLD"],
