@@ -57,6 +57,8 @@ _PRUNE_COLUMNS = [
     "artifact_key",
     "stage",
     "created_at",
+    "row_count",
+    "payload_size_bytes",
     "would_delete",
     "deleted",
 ]
@@ -634,7 +636,12 @@ class UnifiedBenchmarkCacheStore:
             connection = self._connect()
             rows = connection.execute(
                 """
-                SELECT artifact_key, stage, created_at
+                SELECT
+                    artifact_key,
+                    stage,
+                    created_at,
+                    row_count,
+                    payload_size_bytes
                 FROM benchmark_cache_artifacts
                 ORDER BY stage ASC, created_at DESC, artifact_key DESC
                 """
@@ -649,6 +656,8 @@ class UnifiedBenchmarkCacheStore:
                         "artifact_key": row["artifact_key"],
                         "stage": row["stage"],
                         "created_at": row["created_at"],
+                        "row_count": row["row_count"],
+                        "payload_size_bytes": row["payload_size_bytes"],
                         "would_delete": rank >= keep_per_stage,
                         "deleted": False,
                     }
