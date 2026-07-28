@@ -20,6 +20,22 @@ from research.benchmark_cache_codec import (
 
 
 _ALLOWED_STAGES = {"statistical_predictions", "rule_predictions"}
+_RULE_SPECIFICATIONS = {
+    "immediate_8",
+    "memory_12",
+    "toprisk_confirmed",
+    "toprisk_stateful",
+    "ridge_plus_toprisk",
+}
+_PREDICTION_COLUMNS = {
+    "ticker",
+    "observation_date",
+    "horizon",
+    "fold",
+    "predicted_event",
+    "predicted_score",
+    "model_version",
+}
 _HEX_DIGEST_LENGTH = 64
 _STATUS_COLUMNS = [
     "artifact_key",
@@ -285,7 +301,59 @@ class UnifiedBenchmarkCacheStore:
             or row_count != row["row_count"]
         ):
             raise ValueError("row count mismatch")
+        self._validate_stage_bundle(identity, frames)
         return frames
+
+    @staticmethod
+    def _validate_stage_bundle(
+        identity: BenchmarkCacheIdentity,
+        frames: Mapping[str, pd.DataFrame],
+    ) -> None:
+        names = set(frames)
+        if identity.stage == "statistical_predictions":
+            if "ridge_down" not in names:
+                raise ValueError("statistical stage requires ridge_down")
+        elif not _RULE_SPECIFICATIONS.issubset(names):
+            raise ValueError("rule stage is missing required specifications")
+        for name, frame in frames.items():
+            if frame.empty:
+                raise ValueError("{} prediction frame is empty".format(name))
+            missing = _PREDICTION_COLUMNS.difference(frame.columns)
+            if missing:
+                raise ValueError(
+                    "{} prediction frame is missing columns".format(name)
+                )
+            keys = ["ticker", "observation_date", "horizon", "fold"]
+            if frame.duplicated(keys).any():
+                raise ValueError("{} prediction keys are duplicated".format(name))
+            tickers = frame["ticker"].astype("string")
+            if tickers.isna().any() or tickers.str.strip().eq("").any():
+                raise ValueError("{} tickers are invalid".format(name))
+            dates = pd.to_datetime(frame["observation_date"], errors="coerce")
+            if dates.isna().any() or getattr(dates.dt, "tz", None) is not None:
+                raise ValueError("{} observation dates are invalid".format(name))
+            horizons = pd.to_numeric(frame["horizon"], errors="coerce")
+            folds = pd.to_numeric(frame["fold"], errors="coerce")
+            if (
+                horizons.isna().any()
+                or (horizons <= 0).any()
+                or folds.isna().any()
+                or (folds < 1).any()
+            ):
+                raise ValueError("{} horizons or folds are invalid".format(name))
+            try:
+                frame["predicted_event"].astype("boolean")
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "{} predicted events are invalid".format(name)
+                ) from error
+            scores = pd.to_numeric(frame["predicted_score"], errors="coerce")
+            invalid_scores = frame["predicted_score"].notna() & scores.isna()
+            if invalid_scores.any():
+                raise ValueError("{} predicted scores are invalid".format(name))
+            versions = frame["model_version"].astype("string")
+            if versions.isna().any() or versions.str.strip().eq("").any():
+                raise ValueError("{} model versions are invalid".format(name))
 
     def _validate_artifact(
         self, artifact: BenchmarkCacheArtifact
@@ -320,6 +388,10 @@ class UnifiedBenchmarkCacheStore:
             != artifact.row_count
         ):
             raise ValueError("artifact row count is invalid")
+        try:
+            self._validate_stage_bundle(artifact.identity, frames)
+        except ValueError as error:
+            raise ValueError("artifact stage semantics are invalid") from error
         return frames
 
     def read(self, identity: BenchmarkCacheIdentity) -> BenchmarkCacheRead:

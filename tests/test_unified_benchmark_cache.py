@@ -36,7 +36,10 @@ def frame(score=0.7):
             "ticker": ["AAA"],
             "observation_date": pd.to_datetime(["2026-01-02"]),
             "horizon": pd.Series([5], dtype="int64"),
+            "fold": pd.Series([1], dtype="int64"),
+            "predicted_event": pd.Series([True], dtype="boolean"),
             "predicted_score": [score],
+            "model_version": ["ridge_direction_v1"],
         }
     )
 
