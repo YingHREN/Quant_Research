@@ -79,6 +79,7 @@ from web.services.macro_history import (
 )
 from web.services.macro_risk import MacroRiskService
 from web.services.universe import UniverseSnapshotService
+from web.services.market_cap import market_cap_fields
 from web.services.research_classification import ResearchClassificationService
 from web.services.research_relative_strength import (
     ResearchRelativeStrengthService,
@@ -574,18 +575,26 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                         research_forecast_assignment_revision
                     ),
                 )
+            research_payload = _research_stock_payload(
+                normalized_ticker,
+                research_snapshot,
+                scenario_provider,
+                entry_signal_service,
+                forecast_payload=forecast_payload,
+                top_risk=top_risk,
+                research_member=research_member,
+                assignments=research_assignments,
+            )
+            research_payload["summary"].update(
+                _market_cap_for_ticker(
+                    research_universe_repository,
+                    normalized_ticker,
+                    research_snapshot.asof,
+                )
+            )
             return _json_response(
                 apply_stock_research_pool_membership(
-                    _research_stock_payload(
-                        normalized_ticker,
-                        research_snapshot,
-                        scenario_provider,
-                        entry_signal_service,
-                        forecast_payload=forecast_payload,
-                        top_risk=top_risk,
-                        research_member=research_member,
-                        assignments=research_assignments,
-                    ),
+                    research_payload,
                     research_pool_membership_store,
                 )
             )
@@ -779,6 +788,13 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 normalized_ticker,
             ),
         }
+        payload["summary"].update(
+            _market_cap_for_ticker(
+                research_universe_repository,
+                normalized_ticker,
+                observation_date,
+            )
+        )
         return _json_response(
             apply_stock_research_pool_membership(
                 payload,
@@ -1516,6 +1532,23 @@ def _stock_summary(chart, ticker_summary):
             else not ticker_summary.inactive and ticker_summary.lag_days > 0
         ),
     }
+
+
+def _market_cap_for_ticker(repository, ticker, asof):
+    """Return normalized fields from one bounded point-in-time lookup."""
+    try:
+        market_cap, market_cap_asof = repository.load_market_cap(ticker, asof)
+    except (
+        AttributeError,
+        InvalidResearchTicker,
+        OSError,
+        ResearchUniverseDataError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+    ):
+        market_cap, market_cap_asof = None, None
+    return market_cap_fields(market_cap, market_cap_asof)
 
 
 def _top_risk_payload(

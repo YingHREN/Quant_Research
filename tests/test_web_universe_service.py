@@ -250,6 +250,13 @@ class FakeResearchUniverseRepository:
                     stale=False,
                     name=f"{ticker} Inc.",
                     exchange="NASDAQ",
+                    market_cap={
+                        "AAA": 250_000_000_000,
+                        "BBB": 12_000_000_000,
+                    }.get(ticker),
+                    market_cap_asof=(
+                        "2026-07-20" if ticker in {"AAA", "BBB"} else None
+                    ),
                 )
                 for ticker, history in self.histories.items()
             ),
@@ -546,6 +553,11 @@ class UniverseSnapshotServiceTest(unittest.TestCase):
         self.assertEqual(by_ticker["BBB"]["shape_state"], "none")
         self.assertFalse(by_ticker["BBB"]["strict_vcp"])
         self.assertFalse(by_ticker["BBB"]["tight_platform"])
+        self.assertEqual(by_ticker["AAA"]["market_cap"], 250_000_000_000.0)
+        self.assertEqual(by_ticker["AAA"]["market_cap_tier"], "mega")
+        self.assertEqual(by_ticker["AAA"]["market_cap_asof"], "2026-07-20")
+        self.assertEqual(by_ticker["BBB"]["market_cap_tier"], "large")
+        self.assertEqual(by_ticker["SPY"]["market_cap_tier"], "unavailable")
         self.assertIn(by_ticker["BBB"]["technical_gate"]["state"], {"pass", "fail"})
         self.assertEqual(research_repository.calls, [("2026-07-21", 260)])
 

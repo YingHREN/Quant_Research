@@ -162,6 +162,20 @@ class ResearchUniverseRepositoryTest(unittest.TestCase):
         self.assertLessEqual(len(snapshot.histories["AAA"]), 260)
         self.assertEqual(snapshot.histories["AAA"].index.max().date().isoformat(), "2026-07-23")
 
+    def test_load_market_cap_reads_only_the_latest_effective_membership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "research.db"
+            _create_database(database)
+            repository = ResearchUniverseRepository(database)
+
+            market_cap, market_cap_asof = repository.load_market_cap(
+                "AAA",
+                "2026-07-24",
+            )
+
+        self.assertEqual(market_cap, 12_000_000_000)
+        self.assertEqual(market_cap_asof, "2026-01-01")
+
     def test_detail_loads_selected_ticker_and_explicit_benchmarks_only(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / "research.db"

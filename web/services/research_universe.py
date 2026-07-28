@@ -172,6 +172,40 @@ class ResearchUniverseRepository:
             stale=latest != observation_date,
         )
 
+    def load_market_cap(self, ticker, asof=None):
+        """Read one ticker's effective company market cap without loading prices."""
+        selected = _validate_ticker(ticker)
+        try:
+            with self._connect() as connection:
+                observation_date = iso_date(asof) or _latest_observation_date(connection)
+                if observation_date is None:
+                    return None, None
+                row = connection.execute(
+                    """
+                    SELECT market_cap, effective_from
+                    FROM universe_memberships
+                    WHERE ticker = ?
+                      AND effective_from <= ?
+                      AND (effective_to IS NULL OR ? < effective_to)
+                    ORDER BY effective_from DESC
+                    LIMIT 1
+                    """,
+                    (selected, observation_date, observation_date),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise ResearchUniverseDataError("research_database_unavailable") from error
+        if row is None:
+            return None, None
+        try:
+            market_cap = (
+                None
+                if row["market_cap"] is None
+                else float(row["market_cap"])
+            )
+        except (TypeError, ValueError):
+            market_cap = None
+        return market_cap, iso_date(row["effective_from"])
+
 
 def _validate_sessions(sessions):
     if isinstance(sessions, bool) or not isinstance(sessions, int):

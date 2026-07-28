@@ -20,12 +20,13 @@ from research.market_gate import latest_market_gate
 from research.vcp import detect_vcp
 from web.factors.registry import FactorRegistry
 from web.services.analysis import AnalysisContext
+from web.services.market_cap import market_cap_fields
 
 
 UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
-UNIVERSE_ALGORITHM_VERSION = "universe_summary_v6"
+UNIVERSE_ALGORITHM_VERSION = "universe_summary_v7"
 
 
 class UniverseSnapshotService:
@@ -243,6 +244,7 @@ def build_universe_rows(summaries, histories, registry):
                 "volatility": volatility,
                 "volatility_factor_key": UNIVERSE_VOLATILITY_FACTOR_KEY,
                 "volatility_unit": "annualized_percent",
+                **market_cap_fields(None, None),
             }
         )
         rows.append(row)
@@ -326,6 +328,12 @@ def merge_research_pool(
         existing = by_ticker.get(member.ticker)
         if existing is not None:
             existing["pool_membership"]["research"] = True
+            existing.update(
+                market_cap_fields(
+                    getattr(member, "market_cap", None),
+                    getattr(member, "market_cap_asof", None),
+                )
+            )
             if existing.get("data_status") != "current" and not member.stale:
                 existing["technical_gate"] = _evaluate_gate(
                     technical_gate_evaluator,
@@ -376,6 +384,10 @@ def _research_only_row(member, history, asof, technical_gate_evaluator):
         "data_status": "stale" if stale else "current",
         "name": member.name,
         "exchange": member.exchange,
+        **market_cap_fields(
+            getattr(member, "market_cap", None),
+            getattr(member, "market_cap_asof", None),
+        ),
         **structure,
         "momentum_percentile": None,
         "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,

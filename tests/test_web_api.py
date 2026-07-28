@@ -895,6 +895,9 @@ class WebApiTest(unittest.TestCase):
                 "technical_gate",
                 "market_gate_state",
                 "formal_candidate_state",
+                "market_cap",
+                "market_cap_asof",
+                "market_cap_tier",
             },
         )
         self.assertEqual(
@@ -915,6 +918,56 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertFalse(
             any(call[0] == "load_history" for call in self.repository.calls)
+        )
+
+    def test_stock_summary_uses_the_same_market_cap_contract_as_universe(self):
+        class MarketCapRepository:
+            def load_market_cap(self, ticker, asof=None):
+                self.request = (ticker, asof)
+                return 250_000_000_000.0, "2026-07-20"
+
+        market_cap_repository = MarketCapRepository()
+
+        class MarketCapUniverseService:
+            _research_universe_repository = market_cap_repository
+
+            def build(self):
+                return {
+                    "tickers": [
+                        {
+                            "ticker": "AAA",
+                            "market_cap": 250_000_000_000.0,
+                            "market_cap_asof": "2026-07-20",
+                            "market_cap_tier": "mega",
+                        }
+                    ]
+                }
+
+        response = create_app(
+            test_config(UNIVERSE_SERVICE=MarketCapUniverseService()),
+            self.repository,
+            self.manager,
+        ).test_client().get("/api/stocks/AAA")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {
+                key: response.json["summary"][key]
+                for key in (
+                    "market_cap",
+                    "market_cap_asof",
+                    "market_cap_tier",
+                )
+            },
+            {
+                "market_cap": 250_000_000_000.0,
+                "market_cap_asof": "2026-07-20",
+                "market_cap_tier": "mega",
+            },
+        )
+        self.assertEqual(
+            market_cap_repository.request,
+            ("AAA", "2026-07-21"),
         )
 
     def test_group_assignment_contract_matches_universe_and_stock_detail(self):
