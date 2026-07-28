@@ -7,7 +7,9 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import sqlite3
-from typing import Callable, Mapping
+import sys
+import time
+from typing import Callable, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -54,6 +56,17 @@ class BenchmarkDependencies:
         [BenchmarkInputs, BenchmarkConfig],
         Mapping[str, pd.DataFrame],
     ]
+    build_rule_predictions: Optional[
+        Callable[
+            [BenchmarkInputs, BenchmarkConfig, Mapping[str, pd.DataFrame]],
+            Mapping[str, pd.DataFrame],
+        ]
+    ] = None
+    monotonic: Callable[[], float] = time.monotonic
+    progress: Callable[[str], None] = lambda message: print(
+        message,
+        file=sys.stderr,
+    )
 
 
 @dataclass(frozen=True)
@@ -72,39 +85,70 @@ def run_benchmark(config, *, dependencies=None):
     runtime = dependencies or default_dependencies()
     if not isinstance(runtime, BenchmarkDependencies):
         raise TypeError("dependencies must be BenchmarkDependencies")
-    inputs = runtime.load_inputs(checked)
+    clock = runtime.monotonic
+    total_started = clock()
+    timings = {}
+    inputs = _timed_stage(
+        "load_inputs",
+        lambda: runtime.load_inputs(checked),
+        clock,
+        runtime.progress,
+        timings,
+    )
     if not isinstance(inputs, BenchmarkInputs):
         raise TypeError("load_inputs must return BenchmarkInputs")
-    predictions = runtime.build_predictions(inputs, checked)
+    predictions = _timed_stage(
+        "build_statistical_predictions",
+        lambda: runtime.build_predictions(inputs, checked),
+        clock,
+        runtime.progress,
+        timings,
+    )
+    if runtime.build_rule_predictions is None:
+        _timed_stage(
+            "build_rule_context",
+            lambda: None,
+            clock,
+            runtime.progress,
+            timings,
+        )
+    else:
+        rule_predictions = _timed_stage(
+            "build_rule_context",
+            lambda: runtime.build_rule_predictions(
+                inputs,
+                checked,
+                predictions,
+            ),
+            clock,
+            runtime.progress,
+            timings,
+        )
+        predictions = {**predictions, **rule_predictions}
     if not isinstance(predictions, Mapping) or "ridge_down" not in predictions:
         raise ValueError("predictions require ridge_down anchor rows")
     anchor = _model_keys(predictions["ridge_down"])
     if anchor.empty:
         raise ValueError("ridge_down anchor rows must not be empty")
-    targets = attach_next_open_path_targets(
-        inputs.prices,
-        horizons=checked.horizons,
-    ).reset_index()
-    labels = anchor.merge(
-        targets,
-        on=["ticker", "observation_date", "horizon"],
-        how="left",
-        validate="many_to_one",
+    labels, aligned, stratified = _timed_stage(
+        "label_and_align",
+        lambda: _label_and_align(
+            inputs,
+            checked,
+            anchor,
+            predictions,
+        ),
+        clock,
+        runtime.progress,
+        timings,
     )
-    if labels["mature"].isna().any():
-        raise ValueError("prediction keys are outside executable price labels")
-    aligned = align_model_predictions(labels, predictions)
-    stratified = attach_point_in_time_strata(
-        aligned,
-        inputs.assignments,
-        inputs.regimes,
+    metrics, fold_comparisons, promotion_gate = _timed_stage(
+        "evaluate",
+        lambda: _evaluate_aligned(stratified, checked),
+        clock,
+        runtime.progress,
+        timings,
     )
-    metrics = evaluate_unified_predictions(
-        stratified,
-        minimum_group_samples=checked.minimum_group_samples,
-    )
-    fold_comparisons = compare_folds(metrics, baseline="ridge_down")
-    promotion_gate = _promotion_gate(metrics, fold_comparisons)
     manifest = _manifest(
         checked,
         inputs,
@@ -121,8 +165,64 @@ def run_benchmark(config, *, dependencies=None):
         overlaps=pd.DataFrame(),
         output_paths=placeholder_paths,
     )
-    _publish_atomic(artifacts)
+    publish_started = clock()
+    runtime.progress("stage=publish status=started")
+
+    def finalize_manifest():
+        timings["publish"] = max(0.0, clock() - publish_started)
+        timings["total"] = max(0.0, clock() - total_started)
+        manifest["stage_timings_seconds"] = dict(timings)
+        runtime.progress(
+            f"stage=publish status=completed seconds={timings['publish']:.6f}"
+        )
+
+    _publish_atomic(artifacts, finalize_manifest=finalize_manifest)
     return artifacts
+
+
+def _timed_stage(name, operation, clock, progress, timings):
+    progress(f"stage={name} status=started")
+    started = clock()
+    result = operation()
+    elapsed = max(0.0, clock() - started)
+    timings[name] = elapsed
+    progress(f"stage={name} status=completed seconds={elapsed:.6f}")
+    return result
+
+
+def _label_and_align(inputs, config, anchor, predictions):
+    targets = attach_next_open_path_targets(
+        inputs.prices,
+        horizons=config.horizons,
+    ).reset_index()
+    labels = anchor.merge(
+        targets,
+        on=["ticker", "observation_date", "horizon"],
+        how="left",
+        validate="many_to_one",
+    )
+    if labels["mature"].isna().any():
+        raise ValueError("prediction keys are outside executable price labels")
+    aligned = align_model_predictions(labels, predictions)
+    stratified = attach_point_in_time_strata(
+        aligned,
+        inputs.assignments,
+        inputs.regimes,
+    )
+    return labels, aligned, stratified
+
+
+def _evaluate_aligned(stratified, config):
+    metrics = evaluate_unified_predictions(
+        stratified,
+        minimum_group_samples=config.minimum_group_samples,
+    )
+    fold_comparisons = compare_folds(metrics, baseline="ridge_down")
+    return (
+        metrics,
+        fold_comparisons,
+        _promotion_gate(metrics, fold_comparisons),
+    )
 
 
 def render_markdown(artifacts):
@@ -175,7 +275,8 @@ def default_dependencies():
     """Return production research adapters, imported lazily."""
     return BenchmarkDependencies(
         load_inputs=_load_real_inputs,
-        build_predictions=_build_real_predictions,
+        build_predictions=_build_statistical_predictions,
+        build_rule_predictions=_build_rule_predictions,
     )
 
 
@@ -270,22 +371,29 @@ def _output_paths(directory):
     )
 
 
-def _publish_atomic(artifacts):
+def _publish_atomic(artifacts, finalize_manifest=None):
     json_path, csv_path, markdown_path = artifacts.output_paths
     for path in artifacts.output_paths:
         path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        **artifacts.manifest,
-        "metrics": _records(artifacts.metrics),
-        "fold_comparisons": _records(artifacts.fold_comparisons),
-        "ablations": _records(artifacts.ablations),
-        "overlaps": _records(artifacts.overlaps),
-    }
     temporary = tuple(
         path.with_name(f".{path.name}.tmp")
         for path in artifacts.output_paths
     )
     try:
+        artifacts.metrics.to_csv(temporary[1], index=False)
+        temporary[2].write_text(
+            render_markdown(artifacts),
+            encoding="utf-8",
+        )
+        if finalize_manifest is not None:
+            finalize_manifest()
+        payload = {
+            **artifacts.manifest,
+            "metrics": _records(artifacts.metrics),
+            "fold_comparisons": _records(artifacts.fold_comparisons),
+            "ablations": _records(artifacts.ablations),
+            "overlaps": _records(artifacts.overlaps),
+        }
         temporary[0].write_text(
             json.dumps(
                 payload,
@@ -295,11 +403,6 @@ def _publish_atomic(artifacts):
                 allow_nan=False,
             )
             + "\n",
-            encoding="utf-8",
-        )
-        artifacts.metrics.to_csv(temporary[1], index=False)
-        temporary[2].write_text(
-            render_markdown(artifacts),
             encoding="utf-8",
         )
         for source, target in zip(temporary, artifacts.output_paths):
@@ -428,7 +531,19 @@ def _rule_prediction_frames(risk_context, anchor):
         )
         result["model_version"] = version
         output[specification] = result
-    ridge = anchor["predicted_direction"].astype(str).str.lower().eq("down")
+    if "predicted_direction" in anchor:
+        ridge = (
+            anchor["predicted_direction"]
+            .astype(str)
+            .str.lower()
+            .eq("down")
+        )
+    elif "predicted_event" in anchor:
+        ridge = anchor["predicted_event"].astype("boolean")
+    else:
+        raise ValueError(
+            "rule anchor requires predicted_direction or predicted_event"
+        )
     top = output["toprisk_stateful"]["predicted_event"]
     combined = pd.Series(pd.NA, index=keys.index, dtype="boolean")
     available = top.notna()
@@ -691,8 +806,8 @@ def _build_rule_context(inputs):
     )
 
 
-def _build_real_predictions(inputs, config):  # pragma: no cover
-    """Run every frozen model and adapt it to one benchmark contract."""
+def _build_statistical_predictions(inputs, config):  # pragma: no cover
+    """Run the statistical models without constructing rule context."""
     frame = _attach_direction_targets(inputs, config)
     ridge_rows = []
     logistic_rows = []
@@ -746,13 +861,25 @@ def _build_real_predictions(inputs, config):  # pragma: no cover
                 ],
             ].assign(model_version="pressure_downside_logistic_v1")
         outputs["pressure_downside_logistic_v1"] = adapted
-    outputs.update(
-        _rule_prediction_frames(
-            _build_rule_context(inputs),
-            ridge_direction,
-        )
-    )
     return outputs
+
+
+def _build_rule_predictions(inputs, config, predictions):  # pragma: no cover
+    """Build the causal rules separately for observable stage timing."""
+    del config
+    return _rule_prediction_frames(
+        _build_rule_context(inputs),
+        predictions["ridge_down"],
+    )
+
+
+def _build_real_predictions(inputs, config):  # pragma: no cover
+    """Compatibility adapter returning statistical and rule predictions."""
+    statistical = _build_statistical_predictions(inputs, config)
+    return {
+        **statistical,
+        **_build_rule_predictions(inputs, config, statistical),
+    }
 
 
 def _parser():

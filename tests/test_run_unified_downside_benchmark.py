@@ -176,6 +176,61 @@ class RunUnifiedDownsideBenchmarkTest(unittest.TestCase):
             )
             self.assertFalse(list(root.glob("*.tmp")))
 
+    def test_runner_records_nonnegative_stage_timings_and_progress(self):
+        inputs = BenchmarkInputs(
+            prices=prices(),
+            assignments=assignments(),
+            regimes=regimes(),
+        )
+        clock_values = iter(float(value) for value in range(20))
+        progress = []
+        dependencies = BenchmarkDependencies(
+            load_inputs=lambda _: inputs,
+            build_predictions=lambda loaded, checked: prediction_bundle(),
+            monotonic=lambda: next(clock_values),
+            progress=progress.append,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config = BenchmarkConfig(
+                database=Path(directory) / "research.db",
+                folds=2,
+                horizons=(5,),
+                minimum_group_samples=1,
+                output_directory=Path(directory),
+            )
+
+            artifacts = run_benchmark(config, dependencies=dependencies)
+            published = json.loads(
+                artifacts.output_paths[0].read_text()
+            )
+
+        timings = artifacts.manifest["stage_timings_seconds"]
+        self.assertEqual(
+            set(timings),
+            {
+                "load_inputs",
+                "build_statistical_predictions",
+                "build_rule_context",
+                "label_and_align",
+                "evaluate",
+                "publish",
+                "total",
+            },
+        )
+        self.assertTrue(all(value >= 0.0 for value in timings.values()))
+        self.assertGreaterEqual(
+            timings["total"],
+            max(
+                value
+                for key, value in timings.items()
+                if key != "total"
+            ),
+        )
+        self.assertTrue(
+            any("load_inputs" in message for message in progress)
+        )
+        self.assertEqual(published["stage_timings_seconds"], timings)
+
     def test_report_states_same_rows_groups_and_blocked_authority(self):
         artifacts = BenchmarkArtifacts(
             manifest={
