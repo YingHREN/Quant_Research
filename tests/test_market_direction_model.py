@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from research.market_direction_model import (
+    _directions,
     attach_next_open_targets,
     chronological_purged_folds,
     evaluate_direction_ablation,
@@ -60,6 +61,14 @@ def feature_frame(periods=90):
 
 
 class MarketDirectionModelTest(unittest.TestCase):
+    def test_ten_session_direction_band_is_supported(self):
+        values = pd.Series([-0.02, 0.0, 0.02])
+
+        self.assertEqual(
+            _directions(values, 10).tolist(),
+            ["down", "neutral", "up"],
+        )
+
     def test_next_open_targets_use_next_open_and_horizon_close(self):
         histories = {"AAA": history(), "BBB": history(start=200.0)}
         index = pd.MultiIndex.from_tuples(

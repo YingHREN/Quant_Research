@@ -18,7 +18,7 @@ from sklearn.metrics import (
 
 
 INDEX_NAMES = ("ticker", "observation_date")
-NEUTRAL_BANDS = {5: 0.01, 20: 0.02, 60: 0.04}
+NEUTRAL_BANDS = {5: 0.01, 10: 0.015, 20: 0.02, 60: 0.04}
 
 
 def attach_next_open_targets(
