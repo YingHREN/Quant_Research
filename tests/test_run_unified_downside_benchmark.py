@@ -16,6 +16,7 @@ from research.run_unified_downside_benchmark import (
     _load_assignments,
     _attach_direction_targets,
     _prediction_frame_from_direction,
+    _ridge_predictions,
     _rule_prediction_frames,
     render_markdown,
     run_benchmark,
@@ -122,6 +123,20 @@ class RunUnifiedDownsideBenchmarkTest(unittest.TestCase):
         self.assertEqual(result["regime_is_correction"].iloc[0], 1.0)
         self.assertEqual(result["regime_is_acute_selloff"].iloc[1], 1.0)
         self.assertEqual(result["regime_is_correction"].iloc[2], 0.0)
+
+    def test_runner_fold_count_means_five_out_of_sample_test_folds(self):
+        config = BenchmarkConfig(
+            database=Path("research.db"),
+            folds=5,
+            minimum_group_samples=1,
+        )
+        with mock.patch(
+            "research.market_direction_model.walk_forward_ridge_predictions",
+            return_value=pd.DataFrame(),
+        ) as runner:
+            _ridge_predictions(pd.DataFrame(), 5, config)
+
+        self.assertEqual(runner.call_args.kwargs["n_folds"], 6)
 
     def test_runner_atomically_publishes_auditable_outputs(self):
         inputs = BenchmarkInputs(

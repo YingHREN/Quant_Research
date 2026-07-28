@@ -624,7 +624,7 @@ def _ridge_predictions(frame, horizon, config):
         frame,
         horizon=horizon,
         feature_columns=RIDGE_V4_FEATURE_COLUMNS,
-        n_folds=config.folds,
+        n_folds=config.folds + 1,
         minimum_samples=config.minimum_training_samples,
         specification="ridge_current",
     )
@@ -645,7 +645,7 @@ def _general_logistic_predictions(frame, horizon, config):
                 RIDGE_V4_FEATURE_COLUMNS
             )["ridge_decay_market"]
         },
-        n_folds=config.folds,
+        n_folds=config.folds + 1,
         minimum_samples=config.minimum_training_samples,
     )
 
@@ -664,7 +664,7 @@ def _specialist_predictions(frame, horizon, config):
         frame,
         horizon=horizon,
         feature_columns=SPECIALIST_FEATURE_COLUMNS,
-        n_folds=config.folds,
+        n_folds=config.folds + 1,
         minimum_samples=config.minimum_training_samples,
     )
 
