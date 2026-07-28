@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 import json
 from collections.abc import Mapping
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import average_precision_score, roc_auc_score
 
 
 DEFAULT_ADVERSE_THRESHOLDS = {
@@ -26,6 +28,39 @@ MODEL_OUTPUT_COLUMNS = (
     "model_version",
     "status",
 )
+VOLUME_PARTICIPATION_COLUMNS = (
+    "volume_ratio",
+    "volume_change",
+    "abnormal_volume",
+)
+CLOSE_SELL_PRESSURE_COLUMNS = (
+    "close_location",
+    "signed_volume_proxy",
+    "weak_close",
+)
+TREND_STRUCTURE_COLUMNS = (
+    "below_ema20",
+    "failed_breakout",
+    "trendline_break",
+    "support_break",
+)
+RELATIVE_ENVIRONMENT_COLUMNS = (
+    "sector_relative_return",
+    "market_under_pressure",
+    "group_risk_score",
+)
+HIGH_LEVEL_CONTEXT_COLUMNS = (
+    "prior_runup",
+    "extended_from_ema20",
+    "terminal_acceleration",
+)
+EVIDENCE_GROUPS = {
+    "volume_participation": VOLUME_PARTICIPATION_COLUMNS,
+    "close_sell_pressure": CLOSE_SELL_PRESSURE_COLUMNS,
+    "trend_structure": TREND_STRUCTURE_COLUMNS,
+    "relative_environment": RELATIVE_ENVIRONMENT_COLUMNS,
+    "high_level_context": HIGH_LEVEL_CONTEXT_COLUMNS,
+}
 
 
 def attach_next_open_path_targets(
@@ -295,6 +330,225 @@ def attach_point_in_time_strata(
     return checked
 
 
+def evaluate_unified_predictions(
+    frame: pd.DataFrame,
+    minimum_group_samples: int = 50,
+) -> pd.DataFrame:
+    """Evaluate every signal by group, regime, fold, and sample mode."""
+    if (
+        isinstance(minimum_group_samples, bool)
+        or not isinstance(minimum_group_samples, (int, np.integer))
+        or minimum_group_samples <= 0
+    ):
+        raise ValueError("minimum_group_samples must be positive")
+    checked = _validate_evaluation_frame(frame)
+    checked["_non_overlapping"] = _non_overlapping_mask(checked)
+    scopes = ("all", *sorted(set(checked["group_key"])))
+    regimes = ("all", *sorted(set(checked["market_regime"])))
+    folds = ("all", *sorted(set(checked["fold"])))
+    rows = []
+    for horizon in sorted(set(checked["horizon"])):
+        horizon_rows = checked.loc[checked["horizon"] == horizon]
+        for sample_mode in ("overlapping", "non_overlapping"):
+            sample_rows = (
+                horizon_rows
+                if sample_mode == "overlapping"
+                else horizon_rows.loc[horizon_rows["_non_overlapping"]]
+            )
+            for scope in scopes:
+                scope_rows = (
+                    sample_rows
+                    if scope == "all"
+                    else sample_rows.loc[sample_rows["group_key"] == scope]
+                )
+                for regime in regimes:
+                    regime_rows = (
+                        scope_rows
+                        if regime == "all"
+                        else scope_rows.loc[
+                            scope_rows["market_regime"] == regime
+                        ]
+                    )
+                    for fold in folds:
+                        fold_rows = (
+                            regime_rows
+                            if fold == "all"
+                            else regime_rows.loc[regime_rows["fold"] == fold]
+                        )
+                        for specification in sorted(
+                            set(checked["specification"])
+                        ):
+                            selected = fold_rows.loc[
+                                fold_rows["specification"] == specification
+                            ]
+                            rows.append(
+                                _evaluation_metric_row(
+                                    selected,
+                                    scope=scope,
+                                    regime_scope=regime,
+                                    horizon=horizon,
+                                    sample_mode=sample_mode,
+                                    fold=fold,
+                                    specification=specification,
+                                    minimum_samples=minimum_group_samples,
+                                )
+                            )
+    return pd.DataFrame(rows)
+
+
+def compare_folds(metrics: pd.DataFrame, baseline="ridge_down"):
+    """Count paired fold wins against a fixed baseline."""
+    if not isinstance(metrics, pd.DataFrame):
+        raise TypeError("metrics must be a DataFrame")
+    required = {
+        "scope",
+        "regime_scope",
+        "horizon",
+        "sample_mode",
+        "specification",
+        "fold",
+        "status",
+        "balanced_accuracy",
+    }
+    missing = sorted(required.difference(metrics.columns))
+    if missing:
+        raise ValueError(f"metrics are missing columns: {missing}")
+    dimensions = (
+        "scope",
+        "regime_scope",
+        "horizon",
+        "sample_mode",
+    )
+    checked = metrics.copy(deep=True)
+    checked = checked.loc[
+        (checked["status"] == "ok")
+        & checked["balanced_accuracy"].notna()
+        & (checked["fold"].astype(str) != "all")
+    ]
+    baseline_rows = checked.loc[
+        checked["specification"] == baseline,
+        [*dimensions, "fold", "balanced_accuracy"],
+    ].rename(columns={"balanced_accuracy": "baseline_balanced_accuracy"})
+    output = []
+    for specification in sorted(set(checked["specification"]) - {baseline}):
+        candidate = checked.loc[
+            checked["specification"] == specification,
+            [*dimensions, "fold", "balanced_accuracy"],
+        ]
+        paired = candidate.merge(
+            baseline_rows,
+            on=[*dimensions, "fold"],
+            how="inner",
+            validate="one_to_one",
+        )
+        for dimension_values, group in paired.groupby(
+            list(dimensions),
+            dropna=False,
+            sort=True,
+        ):
+            wins = (
+                group["balanced_accuracy"]
+                > group["baseline_balanced_accuracy"]
+            )
+            output.append(
+                {
+                    **dict(zip(dimensions, dimension_values)),
+                    "specification": specification,
+                    "baseline": baseline,
+                    "comparable_fold_count": int(len(group)),
+                    "fold_win_count": int(wins.sum()),
+                    "fold_win_rate": (
+                        float(wins.mean()) if len(group) else np.nan
+                    ),
+                    "mean_balanced_accuracy_delta": float(
+                        (
+                            group["balanced_accuracy"]
+                            - group["baseline_balanced_accuracy"]
+                        ).mean()
+                    ),
+                }
+            )
+    return pd.DataFrame(output)
+
+
+def build_evidence_ablations(feature_frame, scorer):
+    """Score the full evidence set and five frozen leave-group-out sets."""
+    if not isinstance(feature_frame, pd.DataFrame):
+        raise TypeError("feature_frame must be a DataFrame")
+    if not callable(scorer):
+        raise TypeError("scorer must be callable")
+    output = {"full": scorer(feature_frame.copy(deep=True))}
+    for group, columns in EVIDENCE_GROUPS.items():
+        retained = feature_frame.drop(
+            columns=[
+                column for column in columns if column in feature_frame
+            ]
+        )
+        output[f"without_{group}"] = scorer(retained.copy(deep=True))
+    return output
+
+
+def evidence_overlap_matrix(evidence):
+    """Return pairwise numeric correlations or Boolean trigger overlap."""
+    if not isinstance(evidence, pd.DataFrame):
+        raise TypeError("evidence must be a DataFrame")
+    rows = []
+    for first, second in combinations(evidence.columns, 2):
+        left = evidence[first]
+        right = evidence[second]
+        both_boolean = (
+            pd.api.types.is_bool_dtype(left.dtype)
+            and pd.api.types.is_bool_dtype(right.dtype)
+        )
+        row = {
+            "evidence_a": first,
+            "evidence_b": second,
+            "sample_count": int((left.notna() & right.notna()).sum()),
+            "pearson": np.nan,
+            "spearman": np.nan,
+            "jaccard": np.nan,
+            "common_trigger_rate": np.nan,
+        }
+        if both_boolean:
+            available = left.notna() & right.notna()
+            left_bool = left.loc[available].astype(bool)
+            right_bool = right.loc[available].astype(bool)
+            intersection = int((left_bool & right_bool).sum())
+            union = int((left_bool | right_bool).sum())
+            row["jaccard"] = (
+                float(intersection / union) if union else np.nan
+            )
+            row["common_trigger_rate"] = (
+                float(intersection / len(left_bool))
+                if len(left_bool)
+                else np.nan
+            )
+        else:
+            numeric = pd.concat(
+                [
+                    pd.to_numeric(left, errors="coerce"),
+                    pd.to_numeric(right, errors="coerce"),
+                ],
+                axis=1,
+            ).dropna()
+            if (
+                len(numeric) >= 2
+                and numeric.iloc[:, 0].nunique() > 1
+                and numeric.iloc[:, 1].nunique() > 1
+            ):
+                row["pearson"] = float(
+                    numeric.iloc[:, 0].corr(numeric.iloc[:, 1])
+                )
+                row["spearman"] = float(
+                    numeric.iloc[:, 0].corr(
+                        numeric.iloc[:, 1],
+                        method="spearman",
+                    )
+                )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _forward_window(series, window, operation):
     reversed_series = series.iloc[::-1]
     rolling = reversed_series.rolling(window, min_periods=window)
@@ -493,6 +747,221 @@ def _normalize_regimes(regimes):
         :,
         ["observation_date", source_column],
     ].rename(columns={source_column: "market_regime"})
+
+
+def _validate_evaluation_frame(frame):
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("frame must be a DataFrame")
+    required = {
+        *MODEL_KEY_COLUMNS,
+        "specification",
+        "predicted_event",
+        "status",
+        "mature",
+        "actual_event",
+        "terminal_return",
+        "mae",
+        "mfe",
+        "group_key",
+        "market_regime",
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(f"evaluation frame is missing columns: {missing}")
+    checked = frame.copy(deep=True)
+    checked["ticker"] = checked["ticker"].astype(str).str.strip().str.upper()
+    checked["observation_date"] = pd.to_datetime(
+        checked["observation_date"],
+        errors="raise",
+    ).dt.tz_localize(None)
+    checked["horizon"] = pd.to_numeric(
+        checked["horizon"],
+        errors="raise",
+    ).astype(int)
+    checked["fold"] = pd.to_numeric(
+        checked["fold"],
+        errors="raise",
+    ).astype(int)
+    checked["predicted_event"] = checked["predicted_event"].astype(
+        "boolean"
+    )
+    checked["actual_event"] = checked["actual_event"].astype("boolean")
+    checked["mature"] = checked["mature"].astype(bool)
+    if "predicted_score" not in checked:
+        checked["predicted_score"] = np.nan
+    else:
+        checked["predicted_score"] = pd.to_numeric(
+            checked["predicted_score"],
+            errors="coerce",
+        )
+    duplicate_keys = [
+        *MODEL_KEY_COLUMNS,
+        "specification",
+    ]
+    if checked.duplicated(duplicate_keys).any():
+        raise ValueError("evaluation frame contains duplicate model test keys")
+    return checked.sort_values(
+        ["ticker", "observation_date", "horizon", "fold", "specification"],
+        kind="stable",
+    ).reset_index(drop=True)
+
+
+def _non_overlapping_mask(frame):
+    unique = frame.loc[
+        :,
+        ["ticker", "observation_date", "horizon", "fold"],
+    ].drop_duplicates()
+    unique = unique.sort_values(
+        ["ticker", "horizon", "observation_date"],
+        kind="stable",
+    )
+    ordinal = unique.groupby(
+        ["ticker", "horizon"],
+        sort=False,
+    ).cumcount()
+    unique["_non_overlapping"] = (
+        ordinal % unique["horizon"].astype(int)
+    ).eq(0)
+    merged = frame.loc[
+        :,
+        ["ticker", "observation_date", "horizon", "fold"],
+    ].merge(
+        unique,
+        on=["ticker", "observation_date", "horizon", "fold"],
+        how="left",
+        validate="many_to_one",
+    )
+    return merged["_non_overlapping"].astype(bool)
+
+
+def _evaluation_metric_row(
+    rows,
+    *,
+    scope,
+    regime_scope,
+    horizon,
+    sample_mode,
+    fold,
+    specification,
+    minimum_samples,
+):
+    excluded_unavailable = int(
+        (
+            (rows["status"] != "available")
+            | rows["predicted_event"].isna()
+        ).sum()
+    )
+    excluded_immature = int(
+        (~rows["mature"] | rows["actual_event"].isna()).sum()
+    )
+    valid = rows.loc[
+        (rows["status"] == "available")
+        & rows["predicted_event"].notna()
+        & rows["mature"]
+        & rows["actual_event"].notna()
+    ].copy()
+    sample_count = int(len(valid))
+    base = {
+        "scope": scope,
+        "regime_scope": regime_scope,
+        "horizon": int(horizon),
+        "sample_mode": sample_mode,
+        "fold": fold,
+        "specification": specification,
+        "sample_count": sample_count,
+        "excluded_unavailable_count": excluded_unavailable,
+        "excluded_immature_count": excluded_immature,
+        "signal_count": 0,
+        "event_rate": np.nan,
+        "signal_rate": np.nan,
+        "precision": np.nan,
+        "recall": np.nan,
+        "specificity": np.nan,
+        "balanced_accuracy": np.nan,
+        "macro_f1": np.nan,
+        "false_positive_rate": np.nan,
+        "roc_auc": np.nan,
+        "pr_auc": np.nan,
+        "mean_terminal_return": np.nan,
+        "mean_mae": np.nan,
+        "mean_mfe": np.nan,
+        "mean_lead_sessions": np.nan,
+        "false_positive_opportunity_cost": np.nan,
+    }
+    if sample_count < minimum_samples:
+        return {**base, "status": "insufficient"}
+    predicted = valid["predicted_event"].astype(bool)
+    actual = valid["actual_event"].astype(bool)
+    if actual.nunique() < 2:
+        return {**base, "status": "insufficient"}
+    tp = int((predicted & actual).sum())
+    fp = int((predicted & ~actual).sum())
+    fn = int((~predicted & actual).sum())
+    tn = int((~predicted & ~actual).sum())
+    precision = _safe_ratio(tp, tp + fp)
+    recall = _safe_ratio(tp, tp + fn)
+    specificity = _safe_ratio(tn, tn + fp)
+    negative_precision = _safe_ratio(tn, tn + fn)
+    positive_f1 = _f1(precision, recall)
+    negative_f1 = _f1(negative_precision, specificity)
+    score = valid["predicted_score"]
+    continuous_score = (
+        score.notna().all()
+        and score.nunique() > 2
+        and np.isfinite(score.to_numpy(dtype=float)).all()
+    )
+    false_positives = valid.loc[predicted & ~actual]
+    lead = (
+        pd.to_numeric(valid["lead_sessions"], errors="coerce")
+        if "lead_sessions" in valid
+        else pd.Series(dtype=float)
+    )
+    return {
+        **base,
+        "status": "ok",
+        "signal_count": int(predicted.sum()),
+        "event_rate": float(actual.mean()),
+        "signal_rate": float(predicted.mean()),
+        "precision": precision,
+        "recall": recall,
+        "specificity": specificity,
+        "balanced_accuracy": float((recall + specificity) / 2.0),
+        "macro_f1": float((positive_f1 + negative_f1) / 2.0),
+        "false_positive_rate": float(1.0 - specificity),
+        "roc_auc": (
+            float(roc_auc_score(actual, score))
+            if continuous_score
+            else np.nan
+        ),
+        "pr_auc": (
+            float(average_precision_score(actual, score))
+            if continuous_score
+            else np.nan
+        ),
+        "mean_terminal_return": float(valid["terminal_return"].mean()),
+        "mean_mae": float(valid["mae"].mean()),
+        "mean_mfe": float(valid["mfe"].mean()),
+        "mean_lead_sessions": (
+            float(lead.mean()) if not lead.empty else np.nan
+        ),
+        "false_positive_opportunity_cost": (
+            float(false_positives["mfe"].mean())
+            if not false_positives.empty
+            else np.nan
+        ),
+    }
+
+
+def _safe_ratio(numerator, denominator):
+    return float(numerator / denominator) if denominator else 0.0
+
+
+def _f1(precision, recall):
+    return (
+        float(2.0 * precision * recall / (precision + recall))
+        if precision + recall
+        else 0.0
+    )
 
 
 def _validate_price_frame(frame):

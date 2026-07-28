@@ -5,9 +5,15 @@ import pandas as pd
 from pandas.testing import assert_frame_equal
 
 from research.unified_downside_benchmark import (
+    EVIDENCE_GROUPS,
+    VOLUME_PARTICIPATION_COLUMNS,
     align_model_predictions,
     attach_next_open_path_targets,
     attach_point_in_time_strata,
+    build_evidence_ablations,
+    compare_folds,
+    evaluate_unified_predictions,
+    evidence_overlap_matrix,
 )
 
 
@@ -271,6 +277,181 @@ class UnifiedDownsideAlignmentTest(unittest.TestCase):
             result["market_regime"].tolist(),
             ["unavailable"] * 5,
         )
+
+
+class UnifiedDownsideMetricTest(unittest.TestCase):
+    def _prediction_rows(self):
+        dates = pd.bdate_range("2026-01-02", periods=6)
+        rows = []
+        actual = [True, False, True, False, True, False]
+        predictions = {
+            "ridge_down": [True, False, False, False, True, False],
+            "immediate_8": [True, True, False, False, True, False],
+        }
+        for specification, values in predictions.items():
+            for position, (date, event, predicted) in enumerate(
+                zip(dates, actual, values)
+            ):
+                rows.append(
+                    {
+                        "ticker": "AAA",
+                        "observation_date": date,
+                        "horizon": 5,
+                        "fold": 1 + position // 2,
+                        "specification": specification,
+                        "predicted_event": predicted,
+                        "predicted_score": float(predicted),
+                        "status": "available",
+                        "mature": True,
+                        "actual_event": event,
+                        "terminal_return": -0.08 if event else 0.04,
+                        "mae": -0.10 if event else -0.01,
+                        "mfe": 0.02 if event else 0.08,
+                        "group_key": "semiconductor",
+                        "market_regime": "correction",
+                    }
+                )
+        return pd.DataFrame(rows)
+
+    def test_binary_models_do_not_fabricate_auc_or_probability_metrics(self):
+        metrics = evaluate_unified_predictions(
+            self._prediction_rows(),
+            minimum_group_samples=2,
+        )
+        row = metrics.loc[
+            (metrics["specification"] == "immediate_8")
+            & (metrics["scope"] == "all")
+            & (metrics["regime_scope"] == "all")
+            & (metrics["sample_mode"] == "overlapping")
+            & (metrics["fold"].astype(str) == "all")
+        ].iloc[0]
+
+        self.assertTrue(pd.isna(row["roc_auc"]))
+        self.assertTrue(pd.isna(row["pr_auc"]))
+        self.assertAlmostEqual(row["precision"], 2.0 / 3.0)
+        self.assertAlmostEqual(row["recall"], 2.0 / 3.0)
+        self.assertEqual(row["status"], "ok")
+
+    def test_metrics_report_group_regime_fold_and_non_overlapping_rows(self):
+        metrics = evaluate_unified_predictions(
+            self._prediction_rows(),
+            minimum_group_samples=2,
+        )
+
+        self.assertIn("semiconductor", set(metrics["scope"]))
+        self.assertIn("correction", set(metrics["regime_scope"]))
+        self.assertEqual(
+            set(metrics["sample_mode"]),
+            {"overlapping", "non_overlapping"},
+        )
+        self.assertTrue((metrics["excluded_unavailable_count"] == 0).all())
+        self.assertIn("1", set(metrics["fold"].astype(str)))
+
+    def test_fold_comparison_counts_only_paired_sufficient_folds(self):
+        metrics = pd.DataFrame(
+            {
+                "scope": "all",
+                "regime_scope": "all",
+                "horizon": 5,
+                "sample_mode": "non_overlapping",
+                "specification": (
+                    ["ridge_down"] * 4 + ["toprisk_stateful"] * 4
+                ),
+                "fold": [1, 2, 3, 4, 1, 2, 3, 4],
+                "status": [
+                    "ok",
+                    "ok",
+                    "ok",
+                    "insufficient",
+                    "ok",
+                    "ok",
+                    "ok",
+                    "ok",
+                ],
+                "balanced_accuracy": [
+                    0.50,
+                    0.60,
+                    0.55,
+                    np.nan,
+                    0.60,
+                    0.61,
+                    0.50,
+                    0.80,
+                ],
+                "sample_count": [100] * 8,
+            }
+        )
+
+        comparison = compare_folds(metrics, baseline="ridge_down")
+        row = comparison.loc[
+            comparison["specification"] == "toprisk_stateful"
+        ].iloc[0]
+
+        self.assertEqual(row["comparable_fold_count"], 3)
+        self.assertEqual(row["fold_win_count"], 2)
+        self.assertAlmostEqual(row["fold_win_rate"], 2.0 / 3.0)
+
+
+class UnifiedDownsideAblationTest(unittest.TestCase):
+    def _evidence(self):
+        return pd.DataFrame(
+            {
+                "volume_ratio": [1.5, 0.9, 1.8],
+                "volume_change": [0.5, -0.1, 0.8],
+                "close_location": [0.1, 0.8, 0.2],
+                "signed_volume_proxy": [-1.0, 0.5, -1.2],
+                "below_ema20": [True, False, True],
+                "failed_breakout": [False, False, True],
+                "sector_relative_return": [-0.05, 0.02, -0.08],
+                "market_under_pressure": [True, False, True],
+                "prior_runup": [0.8, 0.2, 1.0],
+                "extended_from_ema20": [0.2, 0.01, 0.3],
+            }
+        )
+
+    def test_each_ablation_removes_only_one_registered_evidence_group(self):
+        evidence = self._evidence()
+        seen_columns = {}
+
+        def scorer(frame):
+            seen_columns[len(seen_columns)] = tuple(frame.columns)
+            return frame.notna().sum(axis=1).astype(float)
+
+        outputs = build_evidence_ablations(evidence, scorer)
+
+        self.assertEqual(
+            set(outputs),
+            {
+                "full",
+                *(
+                    f"without_{group}"
+                    for group in EVIDENCE_GROUPS
+                ),
+            },
+        )
+        volume_columns = set(VOLUME_PARTICIPATION_COLUMNS)
+        without_volume = set(seen_columns[1])
+        self.assertTrue(volume_columns.isdisjoint(without_volume))
+        self.assertEqual(
+            without_volume,
+            set(evidence.columns).difference(volume_columns),
+        )
+
+    def test_overlap_matrix_reports_numeric_and_boolean_dependence(self):
+        overlaps = evidence_overlap_matrix(self._evidence())
+        volume_pair = overlaps.loc[
+            (overlaps["evidence_a"] == "volume_ratio")
+            & (overlaps["evidence_b"] == "volume_change")
+        ].iloc[0]
+        boolean_pair = overlaps.loc[
+            (overlaps["evidence_a"] == "below_ema20")
+            & (overlaps["evidence_b"] == "failed_breakout")
+        ].iloc[0]
+
+        self.assertGreater(volume_pair["pearson"], 0.9)
+        self.assertTrue(pd.isna(volume_pair["jaccard"]))
+        self.assertTrue(pd.isna(boolean_pair["pearson"]))
+        self.assertAlmostEqual(boolean_pair["jaccard"], 0.5)
 
 
 if __name__ == "__main__":
