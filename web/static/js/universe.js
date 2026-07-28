@@ -1,4 +1,8 @@
 import { getLocale, t } from "./i18n.js";
+import {
+  marketCapAccessibleLabel,
+  marketCapLabel,
+} from "./market_cap.js";
 
 const FIELD_ALIASES = {
   strictVcp: ["strict_vcp", "strictVcp"],
@@ -273,6 +277,15 @@ export function renderUniverse(container, rows, options = {}) {
         ? t("universe.rs.value", { rating: row.rs_rating }, locale)
         : t("universe.rs.unavailable", {}, locale),
     );
+    const marketCap = appendText(
+      metadata,
+      "ticker-market-cap",
+      marketCapLabel(row, locale),
+    );
+    marketCap.dataset.tier = row.market_cap_tier || "unavailable";
+    const marketCapDescription = marketCapAccessibleLabel(row, locale);
+    marketCap.title = marketCapDescription;
+    marketCap.setAttribute("aria-label", marketCapDescription);
     appendText(metadata, "ticker-date", row.latest_date || t("universe.noDate", {}, locale));
 
     button.append(headline, metadata);

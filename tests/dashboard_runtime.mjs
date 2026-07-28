@@ -91,7 +91,8 @@ const ids = [
   "research-pool-toggle", "research-pool-action-status",
   "sort-direction", "sector-taxonomy", "sector-key", "sector-membership-summary",
   "market-date", "market-coverage", "selected-ticker", "selected-close",
-  "selected-change", "observation-date", "security-state", "research-status", "stock-retry",
+  "selected-change", "observation-date", "selected-market-cap",
+  "security-state", "research-status", "stock-retry",
   "data-warnings",
   "top-risk-state", "security-classification",
   "price-chart", "volume-chart", "crosshair-detail", "model-output-content",
@@ -219,6 +220,9 @@ const universe = {
   tickers: [{
     ticker: "AAA", latest_date: "2026-07-22", lag_days: 0, inactive: false,
     stale: false, shape_state: "strict_vcp", momentum_percentile: 80,
+    market_cap: 250_000_000_000,
+    market_cap_asof: "2026-07-20",
+    market_cap_tier: "mega",
     pool_membership: { active: true, research: false, research_catalog: false },
     sector_classification: {
       state: "conflict",
@@ -270,7 +274,13 @@ const row = {
 };
 const stock = {
   ticker: "AAA", observation_date: "2026-07-22",
-  summary: { close: 101, daily_return: 0.01, daily_return_unit: "fraction", stale: false, inactive: false },
+  summary: {
+    close: 101, daily_return: 0.01, daily_return_unit: "fraction",
+    stale: false, inactive: false,
+    market_cap: 250_000_000_000,
+    market_cap_asof: "2026-07-20",
+    market_cap_tier: "mega",
+  },
   top_risk: {
     model_key: "high_level_distribution_risk_v1",
     model_version: "v1",
@@ -801,4 +811,39 @@ if (mode === "success") {
     stockAttempts,
     selectedTicker: elements.get("selected-ticker").textContent,
   }));
+} else if (mode === "market-cap") {
+  const listZh = textTree(elements.get("universe-list"));
+  const detail = elements.get("selected-market-cap");
+  const zh = {
+    list: listZh,
+    detail: detail.textContent,
+    title: detail.title,
+    aria: detail.getAttribute("aria-label"),
+    tier: detail.dataset.tier,
+  };
+  enButton.dispatch("click");
+  const en = {
+    list: textTree(elements.get("universe-list")),
+    detail: detail.textContent,
+    title: detail.title,
+    aria: detail.getAttribute("aria-label"),
+    tier: detail.dataset.tier,
+  };
+  assert.match(zh.list, /超大盘 · \$250B/);
+  assert.deepEqual(zh, {
+    list: zh.list,
+    detail: "超大盘 · $250B",
+    title: "超大盘 · $250B，截至 2026-07-20",
+    aria: "超大盘 · $250B，截至 2026-07-20",
+    tier: "mega",
+  });
+  assert.match(en.list, /Mega cap · \$250B/);
+  assert.deepEqual(en, {
+    list: en.list,
+    detail: "Mega cap · $250B",
+    title: "Mega cap · $250B, as of 2026-07-20",
+    aria: "Mega cap · $250B, as of 2026-07-20",
+    tier: "mega",
+  });
+  console.log(JSON.stringify({ zh, en }));
 }

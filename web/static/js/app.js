@@ -38,6 +38,10 @@ import {
 } from "./update.js";
 import { createResearchPoolControl } from "./research_pool_control.js";
 import { createIntradayLiveController } from "./intraday-live.js";
+import {
+  marketCapAccessibleLabel,
+  marketCapLabel,
+} from "./market_cap.js";
 
 const elements = {};
 let stockRequestSequence = 0;
@@ -166,9 +170,17 @@ export function formatDailyReturn(value, unit = "fraction") {
 }
 
 export function clearStockQuote(fields) {
-  for (const key of ["selectedClose", "selectedChange", "observationDate"]) {
+  for (const key of [
+    "selectedClose",
+    "selectedChange",
+    "observationDate",
+    "selectedMarketCap",
+  ]) {
     if (fields && fields[key]) fields[key].textContent = "—";
   }
+  fields?.selectedMarketCap?.removeAttribute("data-tier");
+  fields?.selectedMarketCap?.removeAttribute("title");
+  fields?.selectedMarketCap?.removeAttribute("aria-label");
 }
 
 function errorState(error) {
@@ -747,6 +759,16 @@ function renderStockHeader(payload) {
     formatDailyReturn(summary.daily_return, summary.daily_return_unit),
   );
   setText(elements.observationDate, payload.observation_date);
+  const marketCap = marketCapLabel(summary, locale);
+  const marketCapDescription = marketCapAccessibleLabel(summary, locale);
+  setText(elements.selectedMarketCap, marketCap);
+  elements.selectedMarketCap.dataset.tier =
+    summary.market_cap_tier || "unavailable";
+  elements.selectedMarketCap.title = marketCapDescription;
+  elements.selectedMarketCap.setAttribute(
+    "aria-label",
+    marketCapDescription,
+  );
   setText(
     elements.securityState,
     t(
@@ -1210,6 +1232,7 @@ function captureElements() {
     selectedClose: byId("selected-close"),
     selectedChange: byId("selected-change"),
     observationDate: byId("observation-date"),
+    selectedMarketCap: byId("selected-market-cap"),
     securityState: byId("security-state"),
     securityRsState: byId("security-rs-state"),
     securityPoolState: byId("security-pool-state"),

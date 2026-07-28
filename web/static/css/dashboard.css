@@ -324,6 +324,20 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   font-weight: 500;
 }
 .ticker-rs { color: var(--accent); font-weight: 750; }
+.ticker-market-cap {
+  overflow: hidden;
+  max-width: 9rem;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #8ec5ff;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticker-market-cap[data-tier="unavailable"] { color: var(--muted); }
+.ticker-market-cap[data-tier="mega"] { border-color: #386d94; }
+.ticker-market-cap[data-tier="large"] { border-color: #315f82; }
 .ticker-pool,
 .ticker-gate {
   flex: 0 0 auto;
@@ -381,10 +395,11 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
   align-items: center;
 }
 
-.quote-grid { display: grid; grid-template-columns: repeat(3, minmax(92px, 1fr)); gap: 9px; margin: 0; }
+.quote-grid { display: grid; grid-template-columns: repeat(4, minmax(92px, 1fr)); gap: 9px; margin: 0; }
 .quote-grid div { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; background: rgba(9, 16, 22, 0.45); }
 .quote-grid dt { color: var(--muted); font-size: 0.67rem; text-transform: uppercase; }
 .quote-grid dd { margin: 3px 0 0; font-size: 0.94rem; font-variant-numeric: tabular-nums; }
+#selected-market-cap[data-tier="unavailable"] { color: var(--muted); }
 .span-full { grid-column: 1 / -1; }
 .security-classification {
   padding: 10px;

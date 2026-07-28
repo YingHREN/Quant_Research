@@ -71,6 +71,42 @@ class WebAssetTest(unittest.TestCase):
         )
         return json.loads(result.stdout)
 
+    def test_market_cap_formatter_uses_compact_tiers_and_missing_state(self):
+        module_uri = (STATIC / "js/market_cap.js").as_uri()
+        script = f"""
+            import assert from 'node:assert/strict';
+            import {{
+              formatMarketCap,
+              marketCapLabel,
+            }} from {json.dumps(module_uri)};
+            assert.equal(formatMarketCap(4_890_000_000_000), '$4.89T');
+            assert.equal(formatMarketCap(674_900_000_000), '$674.9B');
+            assert.equal(formatMarketCap(250_000_000_000), '$250B');
+            assert.equal(formatMarketCap(850_000_000), '$850M');
+            assert.equal(formatMarketCap(null), null);
+            assert.equal(
+              marketCapLabel({{
+                market_cap: 674_900_000_000,
+                market_cap_tier: 'mega',
+              }}, 'zh-CN'),
+              '超大盘 · $674.9B',
+            );
+            assert.equal(
+              marketCapLabel({{
+                market_cap: null,
+                market_cap_tier: 'unavailable',
+              }}, 'en'),
+              'Market cap unavailable',
+            );
+        """
+        result = subprocess.run(
+            ["node", "--input-type=module", "-e", script],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_api_retries_only_transient_failures(self):
         actual = self.run_api_runtime()
         self.assertEqual(
@@ -161,6 +197,13 @@ class WebAssetTest(unittest.TestCase):
                 "selectedTicker": "AAA",
             },
         )
+
+    def test_dashboard_renders_localized_market_cap_in_list_and_detail(self):
+        actual = self.run_dashboard_runtime("market-cap")
+        self.assertIn("超大盘 · $250B", actual["zh"]["list"])
+        self.assertEqual(actual["zh"]["detail"], "超大盘 · $250B")
+        self.assertIn("Mega cap · $250B", actual["en"]["list"])
+        self.assertEqual(actual["en"]["detail"], "Mega cap · $250B")
 
     def test_marker_layer_preferences(self):
         self.assertTrue(
