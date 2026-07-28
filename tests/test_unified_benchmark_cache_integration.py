@@ -17,6 +17,7 @@ from research.run_unified_downside_benchmark import (
     _assignment_fingerprint,
     _config_fingerprint,
     _database_fingerprint,
+    _model_definition,
     _validate_config,
     run_benchmark,
 )
@@ -103,6 +104,14 @@ def rule_predictions(statistical):
 
 
 class UnifiedBenchmarkCacheIntegrationTest(unittest.TestCase):
+    def test_model_definition_canonicalizes_unordered_regime_constants(self):
+        definition = _model_definition("statistical_predictions")
+
+        self.assertEqual(
+            definition["pressure_regimes"],
+            sorted(definition["pressure_regimes"]),
+        )
+
     def test_database_fingerprint_changes_for_same_shape_price_revision(self):
         first = inputs()
         revised_prices = first.prices.copy()

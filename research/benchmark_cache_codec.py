@@ -297,6 +297,51 @@ def _decode_typed_value(value: Any, kind: str) -> Any:
     raise ValueError("invalid typed value")
 
 
+def _decode_object_column(values) -> list[Any]:
+    decoded = []
+    for value in values:
+        if value is None:
+            decoded.append(None)
+        elif (
+            isinstance(value, dict)
+            and set(value) == {"type", "value"}
+            and value.get("type") == "string"
+            and isinstance(value.get("value"), str)
+        ):
+            decoded.append(value["value"])
+        elif isinstance(value, dict) and value == {"type": "missing"}:
+            decoded.append(None)
+        else:
+            decoded.append(_decode_object_value(value))
+    return decoded
+
+
+def _decode_primitive_column(values: pd.Series, kind: str) -> pd.Series:
+    nonmissing = values.loc[values.notna()]
+    inferred = pd.api.types.infer_dtype(nonmissing, skipna=False)
+    expected = {
+        "datetime": {"string", "empty"},
+        "boolean": {"boolean", "empty"},
+        "integer": {"integer", "empty"},
+        "number": {"floating", "integer", "mixed-integer-float", "empty"},
+        "string": {"string", "empty"},
+    }[kind]
+    if inferred not in expected:
+        raise ValueError("invalid {} column values".format(kind))
+    if kind == "datetime":
+        converted = pd.to_datetime(values, errors="raise")
+        if getattr(converted.dt, "tz", None) is not None:
+            raise ValueError("timezone-aware datetimes are not supported")
+        return converted
+    if kind == "number":
+        converted = pd.to_numeric(values, errors="raise")
+        numeric = converted.loc[converted.notna()].to_numpy(dtype=float)
+        if not np.isfinite(numeric).all():
+            raise ValueError("numeric values must be finite")
+        return converted
+    return values
+
+
 def decode_frame_bundle(
     payload: bytes,
     expected_checksum: str,
@@ -366,19 +411,21 @@ def decode_frame_bundle(
         if len(names) != len(set(names)):
             raise ValueError("duplicate DataFrame columns")
 
-        decoded_columns = {column_name: [] for column_name in names}
-        for record in encoded_frame["records"]:
+        records = encoded_frame["records"]
+        for record in records:
             if not isinstance(record, list) or len(record) != len(columns):
                 raise ValueError("invalid frame record")
-            for (column_name, _dtype, kind), value in zip(columns, record):
-                decoded_columns[column_name].append(
-                    _decode_typed_value(value, kind)
-                )
+        raw_frame = pd.DataFrame.from_records(records, columns=names)
+        decoded_columns = {}
+        for column_name, dtype, kind in columns:
+            values = raw_frame[column_name]
+            if kind == "object":
+                decoded = _decode_object_column(values)
+            else:
+                decoded = _decode_primitive_column(values, kind)
+            decoded_columns[column_name] = pd.Series(decoded, dtype=dtype)
         frame = pd.DataFrame(
-            {
-                column_name: pd.Series(decoded_columns[column_name], dtype=dtype)
-                for column_name, dtype, _kind in columns
-            },
+            decoded_columns,
             columns=names,
         )
         restored[name] = frame

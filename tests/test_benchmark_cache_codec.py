@@ -22,6 +22,7 @@ def example_frame():
             "predicted_event": pd.Series([True, pd.NA], dtype="boolean"),
             "predicted_score": [0.7, np.nan],
             "evidence": [("volume", "trend"), tuple()],
+            "optional_object": pd.Series([None, None], dtype="object"),
         }
     )
 

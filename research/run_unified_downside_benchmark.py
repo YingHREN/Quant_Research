@@ -735,7 +735,7 @@ def _model_definition(stage):
         "ridge_features": list(RIDGE_V4_FEATURE_COLUMNS),
         "general_logistic_features": list(expanded["ridge_decay_market"]),
         "specialist_features": list(SPECIALIST_FEATURE_COLUMNS),
-        "pressure_regimes": list(PRESSURE_REGIMES),
+        "pressure_regimes": sorted(PRESSURE_REGIMES),
         "versions": [
             "ridge_direction_v1",
             "general_logistic_v1",
@@ -775,14 +775,6 @@ def _code_fingerprint():
         "web/forecasts",
     ]
     try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        ).stdout.strip()
         status = subprocess.run(
             ["git", "status", "--porcelain", "--", *relevant_paths],
             cwd=repository,
@@ -791,14 +783,26 @@ def _code_fingerprint():
             text=True,
             timeout=10,
         ).stdout
-        if (
-            len(commit) not in {40, 64}
-            or any(character not in "0123456789abcdef" for character in commit)
-        ):
-            raise ValueError("git commit is not a hexadecimal object id")
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "--", *relevant_paths],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout.split(b"\0")
+        content = []
+        for encoded_path in sorted(path for path in tracked if path):
+            relative_path = encoded_path.decode("utf-8")
+            file_path = repository / relative_path
+            content.append(
+                {
+                    "path": relative_path,
+                    "sha256": hashlib.sha256(file_path.read_bytes()).hexdigest(),
+                }
+            )
         return _sha256_json(
             {
-                "git_commit": commit,
+                "relevant_source_content": content,
                 "study_version": STUDY_VERSION,
                 "cache_schema_version": CACHE_SCHEMA_VERSION,
             }

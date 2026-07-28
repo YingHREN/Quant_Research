@@ -13,7 +13,7 @@
 - Cache database is `data/unified_benchmark_cache.db`; never write cache rows to any price, online analysis, or shadow database.
 - Cache only `statistical_predictions` and `rule_predictions`; labels, strata, metrics, promotion gates, and reports are recomputed every run.
 - Do not add PyArrow, pickle, msgpack, or another dependency.
-- Cache identity must include content, point-in-time assignments, cohort, model configuration, versions, code commit, and dirty-worktree state.
+- Cache identity must include content, point-in-time assignments, cohort, model configuration, versions, relevant tracked source content, and dirty-worktree state.
 - A dirty relevant worktree disables cache reads and writes.
 - Corruption, schema mismatch, SQLite failure, or write failure must not alter benchmark output.
 - Stage artifacts are immutable. Exact retries are idempotent; conflicting payloads fail closed.
@@ -319,10 +319,11 @@ prices, regimes, assignments, feature order, horizons, folds, start date,
 training threshold, neutral bands, downside thresholds, pressure regimes, and
 version constants. Exclude `minimum_group_samples` from stage fingerprints.
 
-`code_fingerprint()` runs `git rev-parse HEAD` and `git status --porcelain`
-restricted to the benchmark, feature, risk-rule, and cache modules. Return the
-commit-derived SHA-256 and a Boolean dirty flag. Command failure returns dirty
-and disables caching.
+`code_fingerprint()` hashes tracked contents selected by `git ls-files` and
+runs `git status --porcelain`, restricted to the benchmark, feature, risk-rule,
+and cache modules. Return the content-derived SHA-256 and a Boolean dirty flag.
+This prevents documentation-only or merge-only commits from invalidating valid
+model artifacts. Command failure returns dirty and disables caching.
 
 - [ ] **Step 3: Write failing cold/hot integration test**
 
