@@ -1198,35 +1198,113 @@ def _build_rule_frame(snapshot):
 
 
 def _load_real_snapshot(config):  # pragma: no cover - integration path
+    from research.expanded_market_data import ExpandedMarketDataRepository
+    from research.market_regime import build_market_regime_frame
+    from research.run_expanded_walkforward_study import (
+        classify_study_groups,
+        prepare_expanded_frame,
+        select_analysis_tickers,
+    )
     from research.run_unified_downside_benchmark import (
         BenchmarkConfig,
+        BenchmarkInputs,
         _attach_direction_targets,
-        _build_rule_context,
-        _load_real_inputs,
+        _load_assignments,
     )
     from web.market_groups import REFERENCE_TICKERS
 
+    repository = ExpandedMarketDataRepository(config.research_database)
+    classifications = repository.load_classifications()
+    groups = classify_study_groups(classifications)
+    candidates = select_analysis_tickers(
+        groups,
+        max_tickers=max(config.max_tickers, config.candidate_tickers),
+    )
+    requested = tuple(sorted(set(candidates).union(REFERENCE_TICKERS)))
+    loaded = repository.load_universe_histories(tickers=requested)
+    required_references = ("QQQ", "SPY")
+    common = None
+    for ticker in required_references:
+        history = loaded.get(ticker)
+        if not isinstance(history, pd.DataFrame) or history.empty:
+            raise ValueError(f"required reference history is missing: {ticker}")
+        dates = set(
+            pd.DatetimeIndex(history.index).tz_localize(None).normalize()
+        )
+        common = dates if common is None else common.intersection(dates)
+    if not common:
+        raise ValueError("required references have no common market session")
+    cutoff = max(common)
+    eligible = {
+        ticker
+        for ticker in candidates
+        if (
+            _has_session(loaded.get(ticker), cutoff)
+            and len(loaded[ticker].loc[:cutoff]) >= config.minimum_history
+        )
+    }
+    eligible_groups = {
+        ticker: group
+        for ticker, group in groups.items()
+        if ticker in eligible
+    }
+    analysis_tickers = select_analysis_tickers(
+        eligible_groups,
+        max_tickers=config.max_tickers,
+    )
+    if len(analysis_tickers) < config.max_tickers:
+        raise ValueError(
+            "not enough active stocks at the frozen market cutoff"
+        )
+    histories = {
+        ticker: history
+        for ticker, history in loaded.items()
+        if ticker in set(analysis_tickers).union(REFERENCE_TICKERS)
+    }
+    feature_frame = prepare_expanded_frame(
+        histories,
+        analysis_tickers=analysis_tickers,
+        classifications=classifications,
+        start_date=config.start_date,
+        sector_mode="none",
+    )
+    price_frames = []
+    for ticker in analysis_tickers:
+        history = histories[ticker]
+        selected = history.loc[:, ["Open", "High", "Low", "Close"]].copy()
+        selected.insert(0, "observation_date", selected.index)
+        selected.insert(0, "ticker", ticker)
+        price_frames.append(selected.reset_index(drop=True))
+    regimes = (
+        build_market_regime_frame(histories)
+        .loc[:, ["regime"]]
+        .rename_axis("observation_date")
+        .reset_index()
+    )
+    assignments = _load_assignments(config.research_database)
     benchmark_config = BenchmarkConfig(
         database=config.research_database,
         start_date=config.start_date,
-        max_tickers=max(config.max_tickers, config.candidate_tickers),
+        max_tickers=config.max_tickers,
         horizons=config.horizons,
     )
-    inputs = _load_real_inputs(benchmark_config)
+    inputs = BenchmarkInputs(
+        prices=pd.concat(price_frames, ignore_index=True),
+        assignments=assignments,
+        regimes=regimes,
+        histories=histories,
+        feature_frame=feature_frame,
+        analysis_tickers=analysis_tickers,
+    )
     frame = _attach_direction_targets(inputs, benchmark_config)
-    rule_frame = _build_rule_context(inputs)
     return ShadowInputSnapshot(
         feature_frame=frame,
-        histories=inputs.histories or {},
-        assignments=inputs.assignments,
-        regimes=inputs.regimes,
-        analysis_tickers=tuple(inputs.analysis_tickers),
-        reference_tickers=tuple(
-            ticker
-            for ticker in REFERENCE_TICKERS
-            if ticker in {"QQQ", "SPY"}
-        ),
-        rule_frame=rule_frame,
+        histories=histories,
+        assignments=assignments,
+        regimes=regimes,
+        analysis_tickers=tuple(analysis_tickers),
+        reference_tickers=required_references,
+        rule_frame=None,
     )
 
 

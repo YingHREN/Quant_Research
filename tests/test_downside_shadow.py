@@ -144,6 +144,26 @@ class DownsideShadowArtifactTest(unittest.TestCase):
         prediction = predict_frozen_linear(artifact, invalid)
         self.assertTrue(np.isfinite(prediction["predicted_score"]).all())
 
+    def test_all_missing_training_feature_is_frozen_as_zero_not_dropped(self):
+        frame = training_frame()
+        frame["optional_context"] = np.nan
+
+        artifact = fit_frozen_binary_logistic(
+            frame,
+            feature_columns=("x1", "optional_context"),
+            target_column="downside_event_5",
+            label_end_column="label_end",
+            frozen_market_asof="2026-07-24",
+            specification="pressure_downside_logistic_v1",
+            horizon=5,
+        )
+
+        self.assertEqual(
+            artifact.feature_columns,
+            ("x1", "optional_context"),
+        )
+        self.assertEqual(artifact.imputation_values[1], 0.0)
+
     def test_direction_inference_matches_liblinear_ovr_probability(self):
         artifact = FrozenLinearArtifact(
             specification="general_logistic",

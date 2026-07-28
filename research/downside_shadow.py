@@ -432,9 +432,7 @@ def _training_design(
     if selected.empty:
         raise ValueError("no training rows are observable by frozen cutoff")
     numeric = _numeric_features(selected, features)
-    medians = numeric.median(axis=0, skipna=True)
-    if medians.isna().any():
-        raise ValueError("training features require finite medians")
+    medians = numeric.median(axis=0, skipna=True).fillna(0.0)
     imputed = numeric.fillna(medians)
     centers = imputed.mean(axis=0)
     scales = imputed.std(axis=0, ddof=0)
