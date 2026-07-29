@@ -287,6 +287,18 @@ def _default_registry():
         "model.bottomState",
         lambda context: _bottom_state(context["chart_row"]),
     )
+    register(
+        "historical_demand_support_v1",
+        "bullish_structure",
+        28,
+        "v1",
+        "remembered_zone",
+        "research",
+        "close_confirmed",
+        "advisory",
+        "model.historicalDemandSupport",
+        lambda context: _historical_demand_support(context["chart_row"]),
+    )
     for order, field, key, translation_prefix in (
         (30, "strict_vcp", "strict_vcp", "model.strictVcp"),
         (
@@ -882,6 +894,96 @@ def _bottom_state(row):
     }
 
 
+def _historical_demand_support(row):
+    state = row.get("historical_demand_support_state")
+    score = row.get("historical_demand_support_score")
+    available = state not in (None, "unavailable") and score is not None
+    event_types = list(row.get("historical_demand_support_event_types") or ())
+    conditions = list(
+        dict.fromkeys(
+            (
+                *event_types,
+                *(row.get("historical_demand_support_conditions") or ()),
+            )
+        )
+    )
+    return {
+        **_identity(
+            row.get("historical_demand_support_model_key")
+            or "historical_demand_support_v1",
+            row.get("historical_demand_support_model_version") or "v1",
+            "remembered_zone",
+            "research",
+            "active" if available else "unavailable",
+            "close_confirmed",
+            "model.historicalDemandSupport",
+        ),
+        "score": json_safe(score),
+        "maximum_score": 100,
+        "coverage": json_safe(
+            row.get("historical_demand_support_coverage")
+        ),
+        "state": state or "unavailable",
+        "state_label_prefix": "modelOutput.historicalDemandSupport",
+        "zone_lower": json_safe(
+            row.get("historical_demand_support_lower")
+        ),
+        "zone_upper": json_safe(
+            row.get("historical_demand_support_upper")
+        ),
+        "first_date": row.get("historical_demand_support_first_date"),
+        "last_confirmed_date": row.get(
+            "historical_demand_support_last_confirmed_date"
+        ),
+        "memory_age_sessions": row.get(
+            "historical_demand_support_age_sessions"
+        ),
+        "event_count": row.get("historical_demand_support_event_count"),
+        "retest_count": row.get("historical_demand_support_retest_count"),
+        "invalidation_level": json_safe(
+            row.get("historical_demand_support_invalidation_level")
+        ),
+        "conditions": conditions,
+        "counter_conditions": list(
+            row.get("historical_demand_support_counter_conditions") or ()
+        ),
+        "unavailable_reason": (
+            None
+            if available
+            else row.get("historical_demand_support_unavailable_reason")
+            or "historical_demand_support_unavailable"
+        ),
+        "metrics": _metrics(
+            row,
+            (
+                (
+                    "modelOutput.metric.demandSupport.zoneLower",
+                    "historical_demand_support_lower",
+                    "number",
+                ),
+                (
+                    "modelOutput.metric.demandSupport.zoneUpper",
+                    "historical_demand_support_upper",
+                    "number",
+                ),
+                (
+                    "modelOutput.metric.demandSupport.eventCount",
+                    "historical_demand_support_event_count",
+                    "number",
+                ),
+                (
+                    "modelOutput.metric.demandSupport.retestCount",
+                    "historical_demand_support_retest_count",
+                    "number",
+                ),
+                (
+                    "modelOutput.metric.demandSupport.invalidation",
+                    "historical_demand_support_invalidation_level",
+                    "number",
+                ),
+            ),
+        ),
+    }
 def _canslim_technical_gate(row):
     gate = _mapping(row.get("canslim_technical_gate"))
     state = gate.get("state")

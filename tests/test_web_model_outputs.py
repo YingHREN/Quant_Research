@@ -122,6 +122,23 @@ def chart_row():
         "bottom_counter_conditions": ["strong_supply_pressure"],
         "bottom_invalidation_level": 96.5,
         "bottom_unavailable_reason": None,
+        "historical_demand_support_model_key": "historical_demand_support_v1",
+        "historical_demand_support_model_version": "v1",
+        "historical_demand_support_state": "accepted",
+        "historical_demand_support_score": 76.0,
+        "historical_demand_support_coverage": 0.8,
+        "historical_demand_support_lower": 97.0,
+        "historical_demand_support_upper": 99.0,
+        "historical_demand_support_first_date": "2026-06-12",
+        "historical_demand_support_last_confirmed_date": "2026-06-23",
+        "historical_demand_support_age_sessions": 6,
+        "historical_demand_support_event_types": ["buyer_absorption"],
+        "historical_demand_support_event_count": 2,
+        "historical_demand_support_retest_count": 1,
+        "historical_demand_support_invalidation_level": 95.5,
+        "historical_demand_support_conditions": ["retest_accepted"],
+        "historical_demand_support_counter_conditions": [],
+        "historical_demand_support_unavailable_reason": None,
         "strict_vcp_active": False,
         "strict_vcp_reject_reason": "contractions_not_decreasing",
         "strict_vcp_evidence": {
@@ -224,6 +241,25 @@ def chart_row():
 
 
 class ModelOutputContractTest(unittest.TestCase):
+    def test_historical_demand_support_is_research_advisory_output(self):
+        outputs = build_model_outputs(forecast_payload(), chart_row(), {})
+        demand_support = next(
+            item
+            for item in outputs["bullish_structure"]
+            if item["key"] == "historical_demand_support_v1"
+        )
+
+        self.assertEqual(demand_support["lifecycle"], "research")
+        self.assertEqual(demand_support["decision_permission"], "advisory")
+        self.assertEqual(demand_support["status"], "active")
+        self.assertEqual(demand_support["score"], 76.0)
+        self.assertEqual(demand_support["state"], "accepted")
+        self.assertEqual(demand_support["invalidation_level"], 95.5)
+        self.assertEqual(
+            demand_support["conditions"],
+            ["buyer_absorption", "retest_accepted"],
+        )
+
     def test_registry_orders_families_and_isolates_builder_failures(self):
         def broken(_context):
             raise RuntimeError("private implementation detail")

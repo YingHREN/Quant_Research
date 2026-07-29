@@ -349,6 +349,21 @@ class WebAssetTest(unittest.TestCase):
         self.assertIn("model.state_label_prefix", outputs)
         self.assertIn("model.counter_conditions", outputs)
 
+    def test_historical_demand_support_has_localized_detail_and_model_copy(self):
+        i18n = (STATIC / "js/i18n.js").read_text()
+        chart = (STATIC / "js/charts.js").read_text()
+
+        for value in (
+            "model.historicalDemandSupport.name",
+            "modelOutput.historicalDemandSupport.accepted",
+            "chart.field.historicalDemandSupportZone",
+            "chart.support.source.historical_demand_zone",
+            "modelOutput.metric.demandSupport.eventCount",
+        ):
+            self.assertIn(value, i18n)
+        self.assertIn("historicalDemandSupportZoneText", chart)
+        self.assertIn("historicalDemandSupportEventsText", chart)
+
     def test_page_has_manual_recovery_controls(self):
         html = HTML.read_text()
         self.assertIn('id="universe-retry"', html)

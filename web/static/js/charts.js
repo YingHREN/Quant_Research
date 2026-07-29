@@ -216,6 +216,23 @@ function supportZoneText(row) {
   return `${numberText(row.near_support_lower)}–${numberText(row.near_support_upper)}`;
 }
 
+function historicalDemandSupportZoneText(row) {
+  if (!finite(row?.historical_demand_support_lower) || !finite(row?.historical_demand_support_upper)) return "—";
+  return `${numberText(row.historical_demand_support_lower)}–${numberText(row.historical_demand_support_upper)}`;
+}
+
+function historicalDemandSupportEventsText(row, locale) {
+  const types = Array.isArray(row?.historical_demand_support_event_types)
+    ? row.historical_demand_support_event_types
+    : [];
+  if (!types.length) return "—";
+  return types.map((type) => {
+    const key = `modelOutput.condition.${type}`;
+    const localized = t(key, {}, locale);
+    return localized === key ? type : localized;
+  }).join(locale === "zh-CN" ? "、" : ", ");
+}
+
 function supportSourcesText(sources, locale) {
   if (!Array.isArray(sources) || !sources.length) return "—";
   return sources.map((source) => {
@@ -348,6 +365,11 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.nearSupportSources", {}, locale), value: supportSourcesText(row.near_support_sources, locale) },
     { label: t("chart.field.nearSupportStrength", {}, locale), value: supportStrengthText(row.near_support_score, locale) },
     { label: t("chart.field.nearSupportState", {}, locale), value: supportStateText(row.near_support_state, locale) },
+    { label: t("chart.field.historicalDemandSupportState", {}, locale), value: t(`modelOutput.historicalDemandSupport.${row.historical_demand_support_state || "unavailable"}`, {}, locale) },
+    { label: t("chart.field.historicalDemandSupportZone", {}, locale), value: historicalDemandSupportZoneText(row) },
+    { label: t("chart.field.historicalDemandSupportScore", {}, locale), value: finite(row.historical_demand_support_score) ? `${numberText(row.historical_demand_support_score, 0)}/100` : "—" },
+    { label: t("chart.field.historicalDemandSupportEvents", {}, locale), value: historicalDemandSupportEventsText(row, locale) },
+    { label: t("chart.field.historicalDemandSupportInvalidation", {}, locale), value: numberText(row.historical_demand_support_invalidation_level) },
     { label: t("chart.field.priorHighBreakout", {}, locale), value: booleanText(row.prior_high_breakout, locale) },
     { label: t("chart.field.descendingTrendline", {}, locale), value: numberText(row.descending_trendline) },
     { label: t("chart.field.trendlineBreakout", {}, locale), value: booleanText(row.trendline_breakout, locale) },
