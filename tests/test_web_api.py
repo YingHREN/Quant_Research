@@ -1545,6 +1545,26 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertGreaterEqual(latest["supply_pressure_coverage"], 0.75)
         self.assertGreaterEqual(latest["demand_confirmation_coverage"], 0.75)
+        self.assertEqual(
+            latest["historical_demand_support_model_key"],
+            "historical_demand_support_v1",
+        )
+        self.assertIn(
+            latest["historical_demand_support_state"],
+            {
+                "unavailable",
+                "active_untested",
+                "approaching",
+                "testing",
+                "accepted",
+                "weakened",
+                "invalidated",
+            },
+        )
+        self.assertIsInstance(
+            latest["historical_demand_support_event_types"],
+            list,
+        )
         self.assertIn(
             latest["supply_demand_state"],
             {

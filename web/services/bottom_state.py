@@ -61,6 +61,15 @@ def _evidence_row(row):
         "near_support_upper": row.get("near_support_upper"),
         "near_support_score": row.get("near_support_score"),
         "near_support_state": row.get("near_support_state"),
+        "historical_demand_support_state": row.get(
+            "historical_demand_support_state"
+        ),
+        "historical_demand_support_score": row.get(
+            "historical_demand_support_score"
+        ),
+        "historical_demand_support_invalidation_level": row.get(
+            "historical_demand_support_invalidation_level"
+        ),
         "demand_confirmation_score": row.get(
             "demand_confirmation_score"
         ),

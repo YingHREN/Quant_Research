@@ -28,6 +28,11 @@ class BottomStateWebServiceTest(unittest.TestCase):
                     "near_support_upper": float(close * 0.995),
                     "near_support_score": 70.0,
                     "near_support_state": "testing",
+                    "historical_demand_support_state": "testing",
+                    "historical_demand_support_score": 82.0,
+                    "historical_demand_support_invalidation_level": float(
+                        close * 0.98
+                    ),
                     "demand_confirmation_score": 55.0,
                     "demand_confirmation_coverage": 1.0,
                     "demand_confirmation_conditions": [],
@@ -57,6 +62,11 @@ class BottomStateWebServiceTest(unittest.TestCase):
             chart[-1]["bottom_counter_conditions"],
             list,
         )
+        self.assertIn(
+            "historical_demand_support",
+            chart[-1]["bottom_conditions"],
+        )
+        self.assertEqual(chart[-1]["bottom_demand_score"], 13.75)
 
     def test_missing_history_produces_typed_unavailable_rows(self):
         chart = [{"time": "2026-07-01", "close": 100.0}]

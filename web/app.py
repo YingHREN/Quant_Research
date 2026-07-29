@@ -98,6 +98,9 @@ from web.services.research_pool import (
     normalize_research_pool_ticker,
 )
 from web.services.supply_demand import attach_supply_demand_rows
+from web.services.historical_demand_support import (
+    attach_historical_demand_support_rows,
+)
 from web.services.bottom_state import attach_bottom_state_rows
 from web.services.intraday import IntradaySnapshotService, IntradayStatusService
 from web.services.intraday_subscriptions import (
@@ -674,6 +677,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             normalized_ticker,
             peer_histories,
         )
+        attach_historical_demand_support_rows(
+            chart,
+            normalized_ticker,
+            peer_histories,
+        )
         if selected_summary is not None and selected_summary.inactive:
             warnings.append("inactive_ticker")
         elif selected_summary is not None and selected_summary.lag_days > 0:
@@ -908,6 +916,11 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             assignments,
         )
         attach_supply_demand_rows(
+            chart,
+            normalized_ticker,
+            snapshot.histories,
+        )
+        attach_historical_demand_support_rows(
             chart,
             normalized_ticker,
             snapshot.histories,
@@ -1453,6 +1466,7 @@ def _research_stock_payload(
         assignments,
     )
     attach_supply_demand_rows(chart, ticker, snapshot.histories)
+    attach_historical_demand_support_rows(chart, ticker, snapshot.histories)
     market_gate = _attach_market_gate_rows(chart, snapshot.histories)
     attach_bottom_state_rows(chart, history)
     if forecast_payload is None:
