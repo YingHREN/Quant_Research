@@ -77,6 +77,24 @@ const ENTRY_MARKER_STYLES = Object.freeze({
   top_risk_recovery: Object.freeze({
     position: "belowBar", shape: "arrowUp", color: COLORS.up,
   }),
+  bottom_potential_support: Object.freeze({
+    position: "belowBar", shape: "circle", color: COLORS.sma50,
+  }),
+  bottom_seller_exhaustion: Object.freeze({
+    position: "belowBar", shape: "circle", color: COLORS.warning,
+  }),
+  bottom_early_reversal: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.forecast,
+  }),
+  bottom_structure_confirmed: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.up,
+  }),
+  bottom_retest_confirmed: Object.freeze({
+    position: "belowBar", shape: "square", color: COLORS.up,
+  }),
+  bottom_failed: Object.freeze({
+    position: "aboveBar", shape: "arrowDown", color: COLORS.down,
+  }),
 });
 
 const ENTRY_MARKER_LAYERS = Object.freeze({
@@ -90,6 +108,12 @@ const ENTRY_MARKER_LAYERS = Object.freeze({
   top_risk_high: "top_risk",
   top_risk_confirmed: "top_risk",
   top_risk_recovery: "top_risk",
+  bottom_potential_support: "bottom_state",
+  bottom_seller_exhaustion: "bottom_state",
+  bottom_early_reversal: "bottom_state",
+  bottom_structure_confirmed: "bottom_state",
+  bottom_retest_confirmed: "bottom_state",
+  bottom_failed: "bottom_state",
 });
 
 const MARKER_PRIORITIES = Object.freeze({
@@ -103,6 +127,12 @@ const MARKER_PRIORITIES = Object.freeze({
   strict_vcp: 65,
   tight_platform: 60,
   top_risk_recovery: 55,
+  bottom_failed: 92,
+  bottom_retest_confirmed: 72,
+  bottom_structure_confirmed: 68,
+  bottom_early_reversal: 48,
+  bottom_seller_exhaustion: 44,
+  bottom_potential_support: 25,
   structure_reversal: 50,
   early_reversal: 45,
   prior_high_breakout: 40,
@@ -326,6 +356,10 @@ export function detailItems(row, locale = getLocale()) {
     { label: t("chart.field.earlyReversalWatch", {}, locale), value: finite(row.early_reversal_score) ? `${row.early_reversal_score}/100` : "—" },
     { label: t("chart.field.earlyReversalState", {}, locale), value: t(row.early_reversal_watch ? "chart.earlyReversal.watching" : "chart.earlyReversal.inactive", {}, locale) },
     { label: t("chart.field.earlyReversalEvidence", {}, locale), value: earlyReversalConditionsText(row, locale) },
+    { label: t("chart.field.bottomState", {}, locale), value: t(`modelOutput.bottomState.${row.bottom_state || "unavailable"}`, {}, locale) },
+    { label: t("chart.field.bottomScore", {}, locale), value: finite(row.bottom_score) ? `${numberText(row.bottom_score, 0)}/100` : "—" },
+    { label: t("chart.field.bottomStateAge", {}, locale), value: Number.isInteger(row.bottom_state_age_sessions) ? String(row.bottom_state_age_sessions) : "—" },
+    { label: t("chart.field.bottomInvalidation", {}, locale), value: numberText(row.bottom_invalidation_level) },
     { label: t("chart.field.strictVcpState", {}, locale), value: entryStateText(row.strict_vcp_active, locale) },
     { label: t("chart.field.strictVcpPivot", {}, locale), value: numberText(row.strict_vcp_pivot) },
     { label: t("chart.field.strictVcpReason", {}, locale), value: entryReasonText(row.strict_vcp_reject_reason, locale) },

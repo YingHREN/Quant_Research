@@ -275,6 +275,18 @@ def _default_registry():
         "model.earlyReversal",
         lambda context: _early_reversal(context["chart_row"]),
     )
+    register(
+        "bottoming_reversal_state_v1",
+        "bullish_structure",
+        25,
+        "v1",
+        "remembered_state",
+        "research",
+        "close_confirmed",
+        "advisory",
+        "model.bottomState",
+        lambda context: _bottom_state(context["chart_row"]),
+    )
     for order, field, key, translation_prefix in (
         (30, "strict_vcp", "strict_vcp", "model.strictVcp"),
         (
@@ -787,6 +799,86 @@ def _early_reversal(row):
         "score": json_safe(score),
         "maximum_score": 100,
         "conditions": list(row.get("early_reversal_conditions") or ()),
+    }
+
+
+def _bottom_state(row):
+    state = row.get("bottom_state")
+    score = row.get("bottom_score")
+    available = state not in (None, "unavailable") and score is not None
+    values = {
+        "location": row.get("bottom_location_score"),
+        "exhaustion": row.get("bottom_exhaustion_score"),
+        "demand": row.get("bottom_demand_score"),
+        "structure": row.get("bottom_structure_score"),
+        "environment": row.get("bottom_environment_score"),
+        "invalidation": row.get("bottom_invalidation_level"),
+    }
+    return {
+        **_identity(
+            row.get("bottom_model_key") or "bottoming_reversal_state_v1",
+            row.get("bottom_model_version") or "v1",
+            "remembered_state",
+            "research",
+            "active" if available else "unavailable",
+            "close_confirmed",
+            "model.bottomState",
+        ),
+        "score": json_safe(score),
+        "maximum_score": 100,
+        "coverage": json_safe(row.get("bottom_coverage")),
+        "state": state or "unavailable",
+        "raw_state": row.get("bottom_raw_state") or "unavailable",
+        "state_label_prefix": "modelOutput.bottomState",
+        "memory_age_sessions": row.get("bottom_state_age_sessions"),
+        "invalidation_level": json_safe(
+            row.get("bottom_invalidation_level")
+        ),
+        "conditions": list(row.get("bottom_conditions") or ()),
+        "counter_conditions": list(
+            row.get("bottom_counter_conditions") or ()
+        ),
+        "unavailable_reason": (
+            None
+            if available
+            else row.get("bottom_unavailable_reason")
+            or "bottom_state_unavailable"
+        ),
+        "metrics": _metrics(
+            values,
+            (
+                (
+                    "modelOutput.metric.bottom.location",
+                    "location",
+                    "score",
+                ),
+                (
+                    "modelOutput.metric.bottom.exhaustion",
+                    "exhaustion",
+                    "score",
+                ),
+                (
+                    "modelOutput.metric.bottom.demand",
+                    "demand",
+                    "score",
+                ),
+                (
+                    "modelOutput.metric.bottom.structure",
+                    "structure",
+                    "score",
+                ),
+                (
+                    "modelOutput.metric.bottom.environment",
+                    "environment",
+                    "score",
+                ),
+                (
+                    "modelOutput.metric.bottom.invalidation",
+                    "invalidation",
+                    "number",
+                ),
+            ),
+        ),
     }
 
 

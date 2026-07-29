@@ -102,6 +102,26 @@ def chart_row():
             "current_price_acceptance",
             "current_volume_support",
         ],
+        "bottom_model_key": "bottoming_reversal_state_v1",
+        "bottom_model_version": "v1",
+        "bottom_state": "early_bullish_reversal_watch",
+        "bottom_raw_state": "early_bullish_reversal_watch",
+        "bottom_score": 68.0,
+        "bottom_coverage": 0.8,
+        "bottom_state_age_sessions": 2,
+        "bottom_location_score": 18.0,
+        "bottom_exhaustion_score": 18.0,
+        "bottom_demand_score": 17.0,
+        "bottom_structure_score": 10.0,
+        "bottom_environment_score": 5.0,
+        "bottom_conditions": [
+            "near_support_zone",
+            "buyer_absorption",
+            "early_bullish_reversal",
+        ],
+        "bottom_counter_conditions": ["strong_supply_pressure"],
+        "bottom_invalidation_level": 96.5,
+        "bottom_unavailable_reason": None,
         "strict_vcp_active": False,
         "strict_vcp_reject_reason": "contractions_not_decreasing",
         "strict_vcp_evidence": {
@@ -365,6 +385,33 @@ class ModelOutputContractTest(unittest.TestCase):
         bullish = {
             item["key"]: item for item in outputs["bullish_structure"]
         }
+        bottom = bullish["bottoming_reversal_state_v1"]
+        self.assertEqual(bottom["lifecycle"], "research")
+        self.assertEqual(bottom["kind"], "remembered_state")
+        self.assertEqual(bottom["status"], "active")
+        self.assertEqual(
+            bottom["state"],
+            "early_bullish_reversal_watch",
+        )
+        self.assertEqual(bottom["score"], 68.0)
+        self.assertEqual(bottom["coverage"], 0.8)
+        self.assertEqual(bottom["memory_age_sessions"], 2)
+        self.assertEqual(bottom["invalidation_level"], 96.5)
+        self.assertEqual(
+            bottom["counter_conditions"],
+            ["strong_supply_pressure"],
+        )
+        self.assertEqual(
+            {metric["label_key"] for metric in bottom["metrics"]},
+            {
+                "modelOutput.metric.bottom.location",
+                "modelOutput.metric.bottom.exhaustion",
+                "modelOutput.metric.bottom.demand",
+                "modelOutput.metric.bottom.structure",
+                "modelOutput.metric.bottom.environment",
+                "modelOutput.metric.bottom.invalidation",
+            },
+        )
         self.assertEqual(
             bullish["canslim_technical_gate_v1"]["state"],
             "pass",

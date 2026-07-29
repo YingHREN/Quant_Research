@@ -9,12 +9,13 @@ const {
   readMarkerLayers,
 } = await import(moduleUri);
 
-assert.equal(MARKER_LAYER_DEFINITIONS.length, 10);
+assert.equal(MARKER_LAYER_DEFINITIONS.length, 11);
 assert.ok(MARKER_LAYER_PRESETS.all.includes("top_risk"));
+assert.ok(MARKER_LAYER_PRESETS.all.includes("bottom_state"));
 assert.ok(!MARKER_LAYER_PRESETS.core.includes("top_risk"));
 assert.deepEqual(
   normalizeMarkerLayers(undefined),
-  ["strict_vcp", "vcp_breakout", "pocket_pivot"],
+  ["strict_vcp", "vcp_breakout", "pocket_pivot", "bottom_state"],
 );
 assert.deepEqual(
   normalizeMarkerLayers(["pocket_pivot", "unknown", "pocket_pivot"]),

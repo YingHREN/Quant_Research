@@ -11,6 +11,7 @@ export const MARKER_LAYER_DEFINITIONS = Object.freeze([
   Object.freeze({ key: "trendline_breakout", core: false }),
   Object.freeze({ key: "higher_low", core: false }),
   Object.freeze({ key: "top_risk", core: false }),
+  Object.freeze({ key: "bottom_state", core: true }),
 ]);
 
 const KNOWN_LAYER_KEYS = new Set(MARKER_LAYER_DEFINITIONS.map(({ key }) => key));

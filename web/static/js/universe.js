@@ -11,6 +11,13 @@ const FIELD_ALIASES = {
 };
 
 const POOL_SCOPES = new Set(["all", "active", "research", "catalog"]);
+const BOTTOMING_STATES = new Set([
+  "potential_support",
+  "seller_exhaustion_watch",
+  "early_bullish_reversal_watch",
+  "bullish_structure_confirmed",
+  "breakout_retest_confirmed",
+]);
 
 function firstDefined(row, keys) {
   for (const key of keys) {
@@ -71,6 +78,13 @@ export function filterTickers(rows, query = "", filters = {}) {
     const fresh = row.fresh ?? (!row.inactive && Number(row.lag_days) === 0);
     if (filters.fresh && !fresh) return false;
     if (filters.inactive && !(row.inactive || row.stale)) return false;
+    if (
+      filters.bottoming
+      && !(
+        row.bottoming_candidate === true
+        || BOTTOMING_STATES.has(row.bottom_state)
+      )
+    ) return false;
     const membership = row.pool_membership ?? row.poolMembership ?? {
       active: true,
       research: false,

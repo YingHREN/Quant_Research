@@ -749,6 +749,24 @@ function renderTopRiskBadge(topRisk, element, locale) {
   element.dataset.tone = latest.state;
 }
 
+function renderBottomStateBadge(summary, element, locale) {
+  if (!element) return;
+  const state = summary?.bottom_state;
+  const score = Number(summary?.bottom_score);
+  if (!state || state === "unavailable" || !Number.isFinite(score)) {
+    setText(element, t("bottomState.badge.unavailable", {}, locale));
+    element.dataset.tone = "unavailable";
+    return;
+  }
+  const stateKey = `modelOutput.bottomState.${state}`;
+  const localized = t(stateKey, {}, locale);
+  setText(element, t("bottomState.badge.value", {
+    state: localized === stateKey ? state.replaceAll("_", " ") : localized,
+    score: Math.round(score),
+  }, locale));
+  element.dataset.tone = state;
+}
+
 function renderStockHeader(payload) {
   const summary = payload.summary || {};
   const locale = store.getState().locale;
@@ -854,6 +872,7 @@ function renderStockHeader(payload) {
     );
   }
   renderTopRiskBadge(payload.top_risk, elements.topRiskState, locale);
+  renderBottomStateBadge(summary, elements.bottomState, locale);
   renderSecurityClassification(payload.ticker, locale);
   renderWarnings(Array.isArray(payload.warnings) ? payload.warnings : []);
 }
@@ -1200,15 +1219,18 @@ function applyLocale(locale) {
   } else if (universeError) {
     setText(elements.securityState, t("security.state.unavailable", {}, locale));
     renderTopRiskBadge(null, elements.topRiskState, locale);
+    renderBottomStateBadge(null, elements.bottomState, locale);
     setText(elements.researchStatus, t("security.unavailableUntilUniverse", {}, locale));
     elements.researchStatus.dataset.tone = "error";
   } else if (researchError) {
     setText(elements.securityState, t("security.state.unavailable", {}, locale));
     renderTopRiskBadge(null, elements.topRiskState, locale);
+    renderBottomStateBadge(null, elements.bottomState, locale);
     setText(elements.researchStatus, errorText(researchError, locale));
   } else if (state.selectedTicker) {
     setText(elements.securityState, t("security.state.loading", {}, locale));
     renderTopRiskBadge(null, elements.topRiskState, locale);
+    renderBottomStateBadge(null, elements.bottomState, locale);
     setText(elements.researchStatus, t("security.loading", { ticker: state.selectedTicker }, locale));
   }
 }
@@ -1242,6 +1264,7 @@ function captureElements() {
     securityGateDetails: byId("security-gate-details"),
     marketRegimeGateState: byId("market-regime-gate-state"),
     topRiskState: byId("top-risk-state"),
+    bottomState: byId("bottom-state"),
     securityClassification: byId("security-classification"),
     researchStatus: byId("research-status"),
     stockRetry: byId("stock-retry"),

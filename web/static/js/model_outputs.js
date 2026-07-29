@@ -312,7 +312,11 @@ function modelCard(model, locale, { open = false } = {}) {
   if (model.state !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.state", {}, locale),
-      enumLabel("forecast.persistentRiskState", model.state, locale),
+      enumLabel(
+        model.state_label_prefix || "forecast.persistentRiskState",
+        model.state,
+        locale,
+      ),
     ));
   }
   if (model.memory_age_sessions !== undefined) {
@@ -370,6 +374,18 @@ function modelCard(model, locale, { open = false } = {}) {
       list.append(element("li", "", conditionLabel(condition, locale)));
     });
     card.append(list);
+  }
+  if (Array.isArray(model.counter_conditions) && model.counter_conditions.length) {
+    card.append(element(
+      "p",
+      "model-output-counter-heading",
+      t("modelOutput.field.counterEvidence", {}, locale),
+    ));
+    const counterList = element("ul", "model-output-conditions model-output-counter-conditions");
+    model.counter_conditions.forEach((condition) => {
+      counterList.append(element("li", "", conditionLabel(condition, locale)));
+    });
+    card.append(counterList);
   }
   if (
     model.kind === "rule_score"

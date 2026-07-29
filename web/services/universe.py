@@ -9,9 +9,11 @@ import math
 from numbers import Real
 from threading import RLock
 
+import numpy as np
 import pandas as pd
 
 from factors.compute import tight_platform
+from research.bottom_state import BOTTOM_MODEL_KEY
 from research.canslim_technical import (
     evaluate_technical_gate,
     unavailable_technical_gate,
@@ -27,6 +29,16 @@ UNIVERSE_FACTOR_KEYS = ("mom_12_1", "realized_vol_63")
 UNIVERSE_MOMENTUM_FACTOR_KEY = "mom_12_1"
 UNIVERSE_VOLATILITY_FACTOR_KEY = "realized_vol_63"
 UNIVERSE_ALGORITHM_VERSION = "universe_summary_v7"
+BOTTOM_SCREEN_SOURCE = "lightweight_90d_v1"
+BOTTOM_CANDIDATE_STATES = frozenset(
+    {
+        "potential_support",
+        "seller_exhaustion_watch",
+        "early_bullish_reversal_watch",
+        "bullish_structure_confirmed",
+        "breakout_retest_confirmed",
+    }
+)
 
 
 class UniverseSnapshotService:
@@ -229,6 +241,7 @@ def build_universe_rows(summaries, histories, registry):
         inactive = bool(summary.inactive)
         stale = not inactive and summary.lag_days > 0
         structure = build_structure_summary(histories.get(summary.ticker))
+        bottom = build_bottom_screen_summary(histories.get(summary.ticker))
         row = _summary_dict(summary)
         row.update(
             {
@@ -238,6 +251,7 @@ def build_universe_rows(summaries, histories, registry):
                     "inactive" if inactive else "stale" if stale else "current"
                 ),
                 **structure,
+                **bottom,
                 "momentum_percentile": momentum,
                 "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
                 "momentum_percentile_unit": "percentile_0_100",
@@ -295,6 +309,174 @@ def build_structure_summary(history):
         "near_pivot": near_pivot,
         "shape_state": shape_state,
     }
+
+
+def build_bottom_screen_summary(history):
+    """Return a cached, 90-session BOTTOM-001 screening summary."""
+    unavailable = {
+        "bottom_model_key": BOTTOM_MODEL_KEY,
+        "bottom_state": "unavailable",
+        "bottom_score": None,
+        "bottoming_candidate": False,
+        "bottom_screen_source": BOTTOM_SCREEN_SOURCE,
+    }
+    if (
+        not isinstance(history, pd.DataFrame)
+        or history.empty
+        or len(history) < 63
+        or any(
+            column not in history
+            for column in ("Open", "High", "Low", "Close", "Volume")
+        )
+    ):
+        return unavailable
+    try:
+        values = (
+            history.sort_index()
+            .iloc[-90:]
+            .loc[:, ("Open", "High", "Low", "Close", "Volume")]
+            .astype(float)
+            .to_numpy()
+        )
+    except (KeyError, TypeError, ValueError):
+        return unavailable
+    if not np.isfinite(values).all() or np.any(values[:, 4] < 0.0):
+        return unavailable
+
+    opens, highs, lows, closes, volumes = values.T
+    ema20 = _ema(closes, 20)
+    downtrend = np.zeros(len(closes), dtype=bool)
+    support = np.zeros(len(closes), dtype=bool)
+    seller_exhaustion = np.zeros(len(closes), dtype=bool)
+    buyer_absorption = np.zeros(len(closes), dtype=bool)
+    positive_demand = np.zeros(len(closes), dtype=bool)
+    higher_low = np.zeros(len(closes), dtype=bool)
+    breakout = np.zeros(len(closes), dtype=bool)
+    volume_ratio = np.full(len(closes), np.nan)
+
+    for position in range(62, len(closes)):
+        prior20 = closes[position - 20]
+        peak63 = float(np.max(closes[position - 62 : position + 1]))
+        votes = sum(
+            (
+                closes[position] < ema20[position],
+                ema20[position] < ema20[position - 5],
+                closes[position] / prior20 - 1.0 <= -0.08,
+                closes[position] / peak63 - 1.0 <= -0.15,
+            )
+        )
+        downtrend[position] = votes >= 2
+        recent_low = float(np.min(lows[position - 9 : position + 1]))
+        return5 = closes[position] / closes[position - 5] - 1.0
+        support[position] = (
+            return5 >= -0.015
+            and closes[position] / recent_low - 1.0 <= 0.03
+        )
+        average_volume = float(np.mean(volumes[position - 19 : position + 1]))
+        if average_volume > 0.0:
+            volume_ratio[position] = volumes[position] / average_volume
+        prior_low = float(np.min(lows[position - 10 : position]))
+        prior_high = float(np.max(highs[position - 10 : position]))
+        candle_range = highs[position] - lows[position]
+        close_location = (
+            (closes[position] - lows[position]) / candle_range
+            if candle_range > 0.0
+            else 0.5
+        )
+        seller_exhaustion[position] = (
+            volume_ratio[position] >= 1.5
+            and lows[position] >= prior_low * 0.995
+            and close_location >= 0.5
+        )
+        buyer_absorption[position] = (
+            lows[position] < prior_low
+            and closes[position] > prior_low
+        )
+        positive_demand[position] = (
+            closes[position] > closes[position - 1]
+            and volume_ratio[position] >= 1.1
+        )
+        higher_low[position] = (
+            np.min(lows[position - 4 : position + 1])
+            > np.min(lows[position - 9 : position - 4]) * 1.0025
+        )
+        breakout[position] = closes[position] > prior_high
+
+    start = max(62, len(closes) - 10)
+    recent = slice(start, len(closes))
+    has_downtrend_context = bool(np.any(downtrend[recent]))
+    if not has_downtrend_context:
+        return unavailable
+    support_watch = bool(np.any(support[recent]))
+    exhaustion_watch = bool(
+        np.any((seller_exhaustion | buyer_absorption)[recent])
+    )
+    early_watch = bool(
+        np.any(
+            (
+                support
+                & (seller_exhaustion | buyer_absorption | positive_demand)
+            )[recent]
+        )
+    )
+    structure_confirmed = bool(
+        higher_low[-1] and breakout[-1]
+    )
+    failed = bool(
+        support_watch
+        and lows[-1] < float(np.min(lows[-11:-1]))
+        and volume_ratio[-1] >= 1.2
+    )
+    if failed:
+        state = "bottom_failed"
+    elif structure_confirmed:
+        state = "bullish_structure_confirmed"
+    elif early_watch:
+        state = "early_bullish_reversal_watch"
+    elif exhaustion_watch and support_watch:
+        state = "seller_exhaustion_watch"
+    elif support_watch:
+        state = "potential_support"
+    else:
+        state = "downtrend_continuation"
+    location_score = 16.0 if support_watch else 0.0
+    exhaustion_score = min(
+        25.0,
+        (10.0 if np.any(seller_exhaustion[recent]) else 0.0)
+        + (8.0 if np.any(buyer_absorption[recent]) else 0.0),
+    )
+    demand_score = 17.0 if np.any(positive_demand[recent]) else 0.0
+    structure_score = (
+        (7.0 if higher_low[-1] else 0.0)
+        + (8.0 if breakout[-1] else 0.0)
+        + (5.0 if early_watch else 0.0)
+    )
+    score = min(
+        100.0,
+        location_score
+        + exhaustion_score
+        + demand_score
+        + structure_score,
+    )
+    return {
+        "bottom_model_key": BOTTOM_MODEL_KEY,
+        "bottom_state": state,
+        "bottom_score": round(float(score), 2),
+        "bottoming_candidate": state in BOTTOM_CANDIDATE_STATES,
+        "bottom_screen_source": BOTTOM_SCREEN_SOURCE,
+    }
+
+
+def _ema(values, span):
+    result = np.empty(len(values), dtype=float)
+    result[0] = values[0]
+    alpha = 2.0 / (span + 1.0)
+    for position in range(1, len(values)):
+        result[position] = (
+            alpha * values[position]
+            + (1.0 - alpha) * result[position - 1]
+        )
+    return result
 
 
 def merge_research_pool(
@@ -374,6 +556,7 @@ def _research_only_row(member, history, asof, technical_gate_evaluator):
     )
     stale = bool(member.stale)
     structure = build_structure_summary(history)
+    bottom = build_bottom_screen_summary(history)
     return {
         "ticker": member.ticker,
         "latest_date": latest_date,
@@ -389,6 +572,7 @@ def _research_only_row(member, history, asof, technical_gate_evaluator):
             getattr(member, "market_cap_asof", None),
         ),
         **structure,
+        **bottom,
         "momentum_percentile": None,
         "momentum_factor_key": UNIVERSE_MOMENTUM_FACTOR_KEY,
         "momentum_percentile_unit": "percentile_0_100",

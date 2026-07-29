@@ -213,10 +213,11 @@ class WebAssetTest(unittest.TestCase):
         actual = self.run_marker_layers_runtime()
         self.assertEqual(
             actual["core"],
-            ["strict_vcp", "vcp_breakout", "pocket_pivot"],
+            ["strict_vcp", "vcp_breakout", "pocket_pivot", "bottom_state"],
         )
-        self.assertEqual(len(actual["all"]), 10)
+        self.assertEqual(len(actual["all"]), 11)
         self.assertIn("top_risk", actual["all"])
+        self.assertIn("bottom_state", actual["all"])
         self.assertEqual(actual["persisted"], ["pocket_pivot"])
 
     def test_chart_marker_layout_merges_same_lane_without_touching_forecast(self):
@@ -313,6 +314,7 @@ class WebAssetTest(unittest.TestCase):
             "trendline_breakout",
             "higher_low",
             "top_risk",
+            "bottom_state",
         ):
             self.assertIn(f'data-marker-layer="{key}"', html)
         for preset in ("core", "all", "none"):
@@ -321,6 +323,31 @@ class WebAssetTest(unittest.TestCase):
     def test_page_has_latest_top_risk_badge(self):
         html = HTML.read_text()
         self.assertIn('id="top-risk-state"', html)
+        self.assertIn('id="bottom-state"', html)
+
+    def test_page_has_bottoming_universe_filter(self):
+        html = HTML.read_text()
+        i18n = (STATIC / "js/i18n.js").read_text()
+        self.assertIn('data-filter="bottoming"', html)
+        self.assertIn("universe.filters.bottoming", i18n)
+        self.assertIn("universe.filters.bottomingNote", i18n)
+
+    def test_bottom_state_has_ui_translations_and_chart_layer(self):
+        i18n = (STATIC / "js/i18n.js").read_text()
+        chart = (STATIC / "js/charts.js").read_text()
+        outputs = (STATIC / "js/model_outputs.js").read_text()
+
+        for value in (
+            "model.bottomState.name",
+            "modelOutput.bottomState.early_bullish_reversal_watch",
+            "chart.field.bottomState",
+            "chart.layers.bottom_state",
+            "chart.shape.bottom_failed",
+        ):
+            self.assertIn(value, i18n)
+        self.assertIn('bottom_potential_support: "bottom_state"', chart)
+        self.assertIn("model.state_label_prefix", outputs)
+        self.assertIn("model.counter_conditions", outputs)
 
     def test_page_has_manual_recovery_controls(self):
         html = HTML.read_text()
@@ -379,7 +406,7 @@ class WebAssetTest(unittest.TestCase):
     def test_dashboard_persists_chart_marker_layers(self):
         actual = self.run_dashboard_runtime("marker-layers")
         self.assertEqual(actual["stored"], ["top_risk"])
-        self.assertEqual(actual["markerCount"], "1/10 model layers shown")
+        self.assertEqual(actual["markerCount"], "1/11 model layers shown")
 
     def test_model_output_renderer_is_bilingual_and_explicit_about_scores(self):
         actual = self.run_model_outputs_runtime()
@@ -491,6 +518,7 @@ class WebAssetTest(unittest.TestCase):
               {{ticker: 'MSFT', latest_date: '2026-07-22', lag_days: 0,
                 inactive: false, stale: false, strict_vcp: true, tight_platform: false,
                 near_pivot: true, momentum_percentile: 92, volatility: 18, rs_rating: 95,
+                bottom_state: 'early_bullish_reversal_watch', bottoming_candidate: true,
                 pool_membership: {{active: true, research: true}},
                 technical_gate: {{state: 'pass', passed_conditions: 4, condition_count: 4}},
                 sector_classification: {{state: 'agree',
@@ -499,6 +527,7 @@ class WebAssetTest(unittest.TestCase):
               {{ticker: 'AAPL', latest_date: '2026-07-20', lag_days: 2,
                 inactive: false, stale: true, strict_vcp: false, tight_platform: true,
                 near_pivot: false, momentum_percentile: 71, volatility: 24, rs_rating: 84,
+                bottom_state: 'downtrend_continuation', bottoming_candidate: false,
                 pool_membership: {{active: true, research: false}},
                 technical_gate: {{state: 'fail', passed_conditions: 2, condition_count: 4}},
                 sector_classification: {{state: 'conflict',
@@ -507,6 +536,7 @@ class WebAssetTest(unittest.TestCase):
               {{ticker: 'OLD', latest_date: '2025-01-03', lag_days: 565,
                 inactive: true, stale: false, strict_vcp: true, tight_platform: true,
                 near_pivot: true, momentum_percentile: null, volatility: null, rs_rating: null,
+                bottom_state: 'bottom_failed', bottoming_candidate: false,
                 pool_membership: {{
                   active: false, research: false, research_catalog: true
                 }},
@@ -564,11 +594,13 @@ class WebAssetTest(unittest.TestCase):
               .map(row => row.ticker);
             const gateSorted = sortTickers(rows, 'technical_gate_score', 'desc')
               .map(row => row.ticker);
+            const bottoming = filterTickers(rows, '', {{bottoming: true}})
+              .map(row => row.ticker);
             console.log(JSON.stringify({{
               searched, filtered, eitherShape, inactive, sorted, rsSorted, rs80, rs90, secTechnology,
               behaviorFinancials, behaviorUnclassified, allPool, activePool,
               researchPool, catalogPool, unknownPool, catalogVcp,
-              gatePass, gateFail, gateMissing, gateSorted,
+              gatePass, gateFail, gateMissing, gateSorted, bottoming,
               aaplBehavior: classificationFor(rows[1], 'market_behavior')?.sector_key,
               unchanged: JSON.stringify(rows) === snapshot
             }}));
@@ -604,6 +636,7 @@ class WebAssetTest(unittest.TestCase):
                 "gateFail": ["AAPL"],
                 "gateMissing": ["OLD"],
                 "gateSorted": ["MSFT", "AAPL", "OLD"],
+                "bottoming": ["MSFT"],
                 "aaplBehavior": "financials",
                 "unchanged": True,
             },

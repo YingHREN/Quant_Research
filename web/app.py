@@ -98,6 +98,7 @@ from web.services.research_pool import (
     normalize_research_pool_ticker,
 )
 from web.services.supply_demand import attach_supply_demand_rows
+from web.services.bottom_state import attach_bottom_state_rows
 from web.services.intraday import IntradaySnapshotService, IntradayStatusService
 from web.services.intraday_subscriptions import (
     IntradaySubscriptionService,
@@ -692,6 +693,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         )
         chart[-1]["canslim_technical_gate"] = technical_gate
         market_gate = _attach_market_gate_rows(chart, peer_histories)
+        attach_bottom_state_rows(chart, history)
 
         try:
             forecast_arguments = (
@@ -920,6 +922,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             _forecast_observation_dates(payload),
         )
         _attach_market_gate_rows(chart, snapshot.histories)
+        attach_bottom_state_rows(chart, history)
         _attach_model_outputs(payload, chart)
         return _json_response(payload)
 
@@ -1451,6 +1454,7 @@ def _research_stock_payload(
     )
     attach_supply_demand_rows(chart, ticker, snapshot.histories)
     market_gate = _attach_market_gate_rows(chart, snapshot.histories)
+    attach_bottom_state_rows(chart, history)
     if forecast_payload is None:
         forecast_payload = unavailable_forecast_bundle(
             reason=UnavailableReason.RESEARCH_POOL_DIAGNOSTIC_ONLY
@@ -1530,6 +1534,11 @@ def _stock_summary(chart, ticker_summary):
             False
             if ticker_summary is None
             else not ticker_summary.inactive and ticker_summary.lag_days > 0
+        ),
+        "bottom_state": latest.get("bottom_state", "unavailable"),
+        "bottom_score": latest.get("bottom_score"),
+        "bottom_state_age_sessions": latest.get(
+            "bottom_state_age_sessions"
         ),
     }
 
@@ -1677,6 +1686,29 @@ def _structure_payload(factors, chart, top_risk=None):
                 }
             )
     annotations.extend(_top_risk_annotations(top_risk, chart))
+    bottom_annotation_types = {
+        "potential_support": "bottom_potential_support",
+        "seller_exhaustion_watch": "bottom_seller_exhaustion",
+        "early_bullish_reversal_watch": "bottom_early_reversal",
+        "bullish_structure_confirmed": "bottom_structure_confirmed",
+        "breakout_retest_confirmed": "bottom_retest_confirmed",
+        "bottom_failed": "bottom_failed",
+    }
+    for row in chart:
+        if row.get("bottom_state_transition") is not True:
+            continue
+        annotation_type = bottom_annotation_types.get(
+            row.get("bottom_state")
+        )
+        if annotation_type is None:
+            continue
+        annotations.append(
+            {
+                "time": row["time"],
+                "type": annotation_type,
+                "label": str(row.get("bottom_state")),
+            }
+        )
     return {
         "strict_vcp": strict_vcp,
         "tight_platform": tight_platform,

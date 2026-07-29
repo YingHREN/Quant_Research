@@ -129,11 +129,15 @@
         <label><input type="checkbox" data-filter="strictVcp"> <span data-i18n="universe.filters.strictVcp">Bullish breakout setup (Strict VCP)</span></label>
         <label><input type="checkbox" data-filter="tightPlatform"> <span data-i18n="universe.filters.tightPlatform">Bullish breakout setup (tight platform)</span></label>
         <label><input type="checkbox" data-filter="nearPivot"> <span data-i18n="universe.filters.nearPivot">Near pivot</span></label>
+        <label><input type="checkbox" data-filter="bottoming"> <span data-i18n="universe.filters.bottoming">只看筑底股票</span></label>
         <label><input type="checkbox" data-filter="rs80"> <span data-i18n="universe.filters.rs80">横截面 RS ≥ 80</span></label>
         <label><input type="checkbox" data-filter="rs90"> <span data-i18n="universe.filters.rs90">横截面 RS ≥ 90</span></label>
         <label><input type="checkbox" data-filter="fresh"> <span data-i18n="universe.filters.fresh">Fresh data</span></label>
         <label><input type="checkbox" data-filter="inactive"> <span data-i18n="universe.filters.inactive">Inactive / stale only</span></label>
       </fieldset>
+      <p class="filter-note" data-i18n="universe.filters.bottomingNote">
+        股票池使用最近 90 日轻量筑底摘要筛选；点击个股后以完整模型卡为准。
+      </p>
       <p class="filter-note" data-i18n="universe.rs.disclaimer">
         横截面 RS 为本站公开公式排名，不是 IBD 专有 RS Rating。
       </p>
@@ -174,6 +178,8 @@
                     data-i18n="market.gate.missing">市场闸门缺失</span>
               <span id="top-risk-state" class="state-badge top-risk-badge" data-tone="unavailable"
                     data-i18n="topRisk.badge.unavailable">Top risk unavailable</span>
+              <span id="bottom-state" class="state-badge" data-tone="unavailable"
+                    data-i18n="bottomState.badge.unavailable">Bottom state unavailable</span>
             </div>
           </div>
           <div id="security-gate-details" class="security-gate-details" role="status"
@@ -258,7 +264,7 @@
             <details id="marker-layer-filter" class="marker-layer-filter">
               <summary>
                 <span data-i18n="chart.layers.title">Chart signals</span>
-                <span id="marker-layer-count">3/10 model layers shown</span>
+                <span id="marker-layer-count">4/11 model layers shown</span>
               </summary>
               <div class="marker-layer-actions">
                 <button type="button" data-marker-preset="core" data-i18n="chart.layers.preset.core">Core signals</button>
@@ -276,6 +282,7 @@
                 <label><input type="checkbox" data-marker-layer="trendline_breakout"> <span data-i18n="chart.layers.trendline_breakout">Descending-trendline breakout</span></label>
                 <label><input type="checkbox" data-marker-layer="higher_low"> <span data-i18n="chart.layers.higher_low">Higher low</span></label>
                 <label><input type="checkbox" data-marker-layer="top_risk"> <span data-i18n="chart.layers.top_risk">Suspected distribution / top downside risk</span></label>
+                <label><input type="checkbox" data-marker-layer="bottom_state" checked> <span data-i18n="chart.layers.bottom_state">Bottoming and bullish-reversal state</span></label>
               </div>
             </details>
           </div>

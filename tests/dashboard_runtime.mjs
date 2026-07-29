@@ -769,7 +769,7 @@ if (mode === "success") {
     "Forecast start · Down",
     "Top downside risk cleared",
   ]);
-  assert.equal(elements.get("marker-layer-count").textContent, "1/10 model layers shown");
+  assert.equal(elements.get("marker-layer-count").textContent, "1/11 model layers shown");
   console.log(JSON.stringify({
     stored: JSON.parse(storageValues.get("quant-workstation.chart-marker-layers")),
     markerCount: elements.get("marker-layer-count").textContent,
