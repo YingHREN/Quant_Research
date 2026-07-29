@@ -316,9 +316,27 @@ def _decode_object_column(values) -> list[Any]:
     return decoded
 
 
-def _decode_primitive_column(values: pd.Series, kind: str) -> pd.Series:
+def _decode_primitive_column(
+    values: pd.Series,
+    kind: str,
+    *,
+    original_values=None,
+) -> pd.Series:
     nonmissing = values.loc[values.notna()]
     inferred = pd.api.types.infer_dtype(nonmissing, skipna=False)
+    if kind == "integer" and inferred == "floating":
+        preserved = pd.Series(original_values, dtype="object")
+        preserved_nonmissing = preserved.loc[preserved.notna()]
+        if (
+            pd.api.types.infer_dtype(
+                preserved_nonmissing,
+                skipna=False,
+            )
+            == "integer"
+        ):
+            values = preserved
+            nonmissing = preserved_nonmissing
+            inferred = "integer"
     expected = {
         "datetime": {"string", "empty"},
         "boolean": {"boolean", "empty"},
@@ -417,12 +435,20 @@ def decode_frame_bundle(
                 raise ValueError("invalid frame record")
         raw_frame = pd.DataFrame.from_records(records, columns=names)
         decoded_columns = {}
-        for column_name, dtype, kind in columns:
+        for column_index, (column_name, dtype, kind) in enumerate(columns):
             values = raw_frame[column_name]
             if kind == "object":
                 decoded = _decode_object_column(values)
             else:
-                decoded = _decode_primitive_column(values, kind)
+                decoded = _decode_primitive_column(
+                    values,
+                    kind,
+                    original_values=(
+                        [record[column_index] for record in records]
+                        if kind == "integer"
+                        else None
+                    ),
+                )
             decoded_columns[column_name] = pd.Series(decoded, dtype=dtype)
         frame = pd.DataFrame(
             decoded_columns,

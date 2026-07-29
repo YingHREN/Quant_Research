@@ -19,6 +19,7 @@ def example_frame():
                 ["2026-01-02", "2026-01-05"]
             ),
             "horizon": pd.Series([5, 20], dtype="int64"),
+            "nullable_count": pd.Series([1, pd.NA], dtype="Int64"),
             "predicted_event": pd.Series([True, pd.NA], dtype="boolean"),
             "predicted_score": [0.7, np.nan],
             "evidence": [("volume", "trend"), tuple()],

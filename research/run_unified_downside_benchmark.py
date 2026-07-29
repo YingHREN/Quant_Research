@@ -771,8 +771,18 @@ def _code_fingerprint():
         "research/market_direction_model.py",
         "research/downside_specialist.py",
         "research/run_pressure_downside_study.py",
+        "research/run_expanded_walkforward_study.py",
         "research/evaluate_toprisk_comparison.py",
+        "research/high_level_distribution.py",
+        "research/risk_memory.py",
+        "research/market_pressure.py",
+        "research/group_regime.py",
+        "research/slow_decline.py",
+        "research/market_context.py",
+        "research/supply_demand.py",
+        "research/expanded_market_data.py",
         "web/forecasts",
+        "web/market_groups.py",
     ]
     try:
         status = subprocess.run(
