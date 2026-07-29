@@ -6,11 +6,48 @@ from unittest import mock
 
 import pandas as pd
 
-from build_local_db import backfill, update_tickers
+from build_local_db import backfill, update, update_tickers
 from data.fetch import StockData
 
 
 class BuildLocalDatabaseTest(unittest.TestCase):
+    def test_update_defaults_to_eodhd_rebuild_for_existing_main_tickers(self):
+        with (
+            mock.patch(
+                "build_local_db.rebuild_from_eodhd",
+                return_value="eodhd-summary",
+            ) as rebuild,
+            mock.patch(
+                "build_local_db.local_tickers",
+                return_value=["AAA", "QQQ"],
+            ),
+            mock.patch(
+                "build_local_db.update_tickers",
+                return_value=["AAA", "QQQ", "XLK"],
+            ),
+        ):
+            result = update(
+                research_database="research.db",
+                output_database="prices.db",
+            )
+
+        self.assertEqual(result, "eodhd-summary")
+        rebuild.assert_called_once_with(
+            "research.db",
+            "prices.db",
+            tickers=("AAA", "QQQ", "XLK"),
+        )
+
+    def test_update_keeps_tiingo_only_as_explicit_provider(self):
+        with mock.patch(
+            "build_local_db.backfill",
+            return_value="tiingo-summary",
+        ) as legacy:
+            result = update(provider="tiingo")
+
+        self.assertEqual(result, "tiingo-summary")
+        legacy.assert_called_once_with(years=1, workers=1)
+
     def test_incremental_update_includes_new_reference_tickers(self):
         tickers = update_tickers(["AAPL", "QQQ"])
 

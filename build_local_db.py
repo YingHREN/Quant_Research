@@ -30,10 +30,15 @@ from data.daily_history import (
     history_start,
     persist_history,
 )
+from data.eodhd_main_database import (
+    EODHDMainDatabaseError,
+    rebuild_from_eodhd,
+)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(BASE, "data", "cache")
 DB = os.path.join(BASE, "data", "prices.db")
+RESEARCH_DB = os.path.join(BASE, "data", "research_prices.db")
 
 
 def _latest_pkl_per_ticker():
@@ -96,10 +101,10 @@ def load_local(ticker):
     return df
 
 
-def local_tickers():
-    if not os.path.exists(DB):
+def local_tickers(database=DB):
+    if not os.path.exists(database):
         return []
-    con = sqlite3.connect(DB)
+    con = sqlite3.connect(database)
     ts = [r[0] for r in con.execute("SELECT DISTINCT ticker FROM prices").fetchall()]
     con.close()
     return ts
@@ -241,9 +246,28 @@ def backfill(
     return summary
 
 
-def update():
-    """Fetch a one-year overlap and upsert corrections without truncating history."""
-    return backfill(years=1, workers=1)
+def update(
+    provider="eodhd",
+    *,
+    research_database=RESEARCH_DB,
+    output_database=DB,
+):
+    """Refresh the main database from one explicitly selected provider."""
+    if provider == "tiingo":
+        return backfill(years=1, workers=1)
+    if provider != "eodhd":
+        raise ValueError(f"unsupported price provider: {provider}")
+    existing = local_tickers(output_database)
+    if not existing:
+        raise EODHDMainDatabaseError(
+            "existing main database has no target tickers"
+        )
+    symbols = tuple(update_tickers(existing))
+    return rebuild_from_eodhd(
+        research_database,
+        output_database,
+        tickers=symbols,
+    )
 
 
 def print_coverage():
@@ -275,7 +299,22 @@ def print_coverage():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--update", action="store_true", help="增量联网更新(否则从缓存重建)")
+    ap.add_argument(
+        "--update",
+        action="store_true",
+        help="更新主价格库（默认从 EODHD 研究库原子重建）",
+    )
+    ap.add_argument(
+        "--provider",
+        choices=("eodhd", "tiingo"),
+        default="eodhd",
+        help="--update 的数据源（默认 eodhd；tiingo 为兼容入口）",
+    )
+    ap.add_argument(
+        "--research-database",
+        default=RESEARCH_DB,
+        help="EODHD 研究价格库路径",
+    )
     ap.add_argument(
         "--backfill-years",
         type=int,
@@ -299,7 +338,12 @@ def main():
     elif args.backfill_years is not None:
         backfill(args.backfill_years, workers=args.workers)
     elif args.update:
-        update()
+        summary = update(
+            provider=args.provider,
+            research_database=args.research_database,
+            output_database=DB,
+        )
+        print(summary)
     else:
         n, rows = build()
         print(f"从 {n} 个缓存pkl建库完成")

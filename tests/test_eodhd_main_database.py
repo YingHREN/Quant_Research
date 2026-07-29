@@ -1,10 +1,14 @@
 from datetime import datetime, timezone
+import hashlib
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
-from data.eodhd_main_database import rebuild_from_eodhd
+from data.eodhd_main_database import (
+    EODHDMainDatabaseError,
+    rebuild_from_eodhd,
+)
 from data.research_store import ADJUSTMENT_METHOD, ResearchPriceStore
 
 
@@ -81,6 +85,64 @@ class EODHDMainDatabaseTest(unittest.TestCase):
             self.assertEqual(summary.first_date, "2026-07-27")
             self.assertEqual(summary.last_date, "2026-07-28")
             self.assertEqual(summary.integrity, "ok")
+
+    def test_missing_target_preserves_existing_database_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            research = root / "research.db"
+            output = root / "prices.db"
+            self._research_database(research)
+            output.write_bytes(b"existing-main-database")
+            before = self._sha256(output)
+
+            with self.assertRaisesRegex(
+                EODHDMainDatabaseError,
+                "missing EODHD history: MISSING",
+            ):
+                rebuild_from_eodhd(
+                    research,
+                    output,
+                    tickers=("AAA", "MISSING"),
+                )
+
+            self.assertEqual(self._sha256(output), before)
+            self.assertFalse((root / "prices.db.tmp").exists())
+
+    def test_invalid_adjusted_ohlc_preserves_existing_database_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            research = root / "research.db"
+            output = root / "prices.db"
+            self._research_database(research)
+            connection = sqlite3.connect(research)
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE daily_prices
+                    SET adjusted_high = 40
+                    WHERE ticker = 'AAA' AND date = '2026-07-28'
+                    """
+                )
+            connection.close()
+            output.write_bytes(b"existing-main-database")
+            before = self._sha256(output)
+
+            with self.assertRaisesRegex(
+                EODHDMainDatabaseError,
+                "invalid EODHD history: AAA",
+            ):
+                rebuild_from_eodhd(
+                    research,
+                    output,
+                    tickers=("AAA",),
+                )
+
+            self.assertEqual(self._sha256(output), before)
+            self.assertFalse((root / "prices.db.tmp").exists())
+
+    @staticmethod
+    def _sha256(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     def _research_database(self, path):
         connection = sqlite3.connect(path)

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 
 import pandas as pd
 
-from data.daily_history import persist_history
+from data.daily_history import InvalidDailyHistory, persist_history
 from data.research_store import ADJUSTMENT_METHOD
 
 
@@ -21,6 +21,10 @@ class EODHDRebuildSummary:
     first_date: str
     last_date: str
     integrity: str
+
+
+class EODHDMainDatabaseError(RuntimeError):
+    """Raised before destination replacement when source data is incomplete."""
 
 
 def rebuild_from_eodhd(
@@ -38,6 +42,7 @@ def rebuild_from_eodhd(
 
     source = sqlite3.connect(f"file:{research_path}?mode=ro", uri=True)
     destination = None
+    replaced = False
     try:
         symbols = (
             tuple(sorted(set(tickers)))
@@ -49,32 +54,55 @@ def rebuild_from_eodhd(
                 )
             )
         )
+        if not symbols:
+            raise EODHDMainDatabaseError("no target tickers")
         temporary_path.unlink(missing_ok=True)
         destination = sqlite3.connect(temporary_path)
         for ticker in symbols:
             frame = _read_current_adjusted_history(source, ticker)
-            persist_history(
-                destination,
-                ticker,
-                frame,
-                provider="eodhd",
-                adjustment=ADJUSTMENT_METHOD,
-                requested_start=date.fromisoformat(
-                    frame.index[0].date().isoformat()
-                ),
-                fetched_at=fetched_at,
-            )
+            if frame.empty:
+                raise EODHDMainDatabaseError(
+                    f"missing EODHD history: {ticker}"
+                )
+            try:
+                coverage = persist_history(
+                    destination,
+                    ticker,
+                    frame,
+                    provider="eodhd",
+                    adjustment=ADJUSTMENT_METHOD,
+                    requested_start=frame.index[0].date(),
+                    fetched_at=fetched_at,
+                )
+            except InvalidDailyHistory as error:
+                raise EODHDMainDatabaseError(
+                    f"invalid EODHD history: {ticker}"
+                ) from error
+            expected_last = frame.index[-1].date().isoformat()
+            if coverage.last_date != expected_last:
+                raise EODHDMainDatabaseError(
+                    f"EODHD latest-date mismatch: {ticker}"
+                )
         row_count, first_date, last_date = destination.execute(
             "SELECT COUNT(*), MIN(date), MAX(date) FROM prices"
         ).fetchone()
         imported = destination.execute(
             "SELECT COUNT(DISTINCT ticker) FROM prices"
         ).fetchone()[0]
+        if int(imported) != len(symbols):
+            raise EODHDMainDatabaseError(
+                "rebuilt ticker count does not match target set"
+            )
         integrity = destination.execute("PRAGMA integrity_check").fetchone()[0]
+        if integrity != "ok":
+            raise EODHDMainDatabaseError(
+                f"rebuilt database integrity failed: {integrity}"
+            )
         destination.close()
         destination = None
         output_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path.replace(output_path)
+        replaced = True
         return EODHDRebuildSummary(
             requested=len(symbols),
             imported=int(imported),
@@ -87,6 +115,8 @@ def rebuild_from_eodhd(
         if destination is not None:
             destination.close()
         source.close()
+        if not replaced:
+            temporary_path.unlink(missing_ok=True)
 
 
 def _read_current_adjusted_history(connection, ticker):
