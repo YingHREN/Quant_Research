@@ -2431,6 +2431,7 @@ class WebApiTest(unittest.TestCase):
             {
                 "time": "2026-07-02",
                 "strict_vcp_start": False,
+                "strict_vcp_near_pivot_start": True,
                 "strict_vcp_active": False,
                 "strict_vcp_pivot": 100.0,
                 "strict_vcp_evidence": {
@@ -2466,6 +2467,7 @@ class WebApiTest(unittest.TestCase):
             [(item["time"], item["type"]) for item in structures["annotations"]],
             [
                 ("2026-07-01", "strict_vcp_start"),
+                ("2026-07-02", "strict_vcp_near_pivot_start"),
                 ("2026-07-02", "vcp_breakout_confirmed"),
                 ("2026-07-03", "pocket_pivot"),
             ],

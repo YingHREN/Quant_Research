@@ -2881,6 +2881,7 @@ class WebAssetTest(unittest.TestCase):
               chart: [row],
               structures: {{annotations: [
                 {{time: row.time, type: 'strict_vcp_start'}},
+                {{time: row.time, type: 'strict_vcp_near_pivot_start'}},
                 {{time: row.time, type: 'vcp_breakout_confirmed'}},
                 {{time: row.time, type: 'pocket_pivot'}},
                 {{time: row.time, type: 'tight_platform'}},
@@ -2889,7 +2890,7 @@ class WebAssetTest(unittest.TestCase):
             const markerTexts = () => markerControllers[0].markers.map((marker) => marker.text);
             assert.deepEqual(markerTexts(), [
               '发现严格 VCP 准备形态',
-              'VCP 向上突破已确认 · Pocket Pivot 需求确认',
+              '进入接近枢轴区 · VCP 向上突破已确认 · Pocket Pivot 需求确认',
             ]);
             const rangeCallCount = visibleRanges.length;
             assert.deepEqual(

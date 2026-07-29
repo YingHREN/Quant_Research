@@ -13,18 +13,29 @@ from tests.helpers import make_ohlcv
 from tests.test_vcp import textbook_vcp_fixture
 
 
-def _pattern(frame, *, accepted=True, pivot=10.0, reason=None):
+def _pattern(
+    frame,
+    *,
+    accepted=True,
+    pivot=10.0,
+    reason=None,
+    stage=None,
+):
     date = pd.Timestamp(frame.index[-1])
     return VCPPattern(
         asof_date=date,
         accepted=accepted,
-        stage="forming" if accepted else "none",
+        stage=stage or ("forming" if accepted else "none"),
         base_start=pd.Timestamp(frame.index[0]) if accepted else None,
         base_end=date,
         legs=(),
         pending_leg=None,
         pivot=pivot if accepted else None,
-        pivot_date=pd.Timestamp(frame.index[-2]) if accepted else None,
+        pivot_date=(
+            pd.Timestamp(frame.index[-2 if len(frame) > 1 else -1])
+            if accepted
+            else None
+        ),
         distance_to_pivot_pct=(
             (float(frame["Close"].iloc[-1]) / pivot - 1) * 100
             if accepted
@@ -46,6 +57,30 @@ def _accepted_after_sixty(frame):
 
 
 class EntrySignalHistoryTest(unittest.TestCase):
+    def test_near_pivot_marks_only_entry_and_reentry_sessions(self):
+        history = make_ohlcv([9.0] * 60 + [9.6] * 5)
+        stages = iter(
+            ["forming"] * 60
+            + ["near_pivot", "near_pivot", "forming", "near_pivot", "near_pivot"]
+        )
+
+        def staged_pattern(frame):
+            return _pattern(frame, stage=next(stages))
+
+        with patch(
+            "research.entry_signals.detect_vcp",
+            side_effect=staged_pattern,
+        ):
+            rows = build_entry_signal_rows(history)
+
+        self.assertEqual(
+            [
+                row["strict_vcp_near_pivot_start"]
+                for row in rows[-5:]
+            ],
+            [True, False, False, True, False],
+        )
+
     def test_each_detector_receives_only_its_bounded_causal_window(self):
         close = 100 + np.sin(np.arange(300) / 7) * 4
         history = make_ohlcv(close)
