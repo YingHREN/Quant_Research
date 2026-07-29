@@ -290,6 +290,16 @@ def _location_score(source, proof, conditions):
     if not near:
         return min(6.0, support_score * 0.06), True
     conditions.append("near_support_zone")
+    if proof.get("historical_demand_support_state") in {
+        "active_untested",
+        "approaching",
+        "testing",
+        "accepted",
+        "weakened",
+    }:
+        # The merged near-support score already includes the capped source
+        # confluence contribution.  This condition is explanatory only.
+        conditions.append("historical_demand_support")
     if support_score >= 60.0:
         conditions.append("strong_support_zone")
     return min(20.0, 10.0 + support_score * 0.1), True

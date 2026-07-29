@@ -45,6 +45,7 @@ SUPPORT_SOURCE_ORDER = (
     "recent_low_10",
     "confirmed_swing_low",
     "breakout_retest_20",
+    "historical_demand_zone",
 )
 
 
@@ -86,6 +87,96 @@ def _support_candidate(source: str, value, close: float):
         return None
     price = float(value)
     return (price, source) if 0.0 < price <= close else None
+
+
+def merge_historical_demand_support(
+    support_row: Mapping[str, object],
+    demand_row: Mapping[str, object],
+    *,
+    close: float,
+    atr20: float,
+) -> dict[str, object]:
+    """Return a copied support row augmented by one valid demand zone.
+
+    The historical zone is location evidence only. Its rule score is never
+    added directly to the existing near-support score; it contributes the
+    same capped source-confluence increment as one ordinary support source.
+    """
+    result = dict(support_row)
+    existing_sources = list(result.get("near_support_sources") or ())
+    state = demand_row.get("historical_demand_support_state")
+    lower = demand_row.get("historical_demand_support_lower")
+    upper = demand_row.get("historical_demand_support_upper")
+    demand_score = demand_row.get("historical_demand_support_score")
+    if (
+        state in {"unavailable", "invalidated", None, ""}
+        or not _finite(close)
+        or not _finite(atr20)
+        or float(atr20) <= 0.0
+        or not _finite(lower)
+        or not _finite(upper)
+        or not _finite(demand_score)
+        or float(lower) <= 0.0
+        or float(lower) > float(upper)
+        or float(upper) > float(close)
+    ):
+        return result
+
+    lower = float(lower)
+    upper = float(upper)
+    baseline_lower = result.get("near_support_lower")
+    baseline_upper = result.get("near_support_upper")
+    baseline_available = _finite(baseline_lower) and _finite(baseline_upper)
+    if baseline_available:
+        baseline_lower = float(baseline_lower)
+        baseline_upper = float(baseline_upper)
+        close_enough = not (
+            lower - baseline_upper > float(atr20) * 0.5
+            or baseline_lower - upper > float(atr20) * 0.5
+        )
+        if close_enough:
+            lower = min(lower, baseline_lower)
+            upper = max(upper, baseline_upper)
+            sources = set(existing_sources)
+            sources.add("historical_demand_zone")
+            sources = [
+                key for key in SUPPORT_SOURCE_ORDER if key in sources
+            ]
+            base_score = result.get("near_support_score")
+            score = (
+                0.0 if not _finite(base_score) else float(base_score)
+            )
+            score = min(100, int(round(score)) + 15)
+        elif upper <= float(close) and upper > baseline_upper:
+            sources = ["historical_demand_zone"]
+            score = min(45, int(round(float(demand_score) * 0.45)))
+        else:
+            return result
+    else:
+        sources = ["historical_demand_zone"]
+        score = min(45, int(round(float(demand_score) * 0.45)))
+
+    midpoint = (lower + upper) / 2.0
+    if lower <= float(close) <= upper:
+        support_state = "inside"
+    elif float(close) - upper <= float(atr20) * 0.5:
+        support_state = "testing"
+    else:
+        support_state = "above"
+    result.update(
+        {
+            "near_support_lower": float(lower),
+            "near_support_upper": float(upper),
+            "near_support_mid": float(midpoint),
+            "near_support_distance_pct": float(
+                max(0.0, float(close) / upper - 1.0) * 100.0
+            ),
+            "near_support_score": score,
+            "near_support_sources": sources,
+            "near_support_state": support_state,
+        }
+    )
+    return result
 
 
 def _clusters(candidates, maximum_gap: float):

@@ -5,7 +5,10 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.resistance import build_near_resistance_rows
+from research.resistance import (
+    build_near_resistance_rows,
+    merge_historical_demand_support,
+)
 from research.reversal import build_reversal_rows
 
 
@@ -84,6 +87,88 @@ def nbis_shaped_history():
 
 
 class NearResistanceTest(unittest.TestCase):
+    def test_active_historical_demand_zone_becomes_support_source(self):
+        merged = merge_historical_demand_support(
+            {
+                "near_support_lower": 93.5,
+                "near_support_upper": 95.0,
+                "near_support_mid": 94.25,
+                "near_support_distance_pct": 5.26,
+                "near_support_score": 45,
+                "near_support_sources": ["sma50"],
+                "near_support_state": "above",
+            },
+            {
+                "historical_demand_support_state": "active_untested",
+                "historical_demand_support_lower": 94.0,
+                "historical_demand_support_upper": 96.0,
+                "historical_demand_support_score": 80.0,
+            },
+            close=100.0,
+            atr20=4.0,
+        )
+
+        self.assertIn(
+            "historical_demand_zone",
+            merged["near_support_sources"],
+        )
+        self.assertEqual(merged["near_support_lower"], 93.5)
+        self.assertEqual(merged["near_support_upper"], 96.0)
+        self.assertLessEqual(merged["near_support_score"], 100)
+
+    def test_invalidated_or_above_price_demand_zone_keeps_baseline(self):
+        baseline = {
+            "near_support_lower": 93.5,
+            "near_support_upper": 95.0,
+            "near_support_mid": 94.25,
+            "near_support_distance_pct": 5.26,
+            "near_support_score": 45,
+            "near_support_sources": ["sma50"],
+            "near_support_state": "above",
+        }
+        for state, lower, upper in (
+            ("invalidated", 94.0, 96.0),
+            ("active_untested", 101.0, 102.0),
+        ):
+            with self.subTest(state=state):
+                merged = merge_historical_demand_support(
+                    baseline,
+                    {
+                        "historical_demand_support_state": state,
+                        "historical_demand_support_lower": lower,
+                        "historical_demand_support_upper": upper,
+                        "historical_demand_support_score": 80.0,
+                    },
+                    close=100.0,
+                    atr20=4.0,
+                )
+                self.assertEqual(merged, baseline)
+
+    def test_malformed_demand_zone_keeps_baseline(self):
+        baseline = {
+            "near_support_lower": 93.5,
+            "near_support_upper": 95.0,
+            "near_support_mid": 94.25,
+            "near_support_distance_pct": 5.26,
+            "near_support_score": 45,
+            "near_support_sources": ["sma50"],
+            "near_support_state": "above",
+        }
+
+        merged = merge_historical_demand_support(
+            baseline,
+            {
+                "historical_demand_support_state": "testing",
+                "historical_demand_support_lower": 94.0,
+                "historical_demand_support_upper": 96.0,
+                "historical_demand_support_score": "not-a-score",
+            },
+            close=100.0,
+            atr20=4.0,
+        )
+
+        self.assertEqual(merged, baseline)
+
     def test_nearest_support_group_is_below_close_and_has_a_state(self):
         history = frame_from_closes(list(range(61, 101)))
 

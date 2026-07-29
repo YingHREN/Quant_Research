@@ -28,6 +28,9 @@ def blank_evidence(index: pd.Index) -> pd.DataFrame:
             "near_support_upper": np.nan,
             "near_support_score": np.nan,
             "near_support_state": "unavailable",
+            "historical_demand_support_state": "unavailable",
+            "historical_demand_support_score": np.nan,
+            "historical_demand_support_invalidation_level": np.nan,
             "demand_confirmation_score": np.nan,
             "demand_confirmation_coverage": 0.0,
             "demand_confirmation_conditions": [[] for _ in index],
@@ -54,6 +57,21 @@ def support_evidence(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 class BottomStateModelTest(unittest.TestCase):
+    def test_historical_demand_support_labels_location_without_recounting_demand(self):
+        frame = downtrend_history()
+        evidence = support_evidence(frame)
+        evidence.loc[:, "historical_demand_support_state"] = "testing"
+        evidence.loc[:, "historical_demand_support_score"] = 82.0
+        evidence.loc[:, "historical_demand_support_invalidation_level"] = (
+            frame["Close"] * 0.98
+        )
+
+        row = build_bottom_state_rows(frame, evidence).iloc[-1]
+
+        self.assertIn("historical_demand_support", row["bottom_conditions"])
+        self.assertEqual(row["bottom_demand_score"], 0.0)
+        self.assertGreaterEqual(row["bottom_location_score"], 10.0)
+
     def test_plain_uptrend_is_not_mislabeled_as_a_bottom(self):
         closes = np.linspace(100.0, 140.0, 90)
         frame = make_ohlcv(closes)
