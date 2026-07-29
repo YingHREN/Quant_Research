@@ -553,7 +553,8 @@ def load_group_assignment_intervals(
     """Load persisted effective group intervals without mutating the store."""
     path = Path(database).resolve()
     query = """
-        SELECT ticker, effective_from, effective_to, primary_model_group
+        SELECT ticker, effective_from, effective_to, primary_model_group,
+               source, observed_at
         FROM group_assignments
         ORDER BY ticker, effective_from
     """
@@ -569,7 +570,40 @@ def load_group_assignment_intervals(
             "effective_from",
             "effective_to",
             "group",
+            "source",
+            "observed_at",
         ),
+    )
+
+
+def group_assignment_causal_audit(
+    intervals: pd.DataFrame,
+    tickers,
+) -> bool:
+    """Reject assignment evidence created by present-day backfill."""
+    if not isinstance(intervals, pd.DataFrame):
+        raise TypeError("intervals must be a DataFrame")
+    required = {"ticker", "source"}
+    if not required.issubset(intervals.columns):
+        return False
+    normalized = {
+        str(ticker).strip().upper()
+        for ticker in tickers
+        if str(ticker).strip()
+    }
+    selected = intervals.loc[
+        intervals["ticker"].astype(str).str.upper().isin(normalized)
+    ]
+    if not normalized or set(
+        selected["ticker"].astype(str).str.upper()
+    ) != normalized:
+        return False
+    sources = selected["source"].fillna("").astype(str).str.casefold()
+    return bool(
+        sources.ne("").all()
+        and not sources.str.contains(
+            "historical_backfill_assumption"
+        ).any()
     )
 
 
@@ -598,13 +632,25 @@ def run_historical_demand_support_study(
     outcome_frames = []
     coverage: dict[tuple[str, str], dict[str, int]] = {}
     processed = 0
+    processed_groups: dict[str, int] = {}
+    excluded_tickers = []
     qqq_close = _close(histories.get("QQQ"))
     for ticker in analysis_tickers:
         history = histories.get(ticker)
         if not isinstance(history, pd.DataFrame) or history.empty:
+            excluded_tickers.append(
+                {"ticker": ticker, "reason": "missing_history"}
+            )
             continue
         history = history.loc[history.index <= checked_asof].copy()
         if len(history) < 220:
+            excluded_tickers.append(
+                {
+                    "ticker": ticker,
+                    "reason": "fewer_than_220_sessions",
+                    "session_count": len(history),
+                }
+            )
             continue
         group = _group_at_date(
             ticker,
@@ -667,6 +713,7 @@ def run_historical_demand_support_study(
                 )
                 outcome_frames.append(outcomes)
         processed += 1
+        processed_groups[group] = processed_groups.get(group, 0) + 1
         if progress is not None:
             progress(processed, len(analysis_tickers), ticker)
     if not outcome_frames:
@@ -674,13 +721,22 @@ def run_historical_demand_support_study(
     outcomes = pd.concat(outcome_frames, ignore_index=True, sort=False)
     outcomes = assign_chronological_folds(outcomes, n_folds=n_folds)
     metrics = evaluate_study_outcomes(outcomes, coverage=coverage)
-    decision = promotion_decision(metrics, causal_audit_passed=True)
+    causal_audit_passed = group_assignment_causal_audit(
+        group_intervals,
+        analysis_tickers,
+    )
+    decision = promotion_decision(
+        metrics,
+        causal_audit_passed=causal_audit_passed,
+    )
     manifest = {
         "study_version": "historical-demand-support-oos-v1",
         "asof": checked_asof.date().isoformat(),
         "start": checked_start.date().isoformat(),
         "ticker_count": processed,
         "requested_ticker_count": len(analysis_tickers),
+        "excluded_tickers": excluded_tickers,
+        "group_counts": processed_groups,
         "outcome_row_count": len(outcomes),
         "horizons": [int(value) for value in horizons],
         "folds": int(n_folds),
@@ -688,6 +744,7 @@ def run_historical_demand_support_study(
         "variants": list(ABLATION_VARIANTS),
         "execution": "observation_close_to_next_session_open",
         "group_source": "effective_group_assignments_with_sec_fallback",
+        "group_assignment_causal_audit_passed": causal_audit_passed,
         "decision": decision,
     }
     return metrics, outcomes, manifest
@@ -762,22 +819,60 @@ def render_report(metrics: pd.DataFrame, manifest: dict[str, object]) -> str:
     reason_lines = ["- 无。"] if not reasons else [f"- `{row}`" for row in reasons]
     columns = (
         "variant",
-        "horizon",
         "fold",
         "group",
-        "regime",
-        "sample_mode",
-        "comparison_scope",
         "sample_count",
         "support_hold_rate",
         "support_break_rate",
         "maximum_favorable_excursion",
         "maximum_adverse_excursion",
     )
-    selected = metrics.loc[
-        :,
-        [column for column in columns if column in metrics],
+    primary = metrics.loc[
+        (metrics.get("horizon") == 10)
+        & (metrics.get("regime") == "all")
+        & (metrics.get("sample_mode") == "overlapping")
+        & (metrics.get("comparison_scope") == "paired")
+        & metrics["variant"].isin((BASELINE, CHALLENGER))
     ]
+    selected = primary.loc[
+        :,
+        [column for column in columns if column in primary],
+    ]
+    robustness = _weighted_summary(
+        metrics.loc[
+            (metrics.get("regime") == "all")
+            & (metrics.get("sample_mode") == "overlapping")
+            & (metrics.get("comparison_scope") == "paired")
+            & metrics["variant"].isin((BASELINE, CHALLENGER))
+        ],
+        ("horizon", "variant"),
+    )
+    ablations = _weighted_summary(
+        metrics.loc[
+            (metrics.get("horizon") == 10)
+            & (metrics.get("regime") == "all")
+            & (metrics.get("sample_mode") == "overlapping")
+            & (metrics.get("comparison_scope") == "all_eligible")
+        ],
+        ("variant",),
+    )
+    exclusions = list(manifest.get("excluded_tickers") or ())
+    exclusion_lines = (
+        ["- 无。"]
+        if not exclusions
+        else [
+            "- "
+            + str(row.get("ticker"))
+            + "："
+            + str(row.get("reason"))
+            + (
+                f"（{row.get('session_count')} 个交易日）"
+                if row.get("session_count") is not None
+                else ""
+            )
+            for row in exclusions
+        ]
+    )
     return "\n".join(
         (
             "# 历史需求支撑区样本外消融",
@@ -787,15 +882,29 @@ def render_report(metrics: pd.DataFrame, manifest: dict[str, object]) -> str:
             f"- 模型权限：`{decision.get('authority', 'advisory_only')}`",
             f"- 晋级：{'通过研究门槛' if decision.get('eligible') else '未通过研究门槛'}",
             "- 执行定义：观察日收盘形成证据，下一交易日开盘进入观察。",
+            "- 主门槛：10 日、重叠样本、相同股票/日期/周期严格配对。",
+            "- 完整分层指标见同名 CSV；Markdown 只保留决策摘要。",
             "- 规则分数不是上涨概率；即使研究门槛通过也需人工复核。",
             "",
             "## 晋级失败原因",
             "",
             *reason_lines,
             "",
-            "## 分层结果",
+            "## 10 日主门槛（逐折、逐组）",
             "",
             _markdown_table(selected),
+            "",
+            "## 5/10/20 日稳健性",
+            "",
+            _markdown_table(robustness),
+            "",
+            "## 10 日全部合格样本与消融",
+            "",
+            _markdown_table(ablations),
+            "",
+            "## 未纳入股票",
+            "",
+            *exclusion_lines,
             "",
         )
     )
@@ -939,6 +1048,41 @@ def _markdown_table(frame: pd.DataFrame) -> str:
                 rendered.append(str(value))
         rows.append("| " + " | ".join(rendered) + " |")
     return "\n".join(rows)
+
+
+def _weighted_summary(
+    frame: pd.DataFrame,
+    keys: tuple[str, ...],
+) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    metric_columns = (
+        "support_hold_rate",
+        "support_break_rate",
+        "maximum_favorable_excursion",
+        "maximum_adverse_excursion",
+        "final_return",
+    )
+    rows = []
+    for values, selected in frame.groupby(list(keys), sort=True):
+        if not isinstance(values, tuple):
+            values = (values,)
+        weights = pd.to_numeric(
+            selected["sample_count"],
+            errors="coerce",
+        ).fillna(0.0)
+        row = dict(zip(keys, values))
+        row["sample_count"] = int(weights.sum())
+        for column in metric_columns:
+            numeric = pd.to_numeric(selected[column], errors="coerce")
+            valid = numeric.notna() & (weights > 0.0)
+            row[column] = (
+                math.nan
+                if not valid.any()
+                else float(np.average(numeric[valid], weights=weights[valid]))
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _blocked(reason: str) -> dict[str, object]:

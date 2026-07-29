@@ -546,6 +546,40 @@ separate ingestion path. The documented offline command does not populate the
 API automatically. This keeps request latency bounded without presenting
 partial rows as a full walk-forward evaluation.
 
+## Historical demand support
+
+The selected-date detail and unified model-output panel expose a remembered
+historical-demand zone derived from causal daily demand events, Pocket Pivots,
+ATR-normalized clustering, accepted retests, decay, and explicit invalidation.
+It is labelled `research` / `advisory`. It is neither an institutional cost
+line nor a probability, and it cannot change Ridge or the final forecast
+policy.
+
+The frozen 2018-01-01 through 2026-07-24 study evaluated 235 sufficiently
+mature stocks and 4,090,301 mature 5/10/20-session observations. On the primary
+10-session strictly paired sample, baseline support held 42.28% of the time;
+replacing or adding the historical-demand zone held 40.82%. All five folds and
+all three stock groups were negative, so the model did not pass promotion.
+The historical group intervals also contain present-day backfill assumptions,
+so the point-in-time assignment audit fails closed.
+The UI remains useful for explaining a possible remembered demand location,
+but users must not read the displayed score as validated predictive advantage.
+
+Run the deterministic study with:
+
+```bash
+./venv/bin/python -m research.run_historical_demand_support_study \
+  --database data/research_prices.db \
+  --asof 2026-07-24 \
+  --start 2018-01-01 \
+  --max-tickers 240
+```
+
+The concise decision report, full stratified metrics, and run manifest are
+`reports/historical-demand-support-study.md`,
+`reports/historical-demand-support-study.csv`, and
+`reports/historical-demand-support-study.json`.
+
 ## Historical scenario methodology
 
 `web/services/scenarios.py` builds descriptive 20-, 40-, and 60-session paths

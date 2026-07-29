@@ -1,0 +1,74 @@
+{
+  "study_version": "historical-demand-support-oos-v1",
+  "asof": "2026-07-24",
+  "start": "2018-01-01",
+  "ticker_count": 235,
+  "requested_ticker_count": 240,
+  "outcome_row_count": 4090301,
+  "horizons": [
+    5,
+    10,
+    20
+  ],
+  "folds": 5,
+  "minimum_score": 30.0,
+  "variants": [
+    "baseline",
+    "baseline_plus_historical_demand",
+    "historical_demand_only",
+    "no_volume",
+    "no_retests",
+    "no_environment",
+    "no_decay"
+  ],
+  "execution": "observation_close_to_next_session_open",
+  "group_source": "effective_group_assignments_with_sec_fallback",
+  "decision": {
+    "eligible": false,
+    "stable_fold_wins": 0,
+    "max_adverse_excursion_not_worse": true,
+    "improved_group_count": 0,
+    "ablation_increment": -0.014324663672498194,
+    "causal_audit_passed": false,
+    "reasons": [
+      "stable_fold_wins_below_three",
+      "improved_group_count_below_two",
+      "ablation_increment_not_positive",
+      "causal_audit_failed"
+    ],
+    "authority": "advisory_only"
+  },
+  "excluded_tickers": [
+    {
+      "ticker": "INFQ",
+      "reason": "fewer_than_220_sessions",
+      "session_count": 137
+    },
+    {
+      "ticker": "MDLN",
+      "reason": "fewer_than_220_sessions",
+      "session_count": 150
+    },
+    {
+      "ticker": "NAVN",
+      "reason": "fewer_than_220_sessions",
+      "session_count": 183
+    },
+    {
+      "ticker": "Q",
+      "reason": "fewer_than_220_sessions",
+      "session_count": 186
+    },
+    {
+      "ticker": "WOLF",
+      "reason": "fewer_than_220_sessions",
+      "session_count": 206
+    }
+  ],
+  "group_counts": {
+    "semiconductor": 53,
+    "software": 96,
+    "other": 86
+  },
+  "group_assignment_causal_audit_passed": false
+}

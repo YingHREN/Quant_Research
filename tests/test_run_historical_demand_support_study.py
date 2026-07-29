@@ -11,6 +11,7 @@ from research.run_historical_demand_support_study import (
     build_pocket_pivot_rows,
     build_variant_signal_rows,
     evaluate_outcomes,
+    group_assignment_causal_audit,
     non_overlapping_outcomes,
     promotion_decision,
     render_report,
@@ -273,6 +274,24 @@ class HistoricalDemandSupportStudyTest(unittest.TestCase):
         )
 
         self.assertTrue(decision["eligible"])
+
+    def test_group_assignment_audit_rejects_historical_backfill(self):
+        intervals = pd.DataFrame(
+            {
+                "ticker": ["AAA", "BBB"],
+                "source": [
+                    "historical_backfill_assumption/sec_exact",
+                    "sec_exact",
+                ],
+            }
+        )
+
+        self.assertFalse(
+            group_assignment_causal_audit(intervals, ("AAA", "BBB"))
+        )
+        self.assertTrue(
+            group_assignment_causal_audit(intervals, ("BBB",))
+        )
 
     def test_report_records_advisory_authority_and_gate_reasons(self):
         report = render_report(
