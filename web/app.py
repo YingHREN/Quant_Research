@@ -1599,6 +1599,11 @@ def _structure_payload(factors, chart, top_risk=None):
             "Strict VCP setup detected",
         ),
         (
+            "strict_vcp_near_pivot_start",
+            "strict_vcp_near_pivot_start",
+            "Entered strict VCP near-pivot zone",
+        ),
+        (
             "vcp_breakout_confirmed",
             "vcp_breakout_confirmed",
             "VCP breakout confirmed",

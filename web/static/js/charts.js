@@ -50,6 +50,9 @@ const ENTRY_MARKER_STYLES = Object.freeze({
   strict_vcp_start: Object.freeze({
     position: "aboveBar", shape: "square", color: COLORS.strictSignal,
   }),
+  strict_vcp_near_pivot_start: Object.freeze({
+    position: "belowBar", shape: "arrowUp", color: COLORS.strictSignal,
+  }),
   vcp_breakout_confirmed: Object.freeze({
     position: "belowBar", shape: "arrowUp", color: COLORS.up,
   }),
@@ -78,6 +81,7 @@ const ENTRY_MARKER_STYLES = Object.freeze({
 
 const ENTRY_MARKER_LAYERS = Object.freeze({
   strict_vcp_start: "strict_vcp",
+  strict_vcp_near_pivot_start: "strict_vcp",
   strict_vcp: "strict_vcp",
   vcp_breakout_confirmed: "vcp_breakout",
   pocket_pivot: "pocket_pivot",
@@ -95,6 +99,7 @@ const MARKER_PRIORITIES = Object.freeze({
   vcp_breakout_confirmed: 80,
   pocket_pivot: 75,
   strict_vcp_start: 70,
+  strict_vcp_near_pivot_start: 68,
   strict_vcp: 65,
   tight_platform: 60,
   top_risk_recovery: 55,
