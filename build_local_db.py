@@ -20,6 +20,7 @@ import sys
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Iterable, Optional
 
 import pandas as pd
@@ -39,6 +40,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(BASE, "data", "cache")
 DB = os.path.join(BASE, "data", "prices.db")
 RESEARCH_DB = os.path.join(BASE, "data", "research_prices.db")
+EODHD_RAW_CACHE = os.path.join(BASE, "data", "cache", "eodhd_raw")
 
 
 def _latest_pkl_per_ticker():
@@ -115,6 +117,24 @@ def update_tickers(existing):
     from web.market_groups import REFERENCE_TICKERS
 
     return sorted(set(existing).union(REFERENCE_TICKERS))
+
+
+def latest_eodhd_raw_root(cache_root=EODHD_RAW_CACHE):
+    """Return the newest immutable ISO-dated EODHD snapshot directory."""
+    root = Path(cache_root)
+    snapshots = []
+    if root.exists():
+        for candidate in root.iterdir():
+            if not candidate.is_dir():
+                continue
+            try:
+                date.fromisoformat(candidate.name)
+            except ValueError:
+                continue
+            snapshots.append(candidate)
+    if not snapshots:
+        raise EODHDMainDatabaseError("no EODHD raw snapshot is available")
+    return max(snapshots, key=lambda candidate: candidate.name)
 
 
 @dataclass(frozen=True)
@@ -251,6 +271,7 @@ def update(
     *,
     research_database=RESEARCH_DB,
     output_database=DB,
+    raw_root=None,
 ):
     """Refresh the main database from one explicitly selected provider."""
     if provider == "tiingo":
@@ -263,10 +284,14 @@ def update(
             "existing main database has no target tickers"
         )
     symbols = tuple(update_tickers(existing))
+    selected_raw_root = (
+        latest_eodhd_raw_root() if raw_root is None else raw_root
+    )
     return rebuild_from_eodhd(
         research_database,
         output_database,
         tickers=symbols,
+        raw_root=selected_raw_root,
     )
 
 
@@ -316,6 +341,10 @@ def main():
         help="EODHD 研究价格库路径",
     )
     ap.add_argument(
+        "--eodhd-raw-root",
+        help="研究库缺少个别主库股票时使用的 EODHD 原始快照目录",
+    )
+    ap.add_argument(
         "--backfill-years",
         type=int,
         help="联网回填指定年数的复权日线；DATA-001 默认使用10",
@@ -342,6 +371,7 @@ def main():
             provider=args.provider,
             research_database=args.research_database,
             output_database=DB,
+            raw_root=args.eodhd_raw_root,
         )
         print(summary)
     else:

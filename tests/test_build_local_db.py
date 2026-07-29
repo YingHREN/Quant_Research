@@ -1,16 +1,34 @@
 from datetime import date
+from pathlib import Path
 import sqlite3
+import tempfile
 import threading
 import unittest
 from unittest import mock
 
 import pandas as pd
 
-from build_local_db import backfill, update, update_tickers
+from build_local_db import (
+    backfill,
+    latest_eodhd_raw_root,
+    update,
+    update_tickers,
+)
 from data.fetch import StockData
 
 
 class BuildLocalDatabaseTest(unittest.TestCase):
+    def test_latest_eodhd_raw_root_ignores_non_snapshot_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "2026-07-28").mkdir()
+            (root / "2026-07-29").mkdir()
+            (root / "partial").mkdir()
+
+            selected = latest_eodhd_raw_root(root)
+
+        self.assertEqual(selected, root / "2026-07-29")
+
     def test_update_defaults_to_eodhd_rebuild_for_existing_main_tickers(self):
         with (
             mock.patch(
@@ -29,6 +47,7 @@ class BuildLocalDatabaseTest(unittest.TestCase):
             result = update(
                 research_database="research.db",
                 output_database="prices.db",
+                raw_root="eodhd-raw",
             )
 
         self.assertEqual(result, "eodhd-summary")
@@ -36,6 +55,7 @@ class BuildLocalDatabaseTest(unittest.TestCase):
             "research.db",
             "prices.db",
             tickers=("AAA", "QQQ", "XLK"),
+            raw_root="eodhd-raw",
         )
 
     def test_update_keeps_tiingo_only_as_explicit_provider(self):

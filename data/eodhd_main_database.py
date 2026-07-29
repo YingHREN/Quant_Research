@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
 
 import pandas as pd
 
 from data.daily_history import InvalidDailyHistory, persist_history
-from data.research_store import ADJUSTMENT_METHOD
+from data.research_store import ADJUSTMENT_METHOD, normalize_daily_rows
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ def rebuild_from_eodhd(
     *,
     tickers=None,
     fetched_at=None,
+    raw_root=None,
 ):
     """Build a complete main-format database and replace the output atomically."""
     research_path = Path(research_database)
@@ -60,6 +62,8 @@ def rebuild_from_eodhd(
         destination = sqlite3.connect(temporary_path)
         for ticker in symbols:
             frame = _read_current_adjusted_history(source, ticker)
+            if frame.empty and raw_root is not None:
+                frame = _read_raw_adjusted_history(Path(raw_root), ticker)
             if frame.empty:
                 raise EODHDMainDatabaseError(
                     f"missing EODHD history: {ticker}"
@@ -139,4 +143,69 @@ def _read_current_adjusted_history(connection, ticker):
         columns=("Date", "Open", "High", "Low", "Close", "Volume"),
     )
     frame["Date"] = pd.to_datetime(frame["Date"])
+    return _normalize_machine_precision_ohlc(frame.set_index("Date"))
+
+
+def _read_raw_adjusted_history(raw_root, ticker):
+    path = raw_root / f"{ticker}.json"
+    if not path.exists():
+        return _empty_history()
+    try:
+        payload = json.loads(path.read_text())
+        normalized, segments = normalize_daily_rows(payload)
+    except (OSError, json.JSONDecodeError, ValueError) as error:
+        raise EODHDMainDatabaseError(
+            f"invalid raw EODHD history: {ticker}"
+        ) from error
+    current = next(
+        (
+            int(segment["segment_id"])
+            for segment in segments
+            if segment["is_current_segment"]
+        ),
+        None,
+    )
+    rows = [
+        (
+            row["date"],
+            row["adjusted_open"],
+            row["adjusted_high"],
+            row["adjusted_low"],
+            row["adjusted_close"],
+            row["volume"],
+        )
+        for row in normalized
+        if row["segment_id"] == current
+    ]
+    frame = pd.DataFrame(
+        rows,
+        columns=("Date", "Open", "High", "Low", "Close", "Volume"),
+    )
+    if frame.empty:
+        return _empty_history()
+    frame["Date"] = pd.to_datetime(frame["Date"])
+    return _normalize_machine_precision_ohlc(frame.set_index("Date"))
+
+
+def _empty_history():
+    frame = pd.DataFrame(
+        columns=("Date", "Open", "High", "Low", "Close", "Volume")
+    )
+    frame["Date"] = pd.to_datetime(frame["Date"])
     return frame.set_index("Date")
+
+
+def _normalize_machine_precision_ohlc(frame):
+    """Clamp only IEEE-754-sized high/low differences after adjustment."""
+    normalized = frame.copy()
+    required_high = normalized[["Open", "Close"]].max(axis=1)
+    required_low = normalized[["Open", "Close"]].min(axis=1)
+    scale = normalized[["Open", "High", "Low", "Close"]].abs().max(axis=1)
+    tolerance = scale * 1e-12
+    high_gap = required_high - normalized["High"]
+    low_gap = normalized["Low"] - required_low
+    high_mask = (high_gap > 0) & (high_gap <= tolerance)
+    low_mask = (low_gap > 0) & (low_gap <= tolerance)
+    normalized.loc[high_mask, "High"] = required_high.loc[high_mask]
+    normalized.loc[low_mask, "Low"] = required_low.loc[low_mask]
+    return normalized

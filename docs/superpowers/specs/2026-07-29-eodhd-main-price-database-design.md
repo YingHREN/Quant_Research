@@ -21,7 +21,9 @@
 1. 从现有 `prices.db` 读取目标股票；若显式传入股票，则使用显式集合。
 2. 合并 `REFERENCE_TICKERS`，得到排序且去重的目标集合。
 3. 从 `research_prices.db` 读取每只股票当前历史分段中的 EODHD
-   复权 OHLCV。
+   复权 OHLCV。若主库股票不属于研究池，则从最新不可变 EODHD
+   原始快照读取该股票，使用 `normalize_daily_rows` 生成相同复权口径；
+   不允许回退到 Tiingo。
 4. 对每只股票执行现有 `audit_history` 校验。
 5. 写入与目标主库同目录的临时 SQLite 文件。
 6. 为每只股票写入 `price_ingestions` 与 `price_coverage`，其中：
@@ -57,6 +59,7 @@ def rebuild_from_eodhd(
     *,
     tickers=None,
     fetched_at=None,
+    raw_root=None,
 ) -> EODHDRebuildSummary:
     ...
 ```
@@ -68,11 +71,16 @@ CLI 行为：
 - `--provider tiingo`：保留原 Tiingo 一年重叠回填。
 - `--provider eodhd`：显式选择 EODHD，和默认行为一致。
 - `--research-database`：允许测试或离线任务传入其他研究库路径。
+- `--eodhd-raw-root`：允许显式指定研究池外主库股票的 EODHD 原始快照；
+  未指定时自动选择最新 ISO 日期快照。
 
 ## 错误处理与回退
 
-- 研究库不存在、缺少目标股票、存在无效 OHLCV、日期覆盖不一致或
-  SQLite 完整性失败时，删除临时文件并保持原主库字节不变。
+- 研究库与 EODHD 原始快照均缺少目标股票、存在无效 OHLCV、
+  日期覆盖不一致或 SQLite 完整性失败时，删除临时文件并保持原主库
+  字节不变。
+- 复权乘法造成不超过价格绝对值 `1e-12` 的 IEEE-754 高低价误差时，
+  仅将最高价/最低价夹到开收盘边界；更大的结构错误仍拒绝导入。
 - 不自动退回 Tiingo，避免用户以为已经统一数据源。
 - 若目标主库不存在且没有显式股票集合，直接失败，因为无法确定主库范围。
 - 旧主库在原子替换前不重命名；实库操作前另行生成带时间戳的人工备份，
@@ -86,4 +94,3 @@ CLI 行为：
 - 无效价格时失败且旧输出数据库哈希不变。
 - CLI 默认使用 EODHD，显式 `--provider tiingo` 仍调用原回填路径。
 - 在真实 196 只主库切换前后检查股票数、最新日期、完整性和代表股票价格。
-

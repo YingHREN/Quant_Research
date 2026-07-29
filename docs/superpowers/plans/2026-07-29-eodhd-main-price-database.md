@@ -57,7 +57,7 @@ class EODHDRebuildSummary:
     integrity: str
 ```
 
-Read only rows whose `segment_id` is the current segment, convert them to a pandas frame with `Open`, `High`, `Low`, `Close`, `Volume`, call `persist_history`, verify counts and latest dates, close the temporary SQLite connection, then use `Path.replace()`.
+Read only rows whose `segment_id` is the current segment. For main tickers outside the research pool, read the same EODHD snapshot's raw JSON through `normalize_daily_rows`; never fall back to Tiingo. Convert to a pandas frame with `Open`, `High`, `Low`, `Close`, `Volume`, call `persist_history`, verify counts and latest dates, close the temporary SQLite connection, then use `Path.replace()`.
 
 - [ ] **Step 4: Run tests and verify GREEN**
 
@@ -91,7 +91,7 @@ Run the Task 1 test command. Expected: failures because missing and invalid inpu
 
 - [ ] **Step 3: Implement atomic cleanup and validation**
 
-Add `EODHDMainDatabaseError`; delete only the explicit sibling temporary file on failure; validate missing tickers, no extra tickers, non-empty histories, latest-date parity, and `PRAGMA integrity_check`.
+Add `EODHDMainDatabaseError`; delete only the explicit sibling temporary file on failure; validate missing tickers, no extra tickers, non-empty histories, latest-date parity, and `PRAGMA integrity_check`. Normalize only machine-precision adjusted-high/low differences within relative tolerance `1e-12`; retain rejection for larger OHLC errors.
 
 - [ ] **Step 4: Run atomicity tests and verify GREEN**
 
@@ -177,4 +177,3 @@ Check `PRAGMA integrity_check`, ticker count, maximum date, per-ticker EODHD cov
 - [ ] **Step 6: Commit implementation state**
 
 Confirm runtime databases are ignored, run `git diff --check`, and leave the feature branch with no uncommitted source or test changes.
-

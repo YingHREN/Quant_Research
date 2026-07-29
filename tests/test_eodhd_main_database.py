@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -108,6 +109,65 @@ class EODHDMainDatabaseTest(unittest.TestCase):
             self.assertEqual(self._sha256(output), before)
             self.assertFalse((root / "prices.db.tmp").exists())
 
+    def test_missing_research_ticker_uses_audited_raw_eodhd_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            research = root / "research.db"
+            raw_root = root / "eodhd-raw"
+            output = root / "prices.db"
+            self._research_database(research)
+            raw_root.mkdir()
+            (raw_root / "RAW.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "date": "2026-07-27",
+                            "open": 100,
+                            "high": 110,
+                            "low": 90,
+                            "close": 105,
+                            "adjusted_close": 52.5,
+                            "volume": 3000,
+                        },
+                        {
+                            "date": "2026-07-28",
+                            "open": 110,
+                            "high": 120,
+                            "low": 100,
+                            "close": 115,
+                            "adjusted_close": 57.5,
+                            "volume": 3100,
+                        },
+                    ]
+                )
+            )
+
+            summary = rebuild_from_eodhd(
+                research,
+                output,
+                tickers=("AAA", "RAW"),
+                raw_root=raw_root,
+            )
+
+            connection = sqlite3.connect(output)
+            try:
+                raw_rows = connection.execute(
+                    """
+                    SELECT date, open, high, low, close, volume
+                    FROM prices WHERE ticker = 'RAW' ORDER BY date
+                    """
+                ).fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(summary.imported, 2)
+            self.assertEqual(
+                raw_rows,
+                [
+                    ("2026-07-27", 50.0, 55.0, 45.0, 52.5, 3000.0),
+                    ("2026-07-28", 55.0, 60.0, 50.0, 57.5, 3100.0),
+                ],
+            )
+
     def test_invalid_adjusted_ohlc_preserves_existing_database_bytes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -139,6 +199,42 @@ class EODHDMainDatabaseTest(unittest.TestCase):
 
             self.assertEqual(self._sha256(output), before)
             self.assertFalse((root / "prices.db.tmp").exists())
+
+    def test_machine_precision_ohlc_difference_is_normalized(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            research = root / "research.db"
+            output = root / "prices.db"
+            self._research_database(research)
+            connection = sqlite3.connect(research)
+            with connection:
+                connection.execute(
+                    """
+                    UPDATE daily_prices
+                    SET adjusted_high = 57.49999999999999
+                    WHERE ticker = 'AAA' AND date = '2026-07-28'
+                    """
+                )
+            connection.close()
+
+            rebuild_from_eodhd(
+                research,
+                output,
+                tickers=("AAA",),
+            )
+
+            connection = sqlite3.connect(output)
+            try:
+                high, close = connection.execute(
+                    """
+                    SELECT high, close FROM prices
+                    WHERE ticker = 'AAA' AND date = '2026-07-28'
+                    """
+                ).fetchone()
+            finally:
+                connection.close()
+            self.assertEqual(high, 57.5)
+            self.assertEqual(close, 57.5)
 
     @staticmethod
     def _sha256(path):
