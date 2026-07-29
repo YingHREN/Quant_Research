@@ -14,6 +14,7 @@
 | PERF-001 | P0 | 已完成 | 股票池轻量化、按需单股分析和版本化内存缓存 | 本地价格库 revision |
 | PERF-002 | P0 | 已完成 | 将全市场预测产物持久化到硬盘缓存表 | PERF-001、行情内容指纹、模型版本 |
 | PERF-003 | P0 | 已完成 | 行情更新成功后自动预热预测硬盘缓存 | PERF-002、UpdateJobManager |
+| PERF-004 | P0 | 已完成 | 统一向下风险 benchmark 可恢复缓存 | 统一 v2、内容指纹、安全产物仓库 |
 | POLICY-001 | P1 | 实施中 | 分离 Ridge 收益预测与向下风险语义 | `forecast_decision_policy` |
 | CANSLIM-001 | P1 | 实施中 | 建立基本面、技术面、机构面和大盘环境四维严格候选池 | 点时财报、全市场 RS、13F、大盘状态 |
 | ENTRY-001 | P1 | 实施中 | 用逐日因果重放标记历史 VCP、放量突破和 Pocket Pivot | 日线 OHLCV、现有 VCP/Pivot 规则 |
@@ -371,8 +372,23 @@
   `load_inputs`、`build_statistical_predictions`、`build_rule_context`、
   `label_and_align`、`evaluate`、`publish` 和 `total` 分阶段计时及
   stderr 进度；结构化耗时写入 JSON manifest，不参与模型身份或晋级。
-- [ ] 为全量统一 benchmark 增加可恢复中间产物和按数据库内容指纹缓存
-  的因果风险上下文；不得靠缩小样本规避性能问题。
+- [x] 为全量统一 benchmark 增加独立、内容寻址、checksum 校验的
+  `data/unified_benchmark_cache.db`，只缓存统计预测和规则预测；标签、
+  点时分层、指标、fold 比较、晋级门槛和报告每次重算。缓存身份覆盖实际
+  行情/参考资产内容、点时分组、固定队列、模型配置、相关源码内容和脏
+  工作树状态；同尺寸价格修订也会失效。payload 使用非可执行 typed JSON
+  加 zlib，不使用 pickle；报告成功发布后才在单事务中提交两阶段产物。
+- [x] 增加 `--no-cache`、`--rebuild-cache` 和
+  `manage_unified_benchmark_cache.py status|verify|prune`；清理默认预览，
+  只有 `--apply` 删除精确 artifact key。2026-07-28 真实 240 股验收：
+  冷/热均为 1,148,358 个严格匹配测试键、6,912 条指标、921 条 fold
+  比较，剔除缓存遥测和耗时后 JSON 完全一致，晋级结论均保持通过。
+  统计阶段由 256.41 秒降至 14.91 秒，规则阶段由 670.79 秒降至
+  44.40 秒，总耗时由 2,048.13 秒降至 1,035.96 秒（缩短 49.4%）。
+  最新两项 artifact 共 8,345,730 行、压缩 payload 53,942,800 字节，
+  verify 为 2/2 有效；研究价格库、线上价格库和影子账本前后 SHA-256
+  不变。`analysis_cache.db` 在验收期间被独立运行的仪表盘进程更新，
+  benchmark 不读取或写入该文件，因此不把其外部变化误记为缓存写入。
 - [ ] 分开报告高波动半导体、软件阴跌、其他板块，以及牛市、震荡、市场承压和修正阶段，禁止只针对 MU、NBIS、MRVL 等已知案例调参。
 - [ ] 进行消融实验，分别验证高位背景、末端加速、个股供应、结构破坏和板块/大盘共振的增量价值。
 - [x] 在历史 K 线上以可关闭且不参与价格轴缩放的事件标记展示首次观察、高风险、确认和解除日期；不得绘制会改变拖拽或日期锁定行为的未来延伸线。

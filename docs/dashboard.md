@@ -584,6 +584,51 @@ Do not change the Flask host from `127.0.0.1` or expose port 5000 through a
 proxy, tunnel, or firewall rule. The application has no login, authorization,
 TLS termination, or production hardening.
 
+## Unified downside benchmark cache
+
+The offline unified downside benchmark keeps an independent, content-addressed
+cache at `data/unified_benchmark_cache.db`. It stores only statistical and rule
+prediction frames. Labels, point-in-time groups, metrics, promotion gates, and
+reports are recomputed on every run. The cache has no online model authority
+and is not read by the dashboard.
+
+Run the benchmark twice with the same command. The first complete run builds
+and commits artifacts only after the report publishes; the second run can
+restore both prediction stages:
+
+```bash
+./venv/bin/python -m research.run_unified_downside_benchmark \
+  --database data/research_prices.db \
+  --cache-database data/unified_benchmark_cache.db \
+  --output-directory reports
+```
+
+Use `--no-cache` for an explicitly cold run. Use `--rebuild-cache` to skip
+reads and repair an exact artifact identity only when the stored row is proven
+corrupt. These flags are mutually exclusive. Relevant uncommitted code changes
+disable both cache reads and writes, so experimental source cannot silently
+reuse an artifact produced by different code.
+
+Management commands emit stable JSON and do not print payloads, database paths,
+environment variables, or provider credentials:
+
+```bash
+./venv/bin/python manage_unified_benchmark_cache.py \
+  status --database data/unified_benchmark_cache.db
+./venv/bin/python manage_unified_benchmark_cache.py \
+  verify --database data/unified_benchmark_cache.db
+./venv/bin/python manage_unified_benchmark_cache.py \
+  prune --database data/unified_benchmark_cache.db --keep-per-stage 3
+./venv/bin/python manage_unified_benchmark_cache.py \
+  prune --database data/unified_benchmark_cache.db \
+  --keep-per-stage 3 --apply
+```
+
+`status` and `verify` are read-only. `prune` is preview-only unless `--apply`
+is present, and deletion targets exact artifact keys selected by the preview
+ordering. The cache database and its SQLite WAL/SHM files are local derived
+data and must never be committed to Git.
+
 ## Verification after changes
 
 From the repository root, run:
