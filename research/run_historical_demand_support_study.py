@@ -509,17 +509,42 @@ def evaluate_study_outcomes(
         ("overlapping", outcomes),
         ("non_overlapping", non_overlapping_outcomes(outcomes)),
     ):
-        for regime_mode, regime_rows in (
-            ("observed", selected),
-            ("all", selected.assign(regime="all")),
-        ):
-            metrics = evaluate_outcomes(regime_rows, coverage=coverage)
-            metrics["sample_mode"] = sample_mode
-            metrics["regime_scope"] = regime_mode
-            metric_frames.append(metrics)
+        comparisons = (
+            ("all_eligible", selected),
+            ("paired", _paired_baseline_challenger_rows(selected)),
+        )
+        for comparison_scope, comparison_rows in comparisons:
+            if comparison_rows.empty:
+                continue
+            for regime_mode, regime_rows in (
+                ("observed", comparison_rows),
+                ("all", comparison_rows.assign(regime="all")),
+            ):
+                metrics = evaluate_outcomes(regime_rows, coverage=coverage)
+                metrics["sample_mode"] = sample_mode
+                metrics["regime_scope"] = regime_mode
+                metrics["comparison_scope"] = comparison_scope
+                metric_frames.append(metrics)
     if not metric_frames:
         return pd.DataFrame()
     return pd.concat(metric_frames, ignore_index=True, sort=False)
+
+
+def _paired_baseline_challenger_rows(rows: pd.DataFrame) -> pd.DataFrame:
+    selected = rows.loc[
+        rows["variant"].isin((BASELINE, CHALLENGER))
+    ].copy()
+    if selected.empty:
+        return selected
+    keys = ("ticker", "observation_date", "horizon", "fold")
+    common = (
+        selected.groupby(list(keys), sort=False)["variant"]
+        .nunique()
+        .eq(2)
+    )
+    common = common.loc[common].index
+    key_index = pd.MultiIndex.from_frame(selected.loc[:, keys])
+    return selected.loc[key_index.isin(common)].copy()
 
 
 def load_group_assignment_intervals(
@@ -555,6 +580,7 @@ def run_historical_demand_support_study(
     fallback_groups: dict[str, str],
     group_intervals: pd.DataFrame,
     asof: str,
+    start: str = "2018-01-01",
     horizons: tuple[int, ...] = HORIZONS,
     n_folds: int = 5,
     minimum_score: float = 30.0,
@@ -562,6 +588,9 @@ def run_historical_demand_support_study(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
     """Run the frozen causal support study on already loaded histories."""
     checked_asof = pd.Timestamp(asof).normalize()
+    checked_start = pd.Timestamp(start).normalize()
+    if checked_start > checked_asof:
+        raise ValueError("start must not be after asof")
     regime = build_market_regime_frame(histories)
     regime_lookup = (
         regime["regime"] if "regime" in regime else pd.Series(dtype=object)
@@ -569,6 +598,7 @@ def run_historical_demand_support_study(
     outcome_frames = []
     coverage: dict[tuple[str, str], dict[str, int]] = {}
     processed = 0
+    qqq_close = _close(histories.get("QQQ"))
     for ticker in analysis_tickers:
         history = histories.get(ticker)
         if not isinstance(history, pd.DataFrame) or history.empty:
@@ -582,7 +612,6 @@ def run_historical_demand_support_study(
             group_intervals,
             fallback_groups,
         )
-        qqq_close = _close(histories.get("QQQ"))
         sector_close = _sector_context_close(histories, group, ticker)
         variants = build_ticker_signal_variants(
             history,
@@ -614,6 +643,15 @@ def run_historical_demand_support_study(
                 )
                 if outcomes.empty:
                     continue
+                outcomes = outcomes.loc[
+                    pd.to_datetime(
+                        outcomes["observation_date"],
+                        errors="raise",
+                    )
+                    >= checked_start
+                ].copy()
+                if outcomes.empty:
+                    continue
                 outcomes["group"] = _groups_for_dates(
                     ticker,
                     outcomes["observation_date"],
@@ -640,6 +678,7 @@ def run_historical_demand_support_study(
     manifest = {
         "study_version": "historical-demand-support-oos-v1",
         "asof": checked_asof.date().isoformat(),
+        "start": checked_start.date().isoformat(),
         "ticker_count": processed,
         "requested_ticker_count": len(analysis_tickers),
         "outcome_row_count": len(outcomes),
@@ -727,6 +766,8 @@ def render_report(metrics: pd.DataFrame, manifest: dict[str, object]) -> str:
         "fold",
         "group",
         "regime",
+        "sample_mode",
+        "comparison_scope",
         "sample_count",
         "support_hold_rate",
         "support_break_rate",
@@ -837,6 +878,7 @@ def _paired_metrics(metrics: pd.DataFrame):
         "horizon": 10,
         "regime": "all",
         "sample_mode": "overlapping",
+        "comparison_scope": "paired",
     }
     for column, value in frozen_slices.items():
         if column in selected:
@@ -919,6 +961,7 @@ def main(argv=None):
         default="data/research_prices.db",
     )
     parser.add_argument("--asof", default="2026-07-24")
+    parser.add_argument("--start", default="2018-01-01")
     parser.add_argument("--max-tickers", type=int, default=240)
     parser.add_argument("--seed", type=int, default=20260726)
     parser.add_argument("--folds", type=int, default=5)
@@ -933,7 +976,7 @@ def main(argv=None):
     )
     parser.add_argument(
         "--outcomes",
-        default="reports/historical-demand-support-outcomes.csv",
+        default="",
     )
     parser.add_argument(
         "--manifest",
@@ -980,18 +1023,22 @@ def main(argv=None):
         fallback_groups=fallback_groups,
         group_intervals=intervals,
         asof=args.asof,
+        start=args.start,
         n_folds=args.folds,
         minimum_score=args.minimum_score,
         progress=progress,
     )
     report_path = Path(args.report)
     metrics_path = Path(args.metrics)
-    outcomes_path = Path(args.outcomes)
     manifest_path = Path(args.manifest)
-    for path in (report_path, metrics_path, outcomes_path, manifest_path):
+    output_paths = (report_path, metrics_path, manifest_path)
+    for path in output_paths:
         path.parent.mkdir(parents=True, exist_ok=True)
     metrics.to_csv(metrics_path, index=False)
-    outcomes.to_csv(outcomes_path, index=False)
+    if args.outcomes:
+        outcomes_path = Path(args.outcomes)
+        outcomes_path.parent.mkdir(parents=True, exist_ok=True)
+        outcomes.to_csv(outcomes_path, index=False)
     report_path.write_text(
         render_report(metrics, manifest),
         encoding="utf-8",

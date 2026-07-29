@@ -257,11 +257,13 @@ class HistoricalDemandSupportStudyTest(unittest.TestCase):
             horizon=10,
             regime="all",
             sample_mode="overlapping",
+            comparison_scope="paired",
         )
         distractor = base.assign(
-            horizon=5,
-            regime="correction",
-            sample_mode="non_overlapping",
+            horizon=10,
+            regime="all",
+            sample_mode="overlapping",
+            comparison_scope="all_eligible",
             support_hold_rate=0.0,
         )
 
