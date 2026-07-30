@@ -5,16 +5,47 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from numbers import Integral
+import warnings
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
+
+from research.market_direction_model import training_only_design
 
 
 INDEX_NAMES = ("ticker", "observation_date")
 DOWN_TERMINAL_THRESHOLD = -0.05
 DOWN_PATH_THRESHOLD = -0.07
 EXTREME_REBOUND_THRESHOLD = 0.10
+PREDICTION_COLUMNS = (
+    "ticker",
+    "observation_date",
+    "fold",
+    "test_start",
+    "training_samples",
+    "training_label_end_max",
+    "model_status",
+    "raw_down_probability",
+    "calibrated_down_probability",
+    "raw_rebound_probability",
+    "calibrated_rebound_probability",
+    "raw_predicted_median_return",
+    "raw_predicted_lower_quantile_return",
+    "predicted_median_return",
+    "predicted_lower_quantile_return",
+    "boundary_status",
+    "boundary_reason",
+    "down_threshold",
+    "rebound_cap",
+    "predicted_tail_risk",
+    "actual_down_event",
+    "actual_rebound_event",
+    "actual_terminal_return",
+    "actual_path_mae",
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +85,200 @@ class TailBoundaryResult:
     coverage: object = None
     mean_terminal_return: object = None
     diagnostics: tuple = ()
+
+
+def walk_forward_asymmetric_tail_predictions(
+    frame: pd.DataFrame,
+    *,
+    feature_columns,
+    n_test_folds: int = 5,
+    minimum_samples: int = 1_000,
+    minimum_calibration_rows: int = 500,
+    minimum_class_rows: int = 50,
+    minimum_boundary_rows: int = 500,
+) -> pd.DataFrame:
+    """Fit four causal heads with nested OOF calibration and boundaries."""
+    _validate_feature_frame(frame)
+    columns = tuple(str(column).strip() for column in feature_columns)
+    if not columns or any(not column for column in columns):
+        raise ValueError("feature_columns must not be empty")
+    required = (
+        *columns,
+        "terminal_return_5",
+        "path_mae_5",
+        "down_event_5",
+        "extreme_rebound_5",
+        "tail_label_end_date_5",
+    )
+    missing = [column for column in required if column not in frame]
+    if missing:
+        raise ValueError(f"frame is missing tail model columns: {missing}")
+    checked_folds = _at_least_two_integer(n_test_folds, "n_test_folds")
+    checked_minimum = _positive_integer(minimum_samples, "minimum_samples")
+    checked_calibration = _positive_integer(
+        minimum_calibration_rows,
+        "minimum_calibration_rows",
+    )
+    checked_class = _positive_integer(
+        minimum_class_rows,
+        "minimum_class_rows",
+    )
+    checked_boundary = _positive_integer(
+        minimum_boundary_rows,
+        "minimum_boundary_rows",
+    )
+    folds = _purged_folds(frame, checked_folds)
+    outputs = []
+    failure_reasons = []
+    for fold_number, (train_positions, test_positions) in enumerate(
+        folds,
+        start=1,
+    ):
+        train = frame.iloc[train_positions]
+        test = frame.iloc[test_positions]
+        if len(train) < checked_minimum or test.empty:
+            failure_reasons.append("insufficient_training_samples")
+            continue
+        inner_oof = _inner_oof_head_predictions(
+            train,
+            columns,
+            minimum_samples=checked_minimum,
+        )
+        if inner_oof.empty:
+            failure_reasons.append(
+                inner_oof.attrs.get("reason", "calibration_unavailable")
+            )
+            continue
+        down_calibration = fit_oof_isotonic(
+            inner_oof["raw_down_probability"].to_numpy(dtype=float),
+            inner_oof["actual_down_event"].to_numpy(dtype=int),
+            minimum_rows=checked_calibration,
+            minimum_class_rows=checked_class,
+        )
+        rebound_calibration = fit_oof_isotonic(
+            inner_oof["raw_rebound_probability"].to_numpy(dtype=float),
+            inner_oof["actual_rebound_event"].to_numpy(dtype=int),
+            minimum_rows=checked_calibration,
+            minimum_class_rows=checked_class,
+        )
+        if (
+            down_calibration.status != "available"
+            or rebound_calibration.status != "available"
+        ):
+            failure_reasons.append("calibration_unavailable")
+            continue
+        inner_oof = inner_oof.copy()
+        inner_oof["calibrated_down_probability"] = (
+            down_calibration.transform(
+                inner_oof["raw_down_probability"].to_numpy(dtype=float)
+            )
+        )
+        inner_oof["calibrated_rebound_probability"] = (
+            rebound_calibration.transform(
+                inner_oof["raw_rebound_probability"].to_numpy(dtype=float)
+            )
+        )
+        boundary = select_tail_boundary(
+            inner_oof,
+            minimum_rows=checked_boundary,
+        )
+        outer_heads = _fit_predict_heads(train, test, columns)
+        if outer_heads is None:
+            failure_reasons.append("model_classes_unavailable")
+            continue
+        down_probability = down_calibration.transform(
+            outer_heads["raw_down_probability"]
+        )
+        rebound_probability = rebound_calibration.transform(
+            outer_heads["raw_rebound_probability"]
+        )
+        raw_median = outer_heads["raw_predicted_median_return"]
+        raw_lower = outer_heads["raw_predicted_lower_quantile_return"]
+        ordered_lower = np.minimum(raw_lower, raw_median)
+        if boundary.status == "available":
+            tail_risk = (
+                (down_probability >= boundary.down_threshold)
+                & (raw_median < 0.0)
+                & (ordered_lower <= -0.05)
+                & (rebound_probability <= boundary.rebound_cap)
+            )
+            down_threshold = boundary.down_threshold
+            rebound_cap = boundary.rebound_cap
+        else:
+            tail_risk = pd.array([pd.NA] * len(test), dtype="boolean")
+            down_threshold = np.nan
+            rebound_cap = np.nan
+        test_start = pd.Timestamp(
+            test.index.get_level_values("observation_date").min()
+        )
+        outputs.append(
+            pd.DataFrame(
+                {
+                    "ticker": test.index.get_level_values("ticker"),
+                    "observation_date": test.index.get_level_values(
+                        "observation_date"
+                    ),
+                    "fold": fold_number,
+                    "test_start": test_start,
+                    "training_samples": len(train),
+                    "training_label_end_max": pd.Timestamp(
+                        train["tail_label_end_date_5"].max()
+                    ),
+                    "model_status": "available",
+                    "raw_down_probability": outer_heads[
+                        "raw_down_probability"
+                    ],
+                    "calibrated_down_probability": down_probability,
+                    "raw_rebound_probability": outer_heads[
+                        "raw_rebound_probability"
+                    ],
+                    "calibrated_rebound_probability": rebound_probability,
+                    "raw_predicted_median_return": raw_median,
+                    "raw_predicted_lower_quantile_return": raw_lower,
+                    "predicted_median_return": raw_median,
+                    "predicted_lower_quantile_return": ordered_lower,
+                    "boundary_status": boundary.status,
+                    "boundary_reason": boundary.reason,
+                    "down_threshold": down_threshold,
+                    "rebound_cap": rebound_cap,
+                    "predicted_tail_risk": pd.array(
+                        tail_risk,
+                        dtype="boolean",
+                    ),
+                    "actual_down_event": test["down_event_5"]
+                    .astype(bool)
+                    .to_numpy(),
+                    "actual_rebound_event": test["extreme_rebound_5"]
+                    .astype(bool)
+                    .to_numpy(),
+                    "actual_terminal_return": test[
+                        "terminal_return_5"
+                    ].to_numpy(dtype=float),
+                    "actual_path_mae": test["path_mae_5"].to_numpy(
+                        dtype=float
+                    ),
+                }
+            )
+        )
+    if not outputs:
+        return _empty_predictions(
+            failure_reasons[0] if failure_reasons else "folds_unavailable"
+        )
+    result = pd.concat(outputs, ignore_index=True, sort=False)
+    if result.duplicated(["ticker", "observation_date"]).any():
+        raise RuntimeError("outer prediction keys must be unique")
+    result["down_threshold"] = pd.to_numeric(
+        result["down_threshold"],
+        errors="coerce",
+    ).astype(float)
+    result["rebound_cap"] = pd.to_numeric(
+        result["rebound_cap"],
+        errors="coerce",
+    ).astype(float)
+    return result.loc[:, PREDICTION_COLUMNS].sort_values(
+        ["fold", "ticker", "observation_date"],
+        kind="mergesort",
+    ).reset_index(drop=True)
 
 
 def select_tail_boundary(
@@ -362,6 +587,174 @@ def _validate_feature_frame(frame: pd.DataFrame) -> None:
         raise ValueError("observation dates must be timezone-naive")
 
 
+def _purged_folds(frame, n_folds):
+    observation_dates = pd.Series(
+        frame.index.get_level_values("observation_date"),
+        index=frame.index,
+    )
+    label_end = pd.to_datetime(
+        frame["tail_label_end_date_5"],
+        errors="coerce",
+    )
+    complete = (
+        frame[
+            [
+                "terminal_return_5",
+                "path_mae_5",
+                "down_event_5",
+                "extreme_rebound_5",
+            ]
+        ]
+        .apply(pd.to_numeric, errors="coerce")
+        .notna()
+        .all(axis=1)
+        & label_end.notna()
+    )
+    unique_dates = np.asarray(sorted(observation_dates.unique()))
+    edges = np.linspace(0, len(unique_dates), n_folds + 1, dtype=int)
+    folds = []
+    for fold in range(1, n_folds):
+        test_dates = unique_dates[edges[fold] : edges[fold + 1]]
+        if not len(test_dates):
+            continue
+        test_start = pd.Timestamp(test_dates[0])
+        train_mask = complete & (label_end < test_start)
+        test_mask = complete & observation_dates.isin(test_dates)
+        train_positions = np.flatnonzero(train_mask.to_numpy())
+        test_positions = np.flatnonzero(test_mask.to_numpy())
+        if len(train_positions) and len(test_positions):
+            folds.append((train_positions, test_positions))
+    return folds
+
+
+def _inner_oof_head_predictions(frame, columns, *, minimum_samples):
+    outputs = []
+    for train_positions, test_positions in _purged_folds(frame, 4):
+        train = frame.iloc[train_positions]
+        test = frame.iloc[test_positions]
+        if len(train) < minimum_samples:
+            continue
+        heads = _fit_predict_heads(train, test, columns)
+        if heads is None:
+            continue
+        outputs.append(
+            pd.DataFrame(
+                {
+                    "raw_down_probability": heads[
+                        "raw_down_probability"
+                    ],
+                    "raw_rebound_probability": heads[
+                        "raw_rebound_probability"
+                    ],
+                    "predicted_median_return": heads[
+                        "raw_predicted_median_return"
+                    ],
+                    "predicted_lower_quantile_return": np.minimum(
+                        heads["raw_predicted_lower_quantile_return"],
+                        heads["raw_predicted_median_return"],
+                    ),
+                    "actual_down_event": test["down_event_5"]
+                    .astype(int)
+                    .to_numpy(),
+                    "actual_rebound_event": test["extreme_rebound_5"]
+                    .astype(int)
+                    .to_numpy(),
+                    "actual_terminal_return": test[
+                        "terminal_return_5"
+                    ].to_numpy(dtype=float),
+                }
+            )
+        )
+    if not outputs:
+        empty = pd.DataFrame()
+        empty.attrs["reason"] = "calibration_unavailable"
+        return empty
+    return pd.concat(outputs, ignore_index=True, sort=False)
+
+
+def _fit_predict_heads(train, test, columns):
+    down = train["down_event_5"].astype(int).to_numpy()
+    rebound = train["extreme_rebound_5"].astype(int).to_numpy()
+    if set(np.unique(down)) != {0, 1} or set(np.unique(rebound)) != {0, 1}:
+        return None
+    x_train, x_test = training_only_design(train, test, columns)
+    target = train["terminal_return_5"].to_numpy(dtype=float)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Could not find the number of physical cores",
+            category=UserWarning,
+        )
+        down_model = _fit_binary_head(x_train, down)
+        rebound_model = _fit_binary_head(x_train, rebound)
+        median_model = _fit_quantile_head(x_train, target, 0.50)
+        lower_model = _fit_quantile_head(x_train, target, 0.20)
+    return {
+        "raw_down_probability": _positive_probability(
+            down_model,
+            x_test,
+        ),
+        "raw_rebound_probability": _positive_probability(
+            rebound_model,
+            x_test,
+        ),
+        "raw_predicted_median_return": median_model.predict(x_test),
+        "raw_predicted_lower_quantile_return": lower_model.predict(x_test),
+    }
+
+
+def _fit_binary_head(design, target):
+    model = LogisticRegression(
+        C=0.1,
+        class_weight="balanced",
+        max_iter=1_000,
+        random_state=0,
+        solver="liblinear",
+    )
+    model.fit(design, target)
+    return model
+
+
+def _positive_probability(model, design):
+    coefficients = np.asarray(model.coef_[0], dtype=float)
+    intercept = float(model.intercept_[0])
+    logits = (
+        np.einsum(
+            "ij,j->i",
+            np.asarray(design, dtype=float),
+            coefficients,
+            optimize=False,
+        )
+        + intercept
+    )
+    if not np.isfinite(logits).all():
+        raise RuntimeError("binary tail head produced invalid scores")
+    logits = np.clip(logits, -35.0, 35.0)
+    return 1.0 / (1.0 + np.exp(-logits))
+
+
+def _fit_quantile_head(design, target, quantile):
+    model = HistGradientBoostingRegressor(
+        loss="quantile",
+        quantile=quantile,
+        learning_rate=0.05,
+        max_iter=100,
+        max_leaf_nodes=15,
+        min_samples_leaf=50,
+        l2_regularization=1.0,
+        early_stopping=False,
+        random_state=0,
+    )
+    model.fit(design, target)
+    return model
+
+
+def _empty_predictions(reason):
+    result = pd.DataFrame(columns=PREDICTION_COLUMNS)
+    result.attrs["reason"] = str(reason)
+    return result
+
+
 def _positive_integer(value, name: str) -> int:
     if (
         isinstance(value, bool)
@@ -370,6 +763,13 @@ def _positive_integer(value, name: str) -> int:
     ):
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
+
+
+def _at_least_two_integer(value, name: str) -> int:
+    checked = _positive_integer(value, name)
+    if checked < 2:
+        raise ValueError(f"{name} must be at least 2")
+    return checked
 
 
 def _probability_grid(values, name: str) -> tuple:

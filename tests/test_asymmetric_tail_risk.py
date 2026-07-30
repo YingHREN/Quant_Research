@@ -7,6 +7,7 @@ from research.asymmetric_tail_risk import (
     attach_asymmetric_tail_targets,
     fit_oof_isotonic,
     select_tail_boundary,
+    walk_forward_asymmetric_tail_predictions,
 )
 
 
@@ -257,6 +258,132 @@ class TailBoundaryTest(unittest.TestCase):
         self.assertEqual(selected.status, "unavailable")
         self.assertEqual(selected.reason, "tail_boundary_unavailable")
         self.assertIsNone(selected.down_threshold)
+
+
+def _model_frame(periods=180):
+    dates = pd.bdate_range("2024-01-02", periods=periods)
+    rows = []
+    keys = []
+    for ticker, phase in (("AAA", 0), ("BBB", 2), ("CCC", 4)):
+        for position, date in enumerate(dates):
+            feature = np.sin((position + phase) / 5.0)
+            terminal = -0.08 if feature < -0.15 else (
+                0.12 if feature > 0.75 else 0.01
+            )
+            path_mae = min(terminal, -0.08 if feature < -0.15 else -0.01)
+            rows.append(
+                {
+                    "feature": feature,
+                    "terminal_return_5": terminal,
+                    "path_mae_5": path_mae,
+                    "down_event_5": float(
+                        terminal <= -0.05 or path_mae <= -0.07
+                    ),
+                    "extreme_rebound_5": float(terminal >= 0.10),
+                    "tail_label_end_date_5": date + pd.offsets.BDay(5),
+                }
+            )
+            keys.append((ticker, date))
+    return pd.DataFrame(
+        rows,
+        index=pd.MultiIndex.from_tuples(
+            keys,
+            names=("ticker", "observation_date"),
+        ),
+    ).sort_index()
+
+
+class NestedTailWalkForwardTest(unittest.TestCase):
+    @staticmethod
+    def _predict(frame):
+        return walk_forward_asymmetric_tail_predictions(
+            frame,
+            feature_columns=("feature",),
+            n_test_folds=4,
+            minimum_samples=60,
+            minimum_calibration_rows=30,
+            minimum_class_rows=5,
+            minimum_boundary_rows=5,
+        )
+
+    def test_emits_four_semantically_distinct_heads_on_causal_outer_folds(self):
+        predictions = self._predict(_model_frame())
+
+        self.assertFalse(predictions.empty)
+        self.assertTrue(
+            predictions["calibrated_down_probability"].between(0, 1).all()
+        )
+        self.assertTrue(
+            predictions["calibrated_rebound_probability"].between(0, 1).all()
+        )
+        self.assertTrue(
+            (
+                predictions["predicted_lower_quantile_return"]
+                <= predictions["predicted_median_return"]
+            ).all()
+        )
+        self.assertTrue(
+            (
+                pd.to_datetime(predictions["training_label_end_max"])
+                < pd.to_datetime(predictions["test_start"])
+            ).all()
+        )
+        self.assertEqual(
+            set(predictions["model_status"]),
+            {"available"},
+        )
+
+    def test_outer_outcomes_cannot_change_same_fold_predictions_or_boundary(self):
+        frame = _model_frame()
+        original = self._predict(frame)
+        first_fold = int(original["fold"].min())
+        first_start = pd.Timestamp(
+            original.loc[original["fold"] == first_fold, "test_start"].iloc[0]
+        )
+        changed = frame.copy()
+        outer = (
+            changed.index.get_level_values("observation_date") >= first_start
+        )
+        changed.loc[outer, "terminal_return_5"] *= -10.0
+        changed.loc[outer, "path_mae_5"] *= -10.0
+        changed.loc[outer, "down_event_5"] = 1.0
+        changed.loc[outer, "extreme_rebound_5"] = 0.0
+        rerun = self._predict(changed)
+        comparable = [
+            "ticker",
+            "observation_date",
+            "raw_down_probability",
+            "calibrated_down_probability",
+            "raw_rebound_probability",
+            "calibrated_rebound_probability",
+            "raw_predicted_median_return",
+            "raw_predicted_lower_quantile_return",
+            "predicted_median_return",
+            "predicted_lower_quantile_return",
+            "boundary_status",
+            "down_threshold",
+            "rebound_cap",
+            "predicted_tail_risk",
+        ]
+
+        pd.testing.assert_frame_equal(
+            original.loc[original["fold"] == first_fold, comparable]
+            .reset_index(drop=True),
+            rerun.loc[rerun["fold"] == first_fold, comparable]
+            .reset_index(drop=True),
+        )
+
+    def test_missing_rebound_class_fails_closed_without_partial_heads(self):
+        frame = _model_frame()
+        frame.loc[:, "extreme_rebound_5"] = 0.0
+
+        predictions = self._predict(frame)
+
+        self.assertTrue(predictions.empty)
+        self.assertEqual(
+            predictions.attrs["reason"],
+            "calibration_unavailable",
+        )
 
 
 if __name__ == "__main__":
