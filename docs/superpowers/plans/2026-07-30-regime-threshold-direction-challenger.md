@@ -34,7 +34,7 @@
 - Produces: `attach_qqq_relative_targets(frame, qqq_history, *, horizon=5) -> pandas.DataFrame`.
 - Adds: `qqq_executable_return_5` and `qqq_relative_return_5`; preserves all absolute target columns and inputs.
 
-- [ ] **Step 1: Write failing exact-date target tests**
+- [x] **Step 1: Write failing exact-date target tests**
 
 Create a multi-ticker frame whose stock rows share observation dates but one ticker skips a trading date. Assert literal QQQ returns from each stock row's `executable_entry_date_5` and `executable_label_end_date_5`, literal relative returns, unchanged absolute returns, input immutability, typed failures for missing columns/duplicate QQQ dates/unsupported horizons, and `NaN` when either exact QQQ endpoint is unavailable.
 
@@ -60,7 +60,7 @@ self.assertEqual(
 
 The last two assertions document that a positive absolute return may coexist with negative relative return; later serializers must retain both names.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -70,7 +70,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m uni
 
 Expected: import failure because `research.regime_threshold_direction` does not exist.
 
-- [ ] **Step 3: Implement the minimal immutable target adapter**
+- [x] **Step 3: Implement the minimal immutable target adapter**
 
 Validate the standard `(ticker, observation_date)` index and required absolute target/date columns. Normalize a copy of QQQ's index to timezone-naive dates, reject duplicates, look up `Open` on each row's recorded entry date and `Close` on its recorded label-end date, and compute:
 
@@ -81,7 +81,7 @@ relative_return = frame[f"executable_return_{horizon}"] - benchmark_return
 
 Never infer endpoints by shifting QQQ independently, because stock calendars may differ.
 
-- [ ] **Step 4: Run focused and target regressions**
+- [x] **Step 4: Run focused and target regressions**
 
 Run:
 
@@ -91,7 +91,7 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m uni
 
 Expected: PASS with absolute target fixtures unchanged.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add research/regime_threshold_direction.py tests/test_regime_threshold_direction.py docs/superpowers/plans/2026-07-30-regime-threshold-direction-challenger.md
