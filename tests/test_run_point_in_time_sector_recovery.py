@@ -166,6 +166,13 @@ class PointInTimeSectorRecoveryTest(unittest.TestCase):
         self.assertFalse(evidence.empty)
         self.assertEqual(set(coverage["fold"]), {1, 2, 3, 4, 5})
         self.assertEqual(manifest["decision"]["online_authority"], "none")
+        self.assertEqual(
+            {
+                row["reason"]
+                for row in manifest["unavailable_reasons"]
+            },
+            {"available"},
+        )
         self.assertNotIn(
             "pit_sector_assignment_age_days",
             manifest["decision"]["admitted_features"],

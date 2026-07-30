@@ -118,6 +118,7 @@ def evaluate_sector_recovery(
     )
     coverage = _fold_coverage(enriched)
     evidence = apply_fold_availability_gate(evidence, coverage)
+    unavailable_reasons = _unavailable_reason_records(enriched)
     admitted = tuple(
         sorted(
             evidence.loc[
@@ -165,6 +166,7 @@ def evaluate_sector_recovery(
             ),
         },
         "coverage": _records(coverage),
+        "unavailable_reasons": unavailable_reasons,
         "feature_evidence": _records(evidence),
     }
     validate_report_payload(manifest)
@@ -512,6 +514,27 @@ def _fold_coverage(enriched):
                 }
             )
     return pd.DataFrame(rows)
+
+
+def _unavailable_reason_records(enriched):
+    records = []
+    for side in ("case", "control"):
+        column = f"{side}_pit_sector_unavailable_reason"
+        reasons = enriched[column].replace("", "available").value_counts(
+            dropna=False
+        )
+        for reason, count in reasons.sort_index().items():
+            records.append(
+                {
+                    "side": side,
+                    "reason": str(reason),
+                    "count": int(count),
+                    "rate": float(count / len(enriched))
+                    if len(enriched)
+                    else 0.0,
+                }
+            )
+    return records
 
 
 def _records(frame):
