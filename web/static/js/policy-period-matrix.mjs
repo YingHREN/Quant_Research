@@ -49,6 +49,11 @@ function periodStatus(period, translate) {
   );
 }
 
+function translatedOr(translate, key, fallback) {
+  const value = translate(key);
+  return value === key ? fallback : value;
+}
+
 function renderPeriodDetail({
   document,
   detail,
@@ -112,9 +117,21 @@ function renderPeriodDetail({
   const authority = setText(
     node(document, "p", "policy-period-detail-authority"),
     translate("market.policyMatrix.authority", {
-      lifecycle: payload.lifecycle || "research",
-      permission: payload.decision_permission || "advisory",
-      authority: payload.online_authority || "none",
+      lifecycle: translatedOr(
+        translate,
+        `market.policy.lifecycle.${payload.lifecycle}`,
+        payload.lifecycle || "research",
+      ),
+      permission: translatedOr(
+        translate,
+        `market.policy.permission.${payload.decision_permission}`,
+        payload.decision_permission || "advisory",
+      ),
+      authority: translatedOr(
+        translate,
+        `market.policy.authority.${payload.online_authority}`,
+        payload.online_authority || "none",
+      ),
     }),
   );
   detail.replaceChildren(
