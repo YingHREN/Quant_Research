@@ -234,7 +234,7 @@ Run: `./venv/bin/python -m unittest tests.test_import_policy_catalog tests.test_
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add data/fed_policy_catalog_v1.json import_policy_catalog.py \
@@ -251,7 +251,7 @@ git commit -m "feat: import audited Fed policy catalog"
 **Interfaces:**
 - Produces: `describe_policy_periods(periods, histories, asof, annual_sessions=252) -> pandas.DataFrame`
 
-- [ ] **Step 1: 写失败测试，覆盖完整、进行中、未上市和缺口**
+- [x] **Step 1: 写失败测试，覆盖完整、进行中、未上市和缺口**
 
 ```python
 def test_complete_period_uses_adjusted_close_and_common_spy_dates():
@@ -268,19 +268,19 @@ def test_future_rows_do_not_change_asof_result():
     # 追加 asof 之后价格，旧结果逐字段不变。
 ```
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run: `./venv/bin/python -m unittest tests.test_policy_period_returns`
 
 Expected: FAIL with `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现描述计算**
+- [x] **Step 3: 实现描述计算**
 
 只接受单调递增、唯一日期索引和有限正数复权收盘价。收益端点取时期内首末实际
 交易日；相对收益使用同一对共同交易日；最大回撤基于时期内累计复权净值；上涨
 月比例使用完整月末，不计当前未完成月。
 
-- [ ] **Step 4: 运行单元测试**
+- [x] **Step 4: 运行单元测试**
 
 Run: `./venv/bin/python -m unittest tests.test_policy_period_returns`
 
