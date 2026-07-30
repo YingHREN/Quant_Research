@@ -537,7 +537,32 @@ def main(argv=None) -> int:
         metrics_path=args.metrics,
         manifest_path=args.manifest,
     )
-    print(json.dumps(manifest, ensure_ascii=False, indent=2), flush=True)
+    print(
+        json.dumps(
+            {
+                "study_version": manifest["study_version"],
+                "asof": manifest["asof"],
+                "cohorts": {
+                    name: {
+                        "requested_count": value["requested_count"],
+                        "evaluated_count": value["evaluated_count"],
+                    }
+                    for name, value in manifest["cohorts"].items()
+                },
+                "event_counts": manifest["event_counts"],
+                "audits": manifest["audits"],
+                "decision": manifest["decision"],
+                "outputs": {
+                    "report": args.report,
+                    "metrics": args.metrics,
+                    "manifest": args.manifest,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        flush=True,
+    )
     return 0
 
 

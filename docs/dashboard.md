@@ -692,6 +692,36 @@ is present, and deletion targets exact artifact keys selected by the preview
 ordering. The cache database and its SQLite WAL/SHM files are local derived
 data and must never be committed to Git.
 
+## Bottom-state offline evaluation
+
+`BOTTOM-001` remains a causal, explanatory state model rather than a return
+probability or trading instruction. Its offline evaluator replays the same
+evidence used by the dashboard, labels only state-transition events, and
+compares 5/10/20-session outcomes with one-to-one
+`downtrend_continuation` baselines from the same cohort, fold, market regime,
+variant, and nearby 63-session drawdown bin.
+
+Run the frozen study without granting it online authority:
+
+```bash
+./venv/bin/python -m research.run_bottom_state_evaluation \
+  --database data/research_prices.db \
+  --asof 2026-07-24 \
+  --start 2018-01-01 \
+  --cohort-size 30 \
+  --folds 5
+```
+
+The command writes `reports/bottom-state-causal-evaluation.md`, `.csv`, and
+`.json`. The 2026-07-30 30+30 run evaluated 59 stocks and excluded one for
+insufficient history. Its confirmation 10-day non-overlapping early-state
+sample improved mean return by 2.45 percentage points and MAE by 2.13 points,
+but improved positive rate by only 3.68 points. Group sample gates, stage
+monotonicity, ablation advantage, the historical group causal audit, and a new
+future holdout were not satisfied. The dashboard must therefore continue to
+show this model as `advisory_only`; it must not imply that this report changes
+Ridge or final direction.
+
 ## Verification after changes
 
 From the repository root, run:

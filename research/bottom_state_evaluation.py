@@ -68,7 +68,7 @@ MATCH_REQUIRED_COLUMNS = (
     "drawdown_bin",
     "group",
 ) + MATCH_KEY_COLUMNS
-DRAWNDOWN_BIN_ORDER = (
+DRAWDOWN_BIN_ORDER = (
     "0_-15",
     "-15_-25",
     "-25_-40",
@@ -171,12 +171,12 @@ def match_downtrend_baselines(events: pd.DataFrame) -> pd.DataFrame:
     positives = source.loc[
         source["event_role"].eq("event")
         & source["observation_state"].isin(POSITIVE_STATES)
-        & source["drawdown_bin"].isin(DRAWNDOWN_BIN_ORDER)
+        & source["drawdown_bin"].isin(DRAWDOWN_BIN_ORDER)
     ].copy()
     baselines = source.loc[
         source["event_role"].eq("baseline")
         & source["observation_state"].eq("downtrend_continuation")
-        & source["drawdown_bin"].isin(DRAWNDOWN_BIN_ORDER)
+        & source["drawdown_bin"].isin(DRAWDOWN_BIN_ORDER)
     ].copy()
     if positives.empty or baselines.empty:
         return _empty_pairs()
@@ -853,13 +853,13 @@ def _baseline_rank(
 
 def _adjacent_drawdown_bins(drawdown_bin: str) -> tuple[str, ...]:
     try:
-        position = DRAWNDOWN_BIN_ORDER.index(drawdown_bin)
+        position = DRAWDOWN_BIN_ORDER.index(drawdown_bin)
     except ValueError:
         return ()
     return tuple(
-        DRAWNDOWN_BIN_ORDER[index]
+        DRAWDOWN_BIN_ORDER[index]
         for index in (position - 1, position + 1)
-        if 0 <= index < len(DRAWNDOWN_BIN_ORDER)
+        if 0 <= index < len(DRAWDOWN_BIN_ORDER)
     )
 
 
