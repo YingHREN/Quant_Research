@@ -109,7 +109,7 @@ def _default_registry():
         10,
         None,
         "statistical_forecast",
-        "production",
+        "research",
         "next_session_open",
         "informational",
         "model.ridge",
@@ -385,7 +385,13 @@ def _default_registry():
         "next_session_open",
         "final_policy",
         "model.decisionPolicy",
-        lambda context: _decision_output(context["decision"]),
+        lambda context: _decision_output(
+            context["decision"],
+            _direction_reliability(
+                context["forecast"],
+                context["evaluation"],
+            ),
+        ),
         version_resolver=lambda context: (
             context["decision"].get("policy_version") or "v2"
         ),
@@ -395,12 +401,13 @@ def _default_registry():
 
 def _primary_output(forecast, evaluation):
     available = forecast.get("predicted_return") is not None
+    direction_reliability = _direction_reliability(forecast, evaluation)
     return {
         **_identity(
             forecast.get("model_key") or "ridge_direction_v1",
             forecast.get("model_version"),
             "statistical_forecast",
-            "production",
+            "research",
             "available" if available else "unavailable",
             "next_session_open",
             "model.ridge",
@@ -413,6 +420,7 @@ def _primary_output(forecast, evaluation):
         "confidence_status": forecast.get("confidence_status"),
         "confidence_reason": forecast.get("confidence_reason"),
         "evidence_status": evaluation.get("evidence_status", "not_precomputed"),
+        "direction_reliability": direction_reliability,
         "direction_accuracy": json_safe(evaluation.get("direction_accuracy")),
         "always_up_direction_accuracy": json_safe(
             evaluation.get("always_up_direction_accuracy")
@@ -427,6 +435,15 @@ def _primary_output(forecast, evaluation):
         ),
         "unavailable_reason": forecast.get("unavailable_reason"),
     }
+
+
+def _direction_reliability(forecast, evaluation):
+    if forecast.get("predicted_return") is None:
+        return "unavailable"
+    evidence_status = evaluation.get("evidence_status")
+    if evidence_status in {"proven", "unproven", "insufficient"}:
+        return evidence_status
+    return "not_precomputed"
 
 
 def _immediate_risk(forecast):
@@ -1260,7 +1277,7 @@ def _metrics(values, definitions):
     ]
 
 
-def _decision_output(decision):
+def _decision_output(decision, primary_direction_reliability):
     if not decision:
         return {
             **_identity(
@@ -1272,6 +1289,7 @@ def _decision_output(decision):
                 "next_session_open",
                 "model.decisionPolicy",
             ),
+            "primary_direction_reliability": primary_direction_reliability,
             "unavailable_reason": "decision_context_unavailable",
         }
     return {
@@ -1285,6 +1303,7 @@ def _decision_output(decision):
             "model.decisionPolicy",
         ),
         "final_direction": decision.get("final_direction"),
+        "primary_direction_reliability": primary_direction_reliability,
         "risk_state": decision.get("risk_state"),
         "action": decision.get("action"),
         "reasons": list(decision.get("reasons") or ()),

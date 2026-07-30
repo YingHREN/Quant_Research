@@ -625,6 +625,9 @@ h2 { margin-bottom: 0; font-size: 1rem; letter-spacing: -0.01em; }
 .model-output-badge { flex: none; padding: 2px 6px; border-radius: 999px; color: var(--muted); background: rgba(145, 163, 176, 0.12); font-size: 0.62rem; }
 .model-output-badge-active, .model-output-badge-available { color: var(--accent); background: var(--accent-soft); }
 .model-output-badge-unavailable { color: var(--warning); }
+.model-output-reliability-proven { color: var(--accent); background: var(--accent-soft); }
+.model-output-reliability-unproven, .model-output-reliability-insufficient { color: var(--warning); background: rgba(245, 158, 11, 0.12); }
+.model-output-reliability-not_precomputed, .model-output-reliability-unavailable { color: var(--muted); }
 .model-output-identity, .model-output-explanation, .model-output-limitation, .model-output-score-warning {
   margin: 7px 0 0;
   color: var(--muted);

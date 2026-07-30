@@ -364,7 +364,12 @@ class ModelOutputContractTest(unittest.TestCase):
             evaluation["always_up_direction_accuracy"],
         )
         self.assertEqual(outputs["primary"][0]["timing"], "next_session_open")
+        self.assertEqual(outputs["primary"][0]["lifecycle"], "research")
         self.assertEqual(outputs["primary"][0]["evidence_status"], "unproven")
+        self.assertEqual(
+            outputs["primary"][0]["direction_reliability"],
+            "unproven",
+        )
         self.assertEqual(
             {item["key"] for item in outputs["downside"]},
             {
@@ -518,7 +523,48 @@ class ModelOutputContractTest(unittest.TestCase):
         )
         self.assertEqual(outputs["decision"]["kind"], "decision_policy")
         self.assertEqual(outputs["decision"]["final_direction"], "down")
+        self.assertEqual(
+            outputs["decision"]["primary_direction_reliability"],
+            "unproven",
+        )
         self.assertEqual((forecast, row, evaluation), original)
+
+    def test_direction_reliability_normalizes_evidence_without_rewriting_directions(self):
+        cases = (
+            ("proven", 0.0363, "proven"),
+            ("unproven", 0.0363, "unproven"),
+            ("insufficient", 0.0363, "insufficient"),
+            ("not_precomputed", 0.0363, "not_precomputed"),
+            ("unexpected_future_value", 0.0363, "not_precomputed"),
+            (None, 0.0363, "not_precomputed"),
+            ("proven", None, "unavailable"),
+        )
+
+        for evidence_status, predicted_return, expected in cases:
+            with self.subTest(
+                evidence_status=evidence_status,
+                predicted_return=predicted_return,
+            ):
+                forecast = forecast_payload()
+                forecast["predicted_return"] = predicted_return
+                evaluation = (
+                    {}
+                    if evidence_status is None
+                    else {"evidence_status": evidence_status}
+                )
+
+                outputs = build_model_outputs(forecast, chart_row(), evaluation)
+                primary = outputs["primary"][0]
+                decision = outputs["decision"]
+
+                self.assertEqual(primary["direction_reliability"], expected)
+                self.assertEqual(
+                    decision["primary_direction_reliability"],
+                    expected,
+                )
+                self.assertEqual(primary["direction"], "up")
+                self.assertEqual(decision["final_direction"], "down")
+                self.assertEqual(primary["predicted_return"], predicted_return)
 
     def test_default_registry_describes_every_emitted_model(self):
         outputs = build_model_outputs(
@@ -545,7 +591,7 @@ class ModelOutputContractTest(unittest.TestCase):
         self.assertEqual(registered, emitted)
         self.assertEqual(
             outputs["registry"]["version"],
-            "model_output_registry_v5",
+            "model_output_registry_v6",
         )
         self.assertEqual(
             outputs["decision"]["decision_permission"],

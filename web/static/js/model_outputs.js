@@ -163,6 +163,14 @@ function modelCard(model, locale, { open = false } = {}) {
     enumLabel("modelOutput.status", model.status || "unavailable", locale),
   );
   summary.append(title, badge);
+  if (model.direction_reliability !== undefined) {
+    const reliability = model.direction_reliability || "not_precomputed";
+    summary.append(element(
+      "span",
+      `model-output-badge model-output-reliability-badge model-output-reliability-${reliability}`,
+      enumLabel("modelOutput.directionReliability", reliability, locale),
+    ));
+  }
 
   const identity = element("p", "model-output-identity");
   identity.textContent = [
@@ -185,10 +193,30 @@ function modelCard(model, locale, { open = false } = {}) {
       enumLabel("forecast.direction", model.direction, locale),
     ));
   }
+  if (model.direction_reliability !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.directionReliability", {}, locale),
+      enumLabel(
+        "modelOutput.directionReliability",
+        model.direction_reliability,
+        locale,
+      ),
+    ));
+  }
   if (model.final_direction !== undefined) {
     values.append(labeledValue(
       t("modelOutput.field.finalDirection", {}, locale),
       enumLabel("forecast.direction", model.final_direction, locale),
+    ));
+  }
+  if (model.primary_direction_reliability !== undefined) {
+    values.append(labeledValue(
+      t("modelOutput.field.primaryDirectionReliability", {}, locale),
+      enumLabel(
+        "modelOutput.directionReliability",
+        model.primary_direction_reliability,
+        locale,
+      ),
     ));
   }
   if (model.action !== undefined) {

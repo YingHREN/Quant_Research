@@ -125,6 +125,7 @@ const forecast = {
       horizon_sessions: 20,
       predicted_return: 0.1269,
       direction: "up",
+      direction_reliability: "unproven",
       evidence_status: "unproven",
       training_sample_count: 90076,
       training_cutoff: "2026-06-30",
@@ -226,6 +227,7 @@ const forecast = {
       ...identity("forecast_decision_policy", "model.decisionPolicy.name", "decision_policy", "available"),
       decision_permission: "final_policy",
       final_direction: "down",
+      primary_direction_reliability: "unproven",
       risk_state: "veto",
       action: "risk_override",
       reasons: ["bearish_turn_veto"],
@@ -253,6 +255,8 @@ assert.equal(container.dataset.state, "available");
 assert.equal(cards.length, 11);
 assert.match(zh, /2026-07-01/);
 assert.match(zh, /Ridge/);
+assert.match(zh, /方向尚未证明超过基线/);
+assert.match(zh, /主预测可靠性/);
 assert.match(zh, /最终方向/);
 assert.match(zh, /下跌/);
 assert.match(zh, /规则分数，不是概率/);
@@ -301,6 +305,8 @@ renderModelOutputs(container, {
 });
 const en = textTree(container);
 assert.match(en, /Final direction/);
+assert.match(en, /Direction not proven above baselines/);
+assert.match(en, /Primary forecast reliability/);
 assert.match(en, /Rule score, not a probability/);
 assert.match(en, /High-level distribution and bearish top-turn risk/);
 assert.match(en, /Suspected distribution proxy, not verified institutional trading/);
@@ -339,6 +345,20 @@ const notPrecomputedText = textTree(container);
 assert.match(notPrecomputedText, /尚未预计算/);
 assert.doesNotMatch(notPrecomputedText, /方向准确率/);
 assert.doesNotMatch(notPrecomputedText, /始终上涨基线/);
+
+const oldReliabilityPayload = structuredClone(forecast);
+delete oldReliabilityPayload.model_outputs.primary[0].direction_reliability;
+delete oldReliabilityPayload.model_outputs.decision.primary_direction_reliability;
+renderModelOutputs(container, {
+  forecast: oldReliabilityPayload,
+  date: "2026-07-23",
+  locale: "zh-CN",
+  registry: externalRegistry,
+});
+const oldReliabilityBadges = descendants(container)
+  .filter((node) => node.className.includes("model-output-reliability-badge"));
+assert.equal(oldReliabilityBadges.length, 0);
+assert.doesNotMatch(textTree(container), /主预测可靠性/);
 
 const legacyForecast = structuredClone(forecast);
 delete legacyForecast.model_outputs.macro_context;

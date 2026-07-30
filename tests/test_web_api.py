@@ -1374,7 +1374,7 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v5",
+            "model_output_registry_v6",
         )
         self.assertEqual(
             payload["feature_provenance_registry"]["version"],
@@ -1821,7 +1821,7 @@ class WebApiTest(unittest.TestCase):
         )
         self.assertEqual(
             response.json["model_output_registry"]["version"],
-            "model_output_registry_v5",
+            "model_output_registry_v6",
         )
         self.assertIn(
             "canslim_technical_gate_v1",
@@ -1903,11 +1903,11 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(outputs["bullish_structure"][0]["score"], 2)
         self.assertEqual(
             payload["model_output_registry"]["version"],
-            "model_output_registry_v5",
+            "model_output_registry_v6",
         )
         self.assertEqual(
             outputs["registry_ref"],
-            "model_output_registry_v5",
+            "model_output_registry_v6",
         )
         self.assertNotIn("registry", outputs)
 
