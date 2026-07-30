@@ -71,6 +71,35 @@ unavailable/not-applicable outputs, and `online_authority=none`. Reaching its
 research gate permits human review only; it never grants an automatic downside
 veto.
 
+## Support first-touch reaction research
+
+The support first-touch study is also offline and advisory-only. It freezes each
+support zone at the observation close, waits 5/10/20 sessions for its first
+touch, and classifies the touch day plus two following sessions as accepted,
+failed, or ambiguous. Untouched episodes remain coverage evidence but are not
+included in reaction-rate denominators.
+
+Run the fixed development and confirmation cohorts with:
+
+```bash
+./venv/bin/python -m research.run_support_touch_reaction_study \
+  --database data/research_prices.db \
+  --asof 2026-07-24 \
+  --start 2018-01-01 \
+  --cohort-size 240 \
+  --folds 5
+```
+
+The tracked Markdown, CSV, and JSON artifacts are
+`reports/support-touch-reaction-study.*`. Strict baseline/challenger distance
+slices use the baseline event's distance bin for both rows so every paired
+slice compares the same events. The 2026-07-30 run did not promote the model:
+the confirmation acceptance-rate gain was only 0.50 percentage points, the
+confirmation cohort covered only one of the three preregistered groups, the
+historical group audit failed, and no future temporal holdout exists. This
+workflow does not change API payloads, charts, Ridge, downside vetoes, or the
+final policy.
+
 ## Free intraday collector
 
 The collector is a separate foreground process so opening or hovering the
