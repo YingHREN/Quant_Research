@@ -10,6 +10,7 @@ from pathlib import Path
 import pickle
 import sqlite3
 from threading import RLock
+from time import perf_counter
 from typing import Any, Mapping
 import zlib
 
@@ -63,15 +64,26 @@ class ForecastArtifactStore:
         self.path = Path(path)
         self._max_entries = max_entries
         self._lock = RLock()
+        self._load_count = 0
+        self._load_hit_count = 0
+        self._load_miss_count = 0
+        self._save_count = 0
+        self._save_success_count = 0
+        self._failure_count = 0
+        self._last_read_seconds = None
+        self._last_write_seconds = None
 
     def load(self, identity, market_signature):
         identity = _validate_identity(identity)
         market_signature = _required_text(market_signature, "market_signature")
-        if not self.path.exists():
-            return None
         cache_key = _cache_key(identity, market_signature)
         with self._lock:
+            started_at = perf_counter()
+            outcome = "failure"
             try:
+                if not self.path.exists():
+                    outcome = "miss"
+                    return None
                 with sqlite3.connect(self.path) as connection:
                     _ensure_schema(connection)
                     row = connection.execute(
@@ -86,36 +98,45 @@ class ForecastArtifactStore:
                         """,
                         (cache_key,),
                     ).fetchone()
+                if row is None:
+                    outcome = "miss"
+                    return None
+                try:
+                    artifact = _decode_row(row, identity, market_signature)
+                except (
+                    AttributeError,
+                    EOFError,
+                    KeyError,
+                    pickle.UnpicklingError,
+                    TypeError,
+                    ValueError,
+                    zlib.error,
+                ):
+                    self._delete_best_effort(cache_key)
+                    return None
+                outcome = "hit"
+                return artifact
             except sqlite3.Error:
                 return None
-            if row is None:
-                return None
-            try:
-                return _decode_row(row, identity, market_signature)
-            except (
-                AttributeError,
-                EOFError,
-                KeyError,
-                pickle.UnpicklingError,
-                TypeError,
-                ValueError,
-                zlib.error,
-            ):
-                self._delete_best_effort(cache_key)
-                return None
+            finally:
+                self._record_load(outcome, perf_counter() - started_at)
 
     def save(self, identity, market_signature, artifact):
         identity = _validate_identity(identity)
         market_signature = _required_text(market_signature, "market_signature")
         _validate_artifact(artifact)
         cache_key = _cache_key(identity, market_signature)
+        started_at = perf_counter()
         try:
             payload = _encode_artifact(artifact)
             checksum = _checksum(payload)
         except (pickle.PickleError, TypeError, ValueError, zlib.error):
+            with self._lock:
+                self._record_save(False, perf_counter() - started_at)
             return False
 
         with self._lock:
+            succeeded = False
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 with sqlite3.connect(self.path) as connection:
@@ -167,9 +188,12 @@ class ForecastArtifactStore:
                         """,
                         (self._max_entries,),
                     )
+                succeeded = True
                 return True
             except (OSError, sqlite3.Error):
                 return False
+            finally:
+                self._record_save(succeeded, perf_counter() - started_at)
 
     def entry_count(self):
         if not self.path.exists():
@@ -188,9 +212,10 @@ class ForecastArtifactStore:
     def status(self):
         """Return safe cache metadata without decoding artifact payloads."""
         result = _empty_status()
-        if not self.path.exists():
-            return result
         with self._lock:
+            result.update(self._telemetry_status())
+            if not self.path.exists():
+                return result
             try:
                 with sqlite3.connect(self.path) as connection:
                     _ensure_schema(connection)
@@ -228,6 +253,42 @@ class ForecastArtifactStore:
         ) = latest
         result["state"] = "ready"
         return result
+
+    def _record_load(self, outcome, seconds):
+        self._load_count += 1
+        if outcome == "hit":
+            self._load_hit_count += 1
+        elif outcome == "miss":
+            self._load_miss_count += 1
+        else:
+            self._failure_count += 1
+        self._last_read_seconds = max(0.0, float(seconds))
+
+    def _record_save(self, succeeded, seconds):
+        self._save_count += 1
+        if succeeded:
+            self._save_success_count += 1
+        else:
+            self._failure_count += 1
+        self._last_write_seconds = max(0.0, float(seconds))
+
+    def _telemetry_status(self):
+        hit_rate = (
+            self._load_hit_count / self._load_count
+            if self._load_count
+            else None
+        )
+        return {
+            "load_count": self._load_count,
+            "load_hit_count": self._load_hit_count,
+            "load_miss_count": self._load_miss_count,
+            "save_count": self._save_count,
+            "save_success_count": self._save_success_count,
+            "failure_count": self._failure_count,
+            "load_hit_rate": hit_rate,
+            "last_read_seconds": self._last_read_seconds,
+            "last_write_seconds": self._last_write_seconds,
+        }
 
     def _delete_best_effort(self, cache_key):
         try:
@@ -298,6 +359,15 @@ def _empty_status():
         "risk_context_version": None,
         "format_version": None,
         "size_bytes": 0,
+        "load_count": 0,
+        "load_hit_count": 0,
+        "load_miss_count": 0,
+        "save_count": 0,
+        "save_success_count": 0,
+        "failure_count": 0,
+        "load_hit_rate": None,
+        "last_read_seconds": None,
+        "last_write_seconds": None,
     }
 
 

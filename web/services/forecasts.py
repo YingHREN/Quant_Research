@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from hashlib import blake2b
 import json
 import threading
+from time import perf_counter
 
 import pandas as pd
 
@@ -129,6 +130,15 @@ class ForecastService:
         self._last_cache_access = "miss"
         self._build_started_at = None
         self._build_finished_at = None
+        self._cache_access_count = 0
+        self._memory_hit_count = 0
+        self._disk_hit_count = 0
+        self._rebuild_count = 0
+        self._rebuild_failure_count = 0
+        self._cache_io_exception_count = 0
+        self._cache_save_rejection_count = 0
+        self._cache_restore_failure_count = 0
+        self._last_rebuild_seconds = None
         self._lock = threading.RLock()
 
     @property
@@ -140,24 +150,47 @@ class ForecastService:
         """Return safe operational metadata for the dashboard."""
         with self._lock:
             base = _unavailable_cache_status()
+            store_reports_failure_count = False
             if self._artifact_store is not None:
-                try:
-                    store_status = self._artifact_store.status()
-                except Exception:
+                status_builder = getattr(self._artifact_store, "status", None)
+                if callable(status_builder):
+                    try:
+                        store_status = status_builder()
+                    except Exception:
+                        self._cache_io_exception_count += 1
+                        store_status = None
+                else:
                     store_status = None
                 if isinstance(store_status, dict):
-                    base.update(
-                        {
-                            key: store_status.get(key)
-                            for key in base
-                            if key in store_status
-                        }
+                    for key in base:
+                        if key in store_status and key != "failure_count":
+                            base[key] = store_status.get(key)
+                    storage_failures = _nonnegative_count(
+                        store_status.get("failure_count")
                     )
+                    if storage_failures is not None:
+                        base["failure_count"] = storage_failures
+                        store_reports_failure_count = True
             memory_ready = self._artifact_revision == self._database_revision
             if self._build_started_at and self._build_finished_at is None:
                 base["state"] = "rebuilding"
             elif memory_ready and base["state"] in {"empty", "unavailable"}:
                 base["state"] = "ready"
+            hit_count = self._memory_hit_count + self._disk_hit_count
+            hit_rate = (
+                hit_count / self._cache_access_count
+                if self._cache_access_count
+                else None
+            )
+            storage_failures = base["failure_count"]
+            boundary_failures = (
+                0
+                if store_reports_failure_count
+                else (
+                    self._cache_io_exception_count
+                    + self._cache_save_rejection_count
+                )
+            )
             base.update(
                 {
                     "last_access": self._last_cache_access,
@@ -165,6 +198,19 @@ class ForecastService:
                     "memory_ready": memory_ready,
                     "build_started_at": self._build_started_at,
                     "build_finished_at": self._build_finished_at,
+                    "access_count": self._cache_access_count,
+                    "memory_hit_count": self._memory_hit_count,
+                    "disk_hit_count": self._disk_hit_count,
+                    "rebuild_count": self._rebuild_count,
+                    "rebuild_failure_count": self._rebuild_failure_count,
+                    "hit_rate": hit_rate,
+                    "failure_count": (
+                        storage_failures
+                        + boundary_failures
+                        + self._cache_restore_failure_count
+                        + self._rebuild_failure_count
+                    ),
+                    "last_rebuild_seconds": self._last_rebuild_seconds,
                 }
             )
             return base
@@ -406,6 +452,7 @@ class ForecastService:
         assignments,
         assignment_identity,
     ):
+        self._cache_access_count += 1
         same_database_revision = (
             self._artifact_revision == self._database_revision
         )
@@ -423,6 +470,7 @@ class ForecastService:
         )
         if same_revision and not richer_snapshot and not corrected_snapshot:
             self._last_cache_access = "memory_hit"
+            self._memory_hit_count += 1
             return (
                 self._artifact_frame,
                 self._artifact_provider,
@@ -439,26 +487,37 @@ class ForecastService:
         market_signature = _market_signature(coverage, fingerprints)
         artifact = self._load_persistent_artifact(identity, market_signature)
         if artifact is not None:
-            provider = self._provider_factory(artifact.frame)
-            _validate_provider_identity(provider, self.model_key, self.model_version)
-            self._publish_artifacts(
-                artifact.frame,
-                provider,
-                artifact.evaluations,
-                artifact.risk_context,
-                coverage,
-                fingerprints,
-                assignment_identity,
-            )
-            self._last_cache_access = "disk_hit"
-            return (
-                artifact.frame,
-                provider,
-                artifact.evaluations,
-                artifact.risk_context,
-            )
+            try:
+                provider = self._provider_factory(artifact.frame)
+                _validate_provider_identity(
+                    provider,
+                    self.model_key,
+                    self.model_version,
+                )
+            except Exception:
+                self._cache_restore_failure_count += 1
+            else:
+                self._publish_artifacts(
+                    artifact.frame,
+                    provider,
+                    artifact.evaluations,
+                    artifact.risk_context,
+                    coverage,
+                    fingerprints,
+                    assignment_identity,
+                )
+                self._last_cache_access = "disk_hit"
+                self._disk_hit_count += 1
+                return (
+                    artifact.frame,
+                    provider,
+                    artifact.evaluations,
+                    artifact.risk_context,
+                )
         self._build_started_at = _utc_now()
         self._build_finished_at = None
+        rebuild_started_at = perf_counter()
+        self._rebuild_count += 1
         try:
             frame = attach_forward_targets(build_feature_frame(histories))
             provider = self._provider_factory(frame)
@@ -481,8 +540,15 @@ class ForecastService:
                     ).to_dict()
                     for horizon in SUPPORTED_HORIZONS
                 }
+        except Exception:
+            self._rebuild_failure_count += 1
+            raise
         finally:
             self._build_finished_at = _utc_now()
+            self._last_rebuild_seconds = max(
+                0.0,
+                perf_counter() - rebuild_started_at,
+            )
         self._publish_artifacts(
             frame,
             provider,
@@ -535,6 +601,7 @@ class ForecastService:
         try:
             artifact = self._artifact_store.load(identity, market_signature)
         except Exception:
+            self._cache_io_exception_count += 1
             return None
         return artifact
 
@@ -542,11 +609,15 @@ class ForecastService:
         if self._artifact_store is None:
             return False
         try:
-            return bool(
+            saved = bool(
                 self._artifact_store.save(identity, market_signature, artifact)
             )
         except Exception:
+            self._cache_io_exception_count += 1
             return False
+        if not saved:
+            self._cache_save_rejection_count += 1
+        return saved
 
     def _publish_artifacts(
         self,
@@ -868,6 +939,12 @@ def _validate_provider_identity(provider, model_key, model_version):
         raise ValueError("provider identity does not match provider_factory")
 
 
+def _nonnegative_count(value):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def _utc_now():
     return datetime.now(timezone.utc).isoformat()
 
@@ -884,4 +961,20 @@ def _unavailable_cache_status():
         "risk_context_version": None,
         "format_version": None,
         "size_bytes": 0,
+        "load_count": 0,
+        "load_hit_count": 0,
+        "load_miss_count": 0,
+        "save_count": 0,
+        "save_success_count": 0,
+        "load_hit_rate": None,
+        "last_read_seconds": None,
+        "last_write_seconds": None,
+        "access_count": 0,
+        "memory_hit_count": 0,
+        "disk_hit_count": 0,
+        "rebuild_count": 0,
+        "rebuild_failure_count": 0,
+        "hit_rate": None,
+        "failure_count": 0,
+        "last_rebuild_seconds": None,
     }

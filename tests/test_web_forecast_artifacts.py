@@ -116,6 +116,41 @@ class ForecastArtifactStoreTest(unittest.TestCase):
             }.issubset(columns)
         )
 
+    def test_status_tracks_hit_miss_failure_and_io_timings(self):
+        store = ForecastArtifactStore(self.path)
+
+        self.assertTrue(store.save(_identity(), "market-a", _artifact()))
+        self.assertIsNotNone(store.load(_identity(), "market-a"))
+        self.assertIsNone(store.load(_identity(), "market-b"))
+
+        status = store.status()
+        self.assertEqual(status["load_count"], 2)
+        self.assertEqual(status["load_hit_count"], 1)
+        self.assertEqual(status["load_miss_count"], 1)
+        self.assertEqual(status["save_count"], 1)
+        self.assertEqual(status["save_success_count"], 1)
+        self.assertEqual(status["failure_count"], 0)
+        self.assertEqual(status["load_hit_rate"], 0.5)
+        self.assertGreaterEqual(status["last_read_seconds"], 0.0)
+        self.assertGreaterEqual(status["last_write_seconds"], 0.0)
+
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """
+                UPDATE forecast_artifacts
+                SET payload_checksum = 'broken'
+                WHERE market_signature = 'market-a'
+                """
+            )
+
+        self.assertIsNone(store.load(_identity(), "market-a"))
+        failed = store.status()
+        self.assertEqual(failed["load_count"], 3)
+        self.assertEqual(failed["load_hit_count"], 1)
+        self.assertEqual(failed["load_miss_count"], 1)
+        self.assertEqual(failed["failure_count"], 1)
+        self.assertAlmostEqual(failed["load_hit_rate"], 1.0 / 3.0)
+
     def test_prior_schema_migrates_in_place_without_reusing_legacy_identity(self):
         with sqlite3.connect(self.path) as connection:
             connection.execute(
@@ -218,6 +253,15 @@ class ForecastArtifactStoreTest(unittest.TestCase):
                 "risk_context_version": None,
                 "format_version": None,
                 "size_bytes": 0,
+                "load_count": 0,
+                "load_hit_count": 0,
+                "load_miss_count": 0,
+                "save_count": 0,
+                "save_success_count": 0,
+                "failure_count": 0,
+                "load_hit_rate": None,
+                "last_read_seconds": None,
+                "last_write_seconds": None,
             },
         )
         self.assertFalse(self.path.exists())
