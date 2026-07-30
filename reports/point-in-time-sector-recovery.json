@@ -1,0 +1,366 @@
+{
+  "assignment_count": 15744,
+  "configuration": {
+    "assignment_effective": "next_recorded_stock_session",
+    "assignment_refresh": "completed_month_end",
+    "assignment_rule_version": "market_behavior_v1_monthly_point_in_time_v1",
+    "bootstrap_block_days": 20,
+    "bootstrap_samples": 2000,
+    "bootstrap_seed": 20260730,
+    "candidate_proxies": {
+      "communication": "XLC",
+      "consumer_discretionary": "XLY",
+      "consumer_staples": "XLP",
+      "energy": "XLE",
+      "financials": "XLF",
+      "health_care": "XLV",
+      "industrials": "XLI",
+      "materials": "XLB",
+      "real_estate": "XLRE",
+      "semiconductor": "SOXX",
+      "software": "IGV",
+      "technology": "XLK",
+      "utilities": "XLU"
+    },
+    "matching": "reuse_frozen_pairs_without_rematching",
+    "maximum_assignment_age_calendar_days": 45,
+    "minimum_fold_pair_availability": 0.85,
+    "pair_cohort": "frozen_tail_direction_8199_pairs",
+    "return_endpoint_policy": "exact_dates_no_adjacent_fill",
+    "return_window_stock_sessions": 20
+  },
+  "coverage": [
+    {
+      "both_available_count": 1041,
+      "feature": "pit_sector_relative_strength_20",
+      "fold": 1,
+      "pair_availability": 0.8829516539440203,
+      "pair_count": 1179
+    },
+    {
+      "both_available_count": 630,
+      "feature": "pit_sector_relative_strength_20",
+      "fold": 2,
+      "pair_availability": 0.6788793103448276,
+      "pair_count": 928
+    },
+    {
+      "both_available_count": 1589,
+      "feature": "pit_sector_relative_strength_20",
+      "fold": 3,
+      "pair_availability": 0.9325117370892019,
+      "pair_count": 1704
+    },
+    {
+      "both_available_count": 1173,
+      "feature": "pit_sector_relative_strength_20",
+      "fold": 4,
+      "pair_availability": 0.8701780415430267,
+      "pair_count": 1348
+    },
+    {
+      "both_available_count": 2714,
+      "feature": "pit_sector_relative_strength_20",
+      "fold": 5,
+      "pair_availability": 0.8927631578947368,
+      "pair_count": 3040
+    },
+    {
+      "both_available_count": 1041,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "fold": 1,
+      "pair_availability": 0.8829516539440203,
+      "pair_count": 1179
+    },
+    {
+      "both_available_count": 630,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "fold": 2,
+      "pair_availability": 0.6788793103448276,
+      "pair_count": 928
+    },
+    {
+      "both_available_count": 1589,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "fold": 3,
+      "pair_availability": 0.9325117370892019,
+      "pair_count": 1704
+    },
+    {
+      "both_available_count": 1173,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "fold": 4,
+      "pair_availability": 0.8701780415430267,
+      "pair_count": 1348
+    },
+    {
+      "both_available_count": 2714,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "fold": 5,
+      "pair_availability": 0.8927631578947368,
+      "pair_count": 3040
+    },
+    {
+      "both_available_count": 1041,
+      "feature": "pit_sector_assignment_age_days",
+      "fold": 1,
+      "pair_availability": 0.8829516539440203,
+      "pair_count": 1179
+    },
+    {
+      "both_available_count": 630,
+      "feature": "pit_sector_assignment_age_days",
+      "fold": 2,
+      "pair_availability": 0.6788793103448276,
+      "pair_count": 928
+    },
+    {
+      "both_available_count": 1589,
+      "feature": "pit_sector_assignment_age_days",
+      "fold": 3,
+      "pair_availability": 0.9325117370892019,
+      "pair_count": 1704
+    },
+    {
+      "both_available_count": 1173,
+      "feature": "pit_sector_assignment_age_days",
+      "fold": 4,
+      "pair_availability": 0.8701780415430267,
+      "pair_count": 1348
+    },
+    {
+      "both_available_count": 2714,
+      "feature": "pit_sector_assignment_age_days",
+      "fold": 5,
+      "pair_availability": 0.8927631578947368,
+      "pair_count": 3040
+    },
+    {
+      "both_available_count": 1041,
+      "feature": "pit_sector_residual_correlation",
+      "fold": 1,
+      "pair_availability": 0.8829516539440203,
+      "pair_count": 1179
+    },
+    {
+      "both_available_count": 630,
+      "feature": "pit_sector_residual_correlation",
+      "fold": 2,
+      "pair_availability": 0.6788793103448276,
+      "pair_count": 928
+    },
+    {
+      "both_available_count": 1589,
+      "feature": "pit_sector_residual_correlation",
+      "fold": 3,
+      "pair_availability": 0.9325117370892019,
+      "pair_count": 1704
+    },
+    {
+      "both_available_count": 1173,
+      "feature": "pit_sector_residual_correlation",
+      "fold": 4,
+      "pair_availability": 0.8701780415430267,
+      "pair_count": 1348
+    },
+    {
+      "both_available_count": 2714,
+      "feature": "pit_sector_residual_correlation",
+      "fold": 5,
+      "pair_availability": 0.8927631578947368,
+      "pair_count": 3040
+    }
+  ],
+  "database": "research_prices.db",
+  "database_content_fingerprint": "05696529bdf663402e8921034112ceb815761a96bbc03ddaaac149f834c26dbb",
+  "decision": {
+    "admitted_features": [],
+    "authorized_consumers": [
+      "offline_research_only"
+    ],
+    "conditional_direction_challenger_supported": false,
+    "online_authority": "none",
+    "reason": "未有方向特征同时通过全局与逐折覆盖门槛。",
+    "status": "no_features_admitted"
+  },
+  "dirty_worktree": false,
+  "feature_evidence": [
+    {
+      "adjusted_p_value": 0.844,
+      "both_available_count": 7147,
+      "case_availability": 0.9390169532869862,
+      "case_available_count": 7699,
+      "case_median": 16.0,
+      "ci_high": 1.033589296429642,
+      "ci_low": -1.2341224634388779,
+      "consistent_folds": 2,
+      "consistent_large_groups": 2,
+      "control_availability": 0.9191364800585438,
+      "control_available_count": 7536,
+      "control_median": 15.0,
+      "feature": "pit_sector_assignment_age_days",
+      "feature_type": "numeric",
+      "final_gate_passed": false,
+      "final_gate_reasons": [
+        "effect_size_below_gate",
+        "confidence_interval_crosses_zero",
+        "fold_stability_below_gate",
+        "diagnostic_only_not_directional",
+        "fold_pair_availability_below_gate"
+      ],
+      "fold_availability_gate_passed": false,
+      "gate_passed": false,
+      "gate_reasons": [
+        "effect_size_below_gate",
+        "confidence_interval_crosses_zero",
+        "fold_stability_below_gate"
+      ],
+      "minimum_fold_pair_availability": 0.6788793103448276,
+      "pair_count": 8199,
+      "paired_mean_difference": -0.11277459073737232,
+      "paired_median_difference": 0.0,
+      "provenance": "observation_date_causal",
+      "raw_p_value": 0.844,
+      "standardized_difference": -0.010025231261027527,
+      "status": "available"
+    },
+    {
+      "adjusted_p_value": 0.002,
+      "both_available_count": 7147,
+      "case_availability": 0.9390169532869862,
+      "case_available_count": 7699,
+      "case_median": -0.007844514425996207,
+      "ci_high": -0.0030106380474029947,
+      "ci_low": -0.010648354062386286,
+      "consistent_folds": 5,
+      "consistent_large_groups": 3,
+      "control_availability": 0.9191364800585438,
+      "control_available_count": 7536,
+      "control_median": -0.0018374575014233896,
+      "feature": "pit_sector_relative_strength_20",
+      "feature_type": "numeric",
+      "final_gate_passed": false,
+      "final_gate_reasons": [
+        "effect_size_below_gate",
+        "fold_pair_availability_below_gate"
+      ],
+      "fold_availability_gate_passed": false,
+      "gate_passed": false,
+      "gate_reasons": [
+        "effect_size_below_gate"
+      ],
+      "minimum_fold_pair_availability": 0.6788793103448276,
+      "pair_count": 8199,
+      "paired_mean_difference": -0.007045533859445862,
+      "paired_median_difference": -0.0026341891191502542,
+      "provenance": "observation_date_causal",
+      "raw_p_value": 0.001,
+      "standardized_difference": -0.1023906049193592,
+      "status": "available"
+    },
+    {
+      "adjusted_p_value": 0.002,
+      "both_available_count": 7147,
+      "case_availability": 0.9390169532869862,
+      "case_available_count": 7699,
+      "case_median": 0.242266977288429,
+      "ci_high": 0.023406440838723584,
+      "ci_low": 0.004575024171604496,
+      "consistent_folds": 5,
+      "consistent_large_groups": 3,
+      "control_availability": 0.9191364800585438,
+      "control_available_count": 7536,
+      "control_median": 0.23553111371880317,
+      "feature": "pit_sector_residual_correlation",
+      "feature_type": "numeric",
+      "final_gate_passed": false,
+      "final_gate_reasons": [
+        "effect_size_below_gate",
+        "diagnostic_only_not_directional",
+        "fold_pair_availability_below_gate"
+      ],
+      "fold_availability_gate_passed": false,
+      "gate_passed": false,
+      "gate_reasons": [
+        "effect_size_below_gate"
+      ],
+      "minimum_fold_pair_availability": 0.6788793103448276,
+      "pair_count": 8199,
+      "paired_mean_difference": 0.013670837146575803,
+      "paired_median_difference": 0.0,
+      "provenance": "observation_date_causal",
+      "raw_p_value": 0.001,
+      "standardized_difference": 0.07323106149333392,
+      "status": "available"
+    },
+    {
+      "adjusted_p_value": 0.009333333333333334,
+      "both_available_count": 7147,
+      "case_availability": 0.9390169532869862,
+      "case_available_count": 7699,
+      "case_median": -0.032270332020791104,
+      "ci_high": -0.01325592911058205,
+      "ci_low": -0.08181539642773325,
+      "consistent_folds": 4,
+      "consistent_large_groups": 3,
+      "control_availability": 0.9191364800585438,
+      "control_available_count": 7536,
+      "control_median": 0.0019216448512281437,
+      "feature": "pit_stock_sector_relative_strength_20",
+      "feature_type": "numeric",
+      "final_gate_passed": false,
+      "final_gate_reasons": [
+        "effect_size_below_gate",
+        "fold_pair_availability_below_gate"
+      ],
+      "fold_availability_gate_passed": false,
+      "gate_passed": false,
+      "gate_reasons": [
+        "effect_size_below_gate"
+      ],
+      "minimum_fold_pair_availability": 0.6788793103448276,
+      "pair_count": 8199,
+      "paired_mean_difference": -0.04735791577848852,
+      "paired_median_difference": -0.04481760484950803,
+      "provenance": "observation_date_causal",
+      "raw_p_value": 0.007,
+      "standardized_difference": -0.07225898029240828,
+      "status": "available"
+    }
+  ],
+  "model": {
+    "lifecycle": "research",
+    "online_authority": "none"
+  },
+  "pair_cohort_fingerprint": "2f1b2b63a918fba61adc49c75f99fcb3b46fbf55edd11909e77a7307f367c6e3",
+  "pair_count": 8199,
+  "source_commit": "d97e0006b48d23300129b32ca52abb588e1e3733",
+  "study_version": "point_in_time_sector_recovery_v1",
+  "ticker_count": 209,
+  "unavailable_reasons": [
+    {
+      "count": 7699,
+      "rate": 0.9390169532869862,
+      "reason": "available",
+      "side": "case"
+    },
+    {
+      "count": 500,
+      "rate": 0.06098304671301378,
+      "reason": "no_effective_assignment",
+      "side": "case"
+    },
+    {
+      "count": 7536,
+      "rate": 0.9191364800585438,
+      "reason": "available",
+      "side": "control"
+    },
+    {
+      "count": 663,
+      "rate": 0.08086351994145627,
+      "reason": "no_effective_assignment",
+      "side": "control"
+    }
+  ]
+}
