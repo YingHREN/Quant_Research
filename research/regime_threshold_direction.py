@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -14,10 +16,138 @@ from research.market_direction_model import (
 
 
 HORIZON = 5
+DIRECTION_CLASSES = ("down", "neutral", "up")
+REGIME_PRIOR_STRENGTH = 1_000.0
 
 
 class RegimeThresholdDataUnavailable(RuntimeError):
     """Raised when required aligned research inputs are unavailable."""
+
+
+@dataclass(frozen=True)
+class RegimePriors:
+    """Immutable global and market-regime direction priors."""
+
+    classes: tuple
+    global_values: tuple
+    regime_values: object
+
+    @property
+    def global_prior(self):
+        return np.asarray(self.global_values, dtype=float)
+
+    def regime_prior(self, regime):
+        if regime is None:
+            return self.global_prior
+        values = self.regime_values.get(str(regime).strip())
+        if values is None:
+            return self.global_prior
+        return np.asarray(values, dtype=float)
+
+
+def fit_regime_priors(
+    labels,
+    weights,
+    regimes,
+    classes=DIRECTION_CLASSES,
+    prior_strength=REGIME_PRIOR_STRENGTH,
+):
+    """Fit fixed-strength regime class priors from training rows only."""
+    checked_classes = tuple(map(str, classes))
+    if (
+        not checked_classes
+        or len(set(checked_classes)) != len(checked_classes)
+    ):
+        raise ValueError("classes must be unique and non-empty")
+    checked_strength = float(prior_strength)
+    if not np.isfinite(checked_strength) or checked_strength <= 0.0:
+        raise ValueError("prior_strength must be finite and positive")
+    label_values = np.asarray(labels, dtype=object).copy()
+    weight_values = np.asarray(weights, dtype=float).copy()
+    regime_values = np.asarray(regimes, dtype=object).copy()
+    if (
+        not len(label_values)
+        or len(label_values) != len(weight_values)
+        or len(label_values) != len(regime_values)
+    ):
+        raise ValueError("prior inputs must have the same non-zero length")
+    if (
+        not np.isfinite(weight_values).all()
+        or np.any(weight_values <= 0.0)
+    ):
+        raise ValueError("weights must be finite and positive")
+    unknown = sorted(set(map(str, label_values)).difference(checked_classes))
+    if unknown:
+        raise ValueError(f"direction labels must be supported: {unknown}")
+
+    global_counts = _weighted_counts(
+        label_values,
+        weight_values,
+        checked_classes,
+    )
+    global_prior = global_counts / float(global_counts.sum())
+    normalized_regimes = np.asarray(
+        [
+            None
+            if value is None or not str(value).strip()
+            else str(value).strip()
+            for value in regime_values
+        ],
+        dtype=object,
+    )
+    posterior_values = {}
+    known = sorted(
+        {value for value in normalized_regimes if value is not None}
+    )
+    for regime in known:
+        selected = normalized_regimes == regime
+        counts = _weighted_counts(
+            label_values[selected],
+            weight_values[selected],
+            checked_classes,
+        )
+        posterior = (
+            counts + checked_strength * global_prior
+        ) / (float(counts.sum()) + checked_strength)
+        posterior_values[regime] = tuple(map(float, posterior))
+    return RegimePriors(
+        classes=checked_classes,
+        global_values=tuple(map(float, global_prior)),
+        regime_values=MappingProxyType(posterior_values),
+    )
+
+
+def adjust_regime_log_probabilities(
+    log_probabilities,
+    regimes,
+    priors,
+):
+    """Add known training-regime prior deltas to ordered log scores."""
+    if not isinstance(priors, RegimePriors):
+        raise TypeError("priors must be RegimePriors")
+    scores = np.asarray(log_probabilities, dtype=float).copy()
+    regime_values = np.asarray(regimes, dtype=object)
+    if (
+        scores.ndim != 2
+        or scores.shape[1] != len(priors.classes)
+        or scores.shape[0] != len(regime_values)
+    ):
+        raise ValueError("scores and regimes must have compatible shapes")
+    if not np.isfinite(scores).all():
+        raise ValueError("log_probabilities must be finite")
+    epsilon = np.finfo(float).tiny
+    global_log = np.log(np.clip(priors.global_prior, epsilon, 1.0))
+    for position, raw_regime in enumerate(regime_values):
+        if raw_regime is None or not str(raw_regime).strip():
+            continue
+        regime = str(raw_regime).strip()
+        if regime not in priors.regime_values:
+            continue
+        regime_log = np.log(
+            np.clip(priors.regime_prior(regime), epsilon, 1.0)
+        )
+        scores[position] += regime_log - global_log
+    return scores
 
 
 def attach_absolute_and_qqq_relative_targets(
@@ -170,3 +300,13 @@ def _nullable_directions(returns):
             HORIZON,
         )
     return result
+
+
+def _weighted_counts(labels, weights, classes):
+    return np.asarray(
+        [
+            float(weights[np.asarray(labels) == label].sum())
+            for label in classes
+        ],
+        dtype=float,
+    )

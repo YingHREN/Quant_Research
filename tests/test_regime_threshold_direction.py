@@ -7,7 +7,9 @@ import pandas as pd
 
 from research.regime_threshold_direction import (
     RegimeThresholdDataUnavailable,
+    adjust_regime_log_probabilities,
     attach_absolute_and_qqq_relative_targets,
+    fit_regime_priors,
 )
 
 
@@ -150,6 +152,117 @@ class TargetAlignmentTest(unittest.TestCase):
                 frame,
                 {"AAA": stock, "QQQ": qqq},
             )
+
+
+class RegimePriorTest(unittest.TestCase):
+    def _training_rows(self):
+        labels = np.asarray(
+            ["down"]
+            + ["down"] * 100
+            + ["neutral"] * 200
+            + ["up"] * 200,
+            dtype=object,
+        )
+        regimes = np.asarray(
+            ["small"]
+            + ["large"] * 100
+            + ["baseline"] * 400,
+            dtype=object,
+        )
+        return labels, regimes
+
+    def test_small_regime_shrinks_more_strongly_than_large_regime(self):
+        labels, regimes = self._training_rows()
+
+        priors = fit_regime_priors(
+            labels,
+            np.ones(len(labels)),
+            regimes,
+        )
+
+        global_down = priors.global_prior[0]
+        small_down = priors.regime_prior("small")[0]
+        large_down = priors.regime_prior("large")[0]
+        self.assertGreater(small_down, global_down)
+        self.assertGreater(large_down, small_down)
+        np.testing.assert_allclose(priors.global_prior.sum(), 1.0)
+        for regime in ("small", "large", "baseline"):
+            np.testing.assert_allclose(
+                priors.regime_prior(regime).sum(),
+                1.0,
+            )
+
+    def test_unseen_or_unavailable_regime_adds_zero_correction(self):
+        labels, regimes = self._training_rows()
+        priors = fit_regime_priors(
+            labels,
+            np.ones(len(labels)),
+            regimes,
+        )
+        scores = np.log(
+            np.asarray(
+                [
+                    [0.2, 0.3, 0.5],
+                    [0.2, 0.3, 0.5],
+                    [0.2, 0.3, 0.5],
+                ]
+            )
+        )
+
+        adjusted = adjust_regime_log_probabilities(
+            scores,
+            ["large", "unseen", None],
+            priors,
+        )
+
+        self.assertFalse(np.array_equal(adjusted[0], scores[0]))
+        np.testing.assert_allclose(adjusted[1], scores[1])
+        np.testing.assert_allclose(adjusted[2], scores[2])
+
+    def test_inputs_are_immutable_and_invalid_weights_fail_closed(self):
+        labels, regimes = self._training_rows()
+        weights = np.ones(len(labels))
+        labels_before = labels.copy()
+        regimes_before = regimes.copy()
+        weights_before = weights.copy()
+
+        fit_regime_priors(labels, weights, regimes)
+
+        np.testing.assert_array_equal(labels, labels_before)
+        np.testing.assert_array_equal(regimes, regimes_before)
+        np.testing.assert_array_equal(weights, weights_before)
+        invalid = weights.copy()
+        invalid[-1] = np.nan
+        with self.assertRaisesRegex(ValueError, "weights"):
+            fit_regime_priors(labels, invalid, regimes)
+
+    def test_future_rows_do_not_change_already_fitted_prior(self):
+        labels, regimes = self._training_rows()
+        first = fit_regime_priors(
+            labels,
+            np.ones(len(labels)),
+            regimes,
+        )
+        extended_labels = np.concatenate(
+            (labels, np.asarray(["up"] * 50, dtype=object))
+        )
+        extended_regimes = np.concatenate(
+            (regimes, np.asarray(["large"] * 50, dtype=object))
+        )
+        fit_regime_priors(
+            extended_labels,
+            np.ones(len(extended_labels)),
+            extended_regimes,
+        )
+
+        np.testing.assert_allclose(
+            first.regime_prior("large"),
+            fit_regime_priors(
+                labels,
+                np.ones(len(labels)),
+                regimes,
+            ).regime_prior("large"),
+        )
 
 
 if __name__ == "__main__":
