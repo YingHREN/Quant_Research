@@ -8,7 +8,9 @@ from research.market_direction_model import (
     _directions,
     attach_next_open_targets,
     chronological_purged_folds,
+    direction_labels,
     evaluate_direction_ablation,
+    training_only_design,
     walk_forward_direction_predictions,
     walk_forward_boosted_predictions,
     walk_forward_ridge_predictions,
@@ -61,6 +63,48 @@ def feature_frame(periods=90):
 
 
 class MarketDirectionModelTest(unittest.TestCase):
+    def test_public_direction_labels_preserve_frozen_neutral_bands(self):
+        values = pd.Series([-0.04, -0.01, 0.0, 0.01, 0.04])
+
+        self.assertEqual(
+            direction_labels(values, 5).tolist(),
+            ["down", "neutral", "neutral", "neutral", "up"],
+        )
+        with self.assertRaisesRegex(ValueError, "supported"):
+            direction_labels(values, 7)
+
+    def test_public_training_design_is_fit_only_on_training_rows(self):
+        train = pd.DataFrame(
+            {
+                "feature": [1.0, 2.0, 3.0, np.nan],
+                "constant": [4.0, 4.0, 4.0, 4.0],
+            }
+        )
+        test = pd.DataFrame(
+            {
+                "feature": [2.5, np.nan],
+                "constant": [4.0, 4.0],
+            }
+        )
+        changed_test = test.copy(deep=True)
+        changed_test.loc[0, "feature"] = 1e200
+        train_before = train.copy(deep=True)
+
+        first_train, first_test = training_only_design(
+            train,
+            test,
+            ("feature", "constant"),
+        )
+        second_train, second_test = training_only_design(
+            train,
+            changed_test,
+            ("feature", "constant"),
+        )
+
+        np.testing.assert_array_equal(first_train, second_train)
+        self.assertFalse(np.array_equal(first_test, second_test))
+        pd.testing.assert_frame_equal(train, train_before)
+
     def test_ten_session_direction_band_is_supported(self):
         values = pd.Series([-0.02, 0.0, 0.02])
 
