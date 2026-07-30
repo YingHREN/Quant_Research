@@ -671,7 +671,8 @@ def attach_absolute_and_qqq_relative_targets(
     )
     result["maximum_adverse_excursion_5"] = np.nan
 
-    qqq_target, qqq_entry, qqq_end = _executable_series(qqq)
+    qqq_open = pd.to_numeric(qqq["Open"], errors="coerce")
+    qqq_close = pd.to_numeric(qqq["Close"], errors="coerce")
     tickers = result.index.get_level_values("ticker").unique()
     for raw_ticker in tickers:
         ticker = str(raw_ticker)
@@ -689,31 +690,26 @@ def attach_absolute_and_qqq_relative_targets(
         )
         mature = absolute.notna()
         if mature.any():
-            qqq_values = qqq_target.reindex(observation_dates)
             expected_entry = pd.to_datetime(
                 result.loc[keys, "entry_date_5"]
             )
             expected_end = pd.to_datetime(
                 result.loc[keys, "label_end_date_5"]
             )
-            aligned = (
-                qqq_values.notna().to_numpy()
-                & (
-                    qqq_entry.reindex(observation_dates).to_numpy()
-                    == expected_entry.to_numpy()
-                )
-                & (
-                    qqq_end.reindex(observation_dates).to_numpy()
-                    == expected_end.to_numpy()
-                )
+            benchmark_entry = qqq_open.reindex(
+                pd.DatetimeIndex(expected_entry.to_numpy())
+            ).to_numpy(dtype=float)
+            benchmark_exit = qqq_close.reindex(
+                pd.DatetimeIndex(expected_end.to_numpy())
+            ).to_numpy(dtype=float)
+            benchmark_return = (
+                benchmark_exit
+                / np.where(benchmark_entry > 0.0, benchmark_entry, np.nan)
+                - 1.0
             )
-            if not bool(np.all(aligned[mature.to_numpy()])):
-                raise RegimeThresholdDataUnavailable(
-                    f"QQQ sessions are not aligned for {ticker}"
-                )
             relative = (
                 absolute.to_numpy(dtype=float)
-                - qqq_values.to_numpy(dtype=float)
+                - benchmark_return
             )
             result.loc[keys, "qqq_relative_return_5"] = relative
             result.loc[keys, "qqq_relative_direction_5"] = (
@@ -991,17 +987,56 @@ def _fit_logistic(design, labels, weights):
 
 
 def _ordered_probabilities(model, design):
-    raw = np.asarray(model.predict_proba(design), dtype=float)
     positions = {
         str(label): position
         for position, label in enumerate(model.classes_)
     }
     if set(positions) != set(DIRECTION_CLASSES):
         raise ValueError("fitted model must contain all direction classes")
-    return raw[
+    values = np.asarray(design, dtype=float)
+    coefficients = np.asarray(model.coef_, dtype=float)
+    intercept = np.asarray(model.intercept_, dtype=float)
+    if (
+        not np.isfinite(values).all()
+        or not np.isfinite(coefficients).all()
+        or not np.isfinite(intercept).all()
+    ):
+        raise ValueError("model and design must contain finite values")
+    maximum_value = max(1.0, float(np.max(np.abs(values))))
+    maximum_coefficient = max(
+        1.0,
+        float(np.max(np.abs(coefficients))),
+        float(np.max(np.abs(intercept))),
+    )
+    log_upper_bound = (
+        np.log(maximum_value)
+        + np.log(maximum_coefficient)
+        + np.log(max(1, values.shape[1]))
+    )
+    safe_logit_magnitude = 1e100
+    scale = float(
+        np.exp(max(0.0, log_upper_bound - np.log(safe_logit_magnitude)))
+    )
+    logits = (
+        np.einsum(
+            "ij,kj->ik",
+            values,
+            coefficients / scale,
+            optimize=False,
+        )
+        + intercept / scale
+    )
+    logits = logits[
         :,
         [positions[label] for label in DIRECTION_CLASSES],
     ]
+    maximum = np.max(logits, axis=1, keepdims=True)
+    exponentiated = np.exp(logits - maximum)
+    probabilities = exponentiated / exponentiated.sum(
+        axis=1,
+        keepdims=True,
+    )
+    return np.asarray(probabilities, dtype=float)
 
 
 def _normalized_probabilities(log_probabilities):

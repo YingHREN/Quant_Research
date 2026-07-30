@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -353,6 +354,11 @@ def render_report(metrics, relative_metrics, manifest):
     decision = manifest["decision"]
     gate = "通过" if decision["metric_gate_passed"] else "未通过"
     reasons = decision["metric_gate_reasons"] or ["无"]
+    fold_diagnostics = manifest.get("fold_diagnostics") or []
+    selected_folds = sum(
+        row.get("threshold_status") == "available"
+        for row in fold_diagnostics
+    )
     primary = metrics.loc[
         (metrics["scope"] == "all")
         & (metrics["fold"] == 0)
@@ -377,6 +383,7 @@ def render_report(metrics, relative_metrics, manifest):
             "",
             f"- 历史指标门槛：{gate}",
             "- 线上权限：无；不修改 Ridge、风险否决、API 或 UI。",
+            f"- 经济阈值可用折：{selected_folds}/{len(fold_diagnostics)}。",
             f"- 未通过原因：{', '.join(map(str, reasons))}",
             "",
             "## 绝对方向",
@@ -534,6 +541,7 @@ def main(argv=None):
         histories,
         analysis_tickers,
     )
+    source_commit, dirty_worktree = _git_state()
     manifest = {
         "study_version": "regime_threshold_direction_v1",
         "latest_date": pd.Timestamp(
@@ -546,6 +554,8 @@ def main(argv=None):
         "horizon": HORIZON,
         "database": Path(args.database).name,
         "database_content_fingerprint": fingerprint,
+        "source_commit": source_commit,
+        "dirty_worktree": dirty_worktree,
         "configuration": {
             "cohort_seed": args.seed,
             "maximum_tickers": args.max_tickers,
@@ -755,6 +765,30 @@ def _require_same_keys(expected, actual, specification):
         raise RuntimeError(
             f"{specification} does not share identical outer test keys"
         )
+
+
+def _git_state():
+    repository = Path(__file__).resolve().parents[1]
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        return commit, bool(status.strip())
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable", True
 
 
 def _attach_mae(predictions, frame):

@@ -8,6 +8,7 @@ import pandas as pd
 from research.market_direction_model import direction_labels
 from research.regime_threshold_direction import (
     RegimeThresholdDataUnavailable,
+    _ordered_probabilities,
     adjust_regime_log_probabilities,
     attach_absolute_and_qqq_relative_targets,
     fit_regime_priors,
@@ -132,7 +133,7 @@ class TargetAlignmentTest(unittest.TestCase):
             pd.isna(result.loc[tail, "qqq_relative_direction_5"])
         )
 
-    def test_missing_or_misaligned_qqq_fails_closed(self):
+    def test_missing_qqq_fails_and_missing_exact_endpoints_stay_null(self):
         stock = _history(exit_close=102.0, minimum_low=90.0)
         frame = _feature_frame({"AAA": stock})
         with self.assertRaisesRegex(
@@ -149,14 +150,38 @@ class TargetAlignmentTest(unittest.TestCase):
             minimum_low=94.0,
             start="2026-03-02",
         )
-        with self.assertRaisesRegex(
-            RegimeThresholdDataUnavailable,
-            "aligned",
-        ):
-            attach_absolute_and_qqq_relative_targets(
-                frame,
-                {"AAA": stock, "QQQ": qqq},
-            )
+        result = attach_absolute_and_qqq_relative_targets(
+            frame,
+            {"AAA": stock, "QQQ": qqq},
+        )
+        self.assertTrue(result["qqq_relative_return_5"].isna().all())
+
+    def test_stock_calendar_gap_uses_its_recorded_exact_qqq_endpoints(self):
+        stock = _history(exit_close=102.0, minimum_low=90.0)
+        qqq = _history(exit_close=105.0, minimum_low=94.0)
+        missing_stock_date = stock.index[3]
+        stock = stock.drop(index=missing_stock_date)
+        frame = _feature_frame({"AAA": stock})
+        observation = stock.index[0]
+        entry = stock.index[1]
+        exit_date = stock.index[5]
+        qqq.loc[entry, "Open"] = 100.0
+        qqq.loc[exit_date, "Close"] = 106.0
+
+        result = attach_absolute_and_qqq_relative_targets(
+            frame,
+            {"AAA": stock, "QQQ": qqq},
+        )
+
+        absolute = result.loc[
+            ("AAA", observation),
+            "absolute_return_5",
+        ]
+        relative = result.loc[
+            ("AAA", observation),
+            "qqq_relative_return_5",
+        ]
+        self.assertAlmostEqual(relative, absolute - 0.06)
 
 
 class RegimePriorTest(unittest.TestCase):
@@ -267,6 +292,37 @@ class RegimePriorTest(unittest.TestCase):
                 np.ones(len(labels)),
                 regimes,
             ).regime_prior("large"),
+        )
+
+
+class StableProbabilityTest(unittest.TestCase):
+    def test_extreme_finite_logits_are_normalized_without_estimator_matmul(self):
+        class FittedModel:
+            classes_ = np.asarray(
+                ["down", "neutral", "up"],
+                dtype=object,
+            )
+            coef_ = np.asarray(
+                [
+                    [1e308, -1e308],
+                    [-1e308, 1e308],
+                    [1e308, 1e308],
+                ]
+            )
+            intercept_ = np.asarray([0.0, 0.0, 0.0])
+
+            def predict_proba(self, design):
+                raise AssertionError("unstable estimator matmul used")
+
+        probabilities = _ordered_probabilities(
+            FittedModel(),
+            np.asarray([[12.0, 11.0], [-12.0, 11.0]]),
+        )
+
+        self.assertTrue(np.isfinite(probabilities).all())
+        np.testing.assert_allclose(
+            probabilities.sum(axis=1),
+            np.ones(2),
         )
 
 
