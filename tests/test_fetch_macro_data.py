@@ -6,7 +6,11 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
-from fetch_macro_data import fetch_initial_release_observations, main
+from fetch_macro_data import (
+    ALL_MACRO_SERIES_IDS,
+    fetch_initial_release_observations,
+    main,
+)
 from web.services.macro_store import MacroObservationStore
 
 
@@ -25,6 +29,15 @@ class Response:
 
 
 class MacroDataFetchTest(unittest.TestCase):
+    def test_cli_catalog_includes_risk_and_policy_series_without_duplicates(self):
+        self.assertIn("DGS2", ALL_MACRO_SERIES_IDS)
+        self.assertIn("DFEDTARU", ALL_MACRO_SERIES_IDS)
+        self.assertIn("WRESBAL", ALL_MACRO_SERIES_IDS)
+        self.assertEqual(
+            len(ALL_MACRO_SERIES_IDS),
+            len(set(ALL_MACRO_SERIES_IDS)),
+        )
+
     def test_skips_window_before_series_entered_alfred(self):
         requests = []
 

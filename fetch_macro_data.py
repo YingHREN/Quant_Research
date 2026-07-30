@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from research.macro_risk import SERIES_IDS
+from research.policy_context import POLICY_SERIES_IDS
 from web.services.macro_store import MacroObservationStore
 
 
@@ -21,6 +22,9 @@ FRED_OBSERVATIONS_URL = (
 )
 DEFAULT_DATABASE = Path(__file__).resolve().parent / "data" / "macro_data.db"
 REALTIME_CHUNK_YEARS = 5
+ALL_MACRO_SERIES_IDS = tuple(
+    dict.fromkeys((*SERIES_IDS, *POLICY_SERIES_IDS))
+)
 
 
 def _add_years(value, years):
@@ -123,8 +127,8 @@ def main(argv=None, *, fetcher=fetch_initial_release_observations):
     parser.add_argument(
         "--series",
         nargs="+",
-        choices=SERIES_IDS,
-        default=list(SERIES_IDS),
+        choices=ALL_MACRO_SERIES_IDS,
+        default=list(ALL_MACRO_SERIES_IDS),
     )
     parser.add_argument(
         "--start",

@@ -28,6 +28,7 @@ class MarketOverviewService:
         revision_getter=lambda: 0,
         max_cache_size=16,
         macro_risk_service=None,
+        policy_context_service=None,
     ):
         if not callable(revision_getter):
             raise TypeError("revision_getter must be callable")
@@ -42,6 +43,7 @@ class MarketOverviewService:
         self._revision_getter = revision_getter
         self._max_cache_size = max_cache_size
         self._macro_risk_service = macro_risk_service
+        self._policy_context_service = policy_context_service
         self._cache = {}
         self._lock = RLock()
 
@@ -70,6 +72,7 @@ class MarketOverviewService:
             "market_evidence_v1",
             "market_regime_gate_v1",
             _macro_cache_token(self._macro_risk_service),
+            _macro_cache_token(self._policy_context_service),
         )
         with self._lock:
             cached = self._cache.get(key)
@@ -102,6 +105,10 @@ class MarketOverviewService:
             )
             payload["macro_risk"] = _macro_payload(
                 self._macro_risk_service,
+                normalized_asof,
+            )
+            payload["policy_context"] = _policy_context_payload(
+                self._policy_context_service,
                 normalized_asof,
             )
 
@@ -140,6 +147,7 @@ def _empty_payload(horizon, sector):
         "changed_events": [],
         "calibration": {},
         "macro_risk": _macro_payload(None, None),
+        "policy_context": _policy_context_payload(None, None),
         "market_gate": latest_market_gate({}),
     }
 
@@ -166,6 +174,30 @@ def _macro_payload(service, asof):
         "unavailable_reason": "macro_data_unavailable",
         "decision_permission": "advisory",
         "point_in_time": True,
+    }
+
+
+def _policy_context_payload(service, asof):
+    builder = getattr(service, "build", None)
+    if callable(builder):
+        return builder(asof)
+    return {
+        "model_key": "macro_policy_context_v1",
+        "model_version": "v1",
+        "asof": asof,
+        "state": "unavailable",
+        "coverage": 0.0,
+        "dimensions": {},
+        "evidence": [],
+        "limitations": [
+            "descriptive_not_forecast",
+            "does_not_modify_ridge",
+        ],
+        "lifecycle": "research",
+        "decision_permission": "advisory",
+        "online_authority": "none",
+        "point_in_time": True,
+        "unavailable_reason": "policy_data_unavailable",
     }
 
 
