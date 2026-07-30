@@ -252,6 +252,45 @@
   gap: .75rem;
 }
 
+.policy-context {
+  display: grid;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  gap: .75rem;
+}
+
+.policy-context-heading {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.policy-context-heading h3,
+.policy-context-heading p {
+  margin: 0;
+}
+
+.policy-context-heading > span {
+  color: var(--muted);
+  font-size: .75rem;
+}
+
+.policy-context-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .75rem;
+}
+
+.policy-context-grid .market-score-block {
+  min-height: 7.2rem;
+}
+
+.policy-context-grid .market-score-value {
+  font-size: clamp(1rem, 2vw, 1.55rem);
+}
+
 .macro-history {
   display: grid;
   margin-top: 1rem;
@@ -435,6 +474,14 @@
 @media (max-width: 980px) {
   .macro-risk-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .policy-context-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .policy-context-heading {
+    display: grid;
   }
 
   .macro-history-heading {

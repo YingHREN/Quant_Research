@@ -14,6 +14,7 @@ class MarketAssetTest(unittest.TestCase):
             "sector-heatmap",
             "market-evidence",
             "macro-risk",
+            "policy-context",
             "sector-drilldown",
             "market-events",
             "market-data-tier",
@@ -116,6 +117,7 @@ class MarketAssetTest(unittest.TestCase):
         source = (ROOT / "web/static/js/market.js").read_text()
         self.assertIn("payload.market_posture", source)
         self.assertIn("payload.macro_risk", source)
+        self.assertIn("payload.policy_context", source)
         self.assertIn("payload.selected_group", source)
         self.assertIn("payload.theme_groups", source)
         self.assertIn('setAttribute("aria-pressed"', source)
@@ -201,10 +203,50 @@ class MarketAssetTest(unittest.TestCase):
             "market.macro.history.unlocked",
             "market.macro.history.series.CPI_YOY",
             "market.macro.evidence.two_year_yield_high",
+            "market.policy.title",
+            "market.policy.advisory",
+            "market.policy.state.rate_restrictive_liquidity_support",
+            "market.policy.state.dual_tightening",
+            "market.policy.state.broad_easing",
+            "market.policy.state.liquidity_tightening",
+            "market.policy.state.mixed",
+            "market.policy.state.unavailable",
+            "market.policy.policyRate",
+            "market.policy.liquidity",
+            "market.policy.reserves",
+            "market.policy.realRate",
+            "market.policy.inflation",
+            "market.policy.coverageAuthority",
+            "market.policy.direction.rising",
+            "market.policy.direction.falling",
+            "market.policy.direction.flat",
+            "market.policy.direction.expanding",
+            "market.policy.direction.contracting",
+            "market.policy.direction.stable",
+            "market.unavailable.policy_data_unavailable",
+            "market.unavailable.insufficient_policy_coverage",
         )
         for key in required:
             with self.subTest(key=key):
                 self.assertGreaterEqual(source.count(f'"{key}"'), 2)
+
+    def test_policy_context_renderer_uses_backend_dimensions(self):
+        template = (ROOT / "web/templates/market.html").read_text()
+        source = (ROOT / "web/static/js/market.js").read_text()
+        styles = (ROOT / "web/static/css/market.css").read_text()
+
+        self.assertIn('id="policy-context"', template)
+        self.assertIn("function renderPolicyContext(", source)
+        self.assertIn("policy.dimensions?.policy_rate", source)
+        self.assertIn("policy.dimensions?.liquidity", source)
+        self.assertIn("policy.dimensions?.reserves", source)
+        self.assertIn("policy.dimensions?.real_rate", source)
+        self.assertIn("policy.dimensions?.pce", source)
+        self.assertIn("policy.dimensions?.core_pce", source)
+        self.assertIn("renderPolicyContext(payload.policy_context)", source)
+        self.assertNotIn("derivePolicyState(", source)
+        self.assertIn(".policy-context-grid", styles)
+        self.assertIn(".policy-context-heading", styles)
 
     def test_directional_signal_names_and_model_sources_are_bilingual(self):
         source = (ROOT / "web/static/js/i18n.js").read_text()

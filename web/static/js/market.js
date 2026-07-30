@@ -237,6 +237,92 @@ function renderMacroRisk(macro = {}) {
   root.replaceChildren(...cards);
 }
 
+function formatPolicyPoint(value, digits = 2) {
+  return value == null || !Number.isFinite(Number(value))
+    ? "—"
+    : `${Number(value).toFixed(digits)}%`;
+}
+
+function policyDirection(dimension = {}) {
+  return localized(
+    `market.policy.direction.${dimension.direction || "unavailable"}`,
+    dimension.direction || "—",
+  );
+}
+
+function policyChange(dimension = {}, formatter = formatPolicyPoint) {
+  if (dimension.change == null) {
+    return unavailableText(dimension.unavailable_reason);
+  }
+  return t("market.policy.change", {
+    direction: policyDirection(dimension),
+    change: formatter(dimension.change),
+    days: dimension.lookback_days ?? "—",
+  });
+}
+
+function renderPolicyContext(policy = {}) {
+  const root = document.querySelector("#policy-context");
+  if (!root) return;
+  const policyRate = policy.dimensions?.policy_rate || {};
+  const liquidity = policy.dimensions?.liquidity || {};
+  const reserves = policy.dimensions?.reserves || {};
+  const realRate = policy.dimensions?.real_rate || {};
+  const pce = policy.dimensions?.pce || {};
+  const corePce = policy.dimensions?.core_pce || {};
+  const stateLabel = localized(
+    `market.policy.state.${policy.state || "unavailable"}`,
+    policy.state || "—",
+  );
+  const targetRange = (
+    policyRate.lower == null || policyRate.upper == null
+      ? "—"
+      : `${formatPolicyPoint(policyRate.lower)}–${formatPolicyPoint(policyRate.upper)}`
+  );
+  root.replaceChildren(
+    scoreBlock(
+      t("market.policy.stateLabel"),
+      stateLabel,
+      policy.state === "unavailable"
+        ? unavailableText(policy.unavailable_reason)
+        : t("market.policy.descriptive"),
+    ),
+    scoreBlock(
+      t("market.policy.policyRate"),
+      targetRange,
+      policyChange(policyRate),
+    ),
+    scoreBlock(
+      t("market.policy.liquidity"),
+      policyDirection(liquidity),
+      policyChange(liquidity, formatSignedPercent),
+    ),
+    scoreBlock(
+      t("market.policy.reserves"),
+      policyDirection(reserves),
+      policyChange(reserves, formatSignedPercent),
+    ),
+    scoreBlock(
+      t("market.policy.realRate"),
+      formatPolicyPoint(realRate.value),
+      policyChange(realRate),
+    ),
+    scoreBlock(
+      t("market.policy.inflation"),
+      t("market.policy.inflationValues", {
+        headline: formatPolicyPoint(pce.value),
+        core: formatPolicyPoint(corePce.value),
+      }),
+      `${policyDirection(pce)} · ${policyDirection(corePce)}`,
+    ),
+    scoreBlock(
+      t("market.policy.coverageAuthority"),
+      formatPercent(policy.coverage),
+      t("market.policy.authorityDetail"),
+    ),
+  );
+}
+
 function sectorButton(row) {
   const button = element("button", "sector-tile");
   button.type = "button";
@@ -438,6 +524,7 @@ function render(payload) {
   renderPosture(payload.market_posture, payload.market_gate);
   renderReferenceFactors(payload.market_posture?.evidence || []);
   renderMacroRisk(payload.macro_risk);
+  renderPolicyContext(payload.policy_context);
   renderSectorHeatmap(
     payload.sectors || [],
     payload.theme_groups || [],
