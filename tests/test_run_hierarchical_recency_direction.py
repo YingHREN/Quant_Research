@@ -10,6 +10,8 @@ import pandas as pd
 from research.run_hierarchical_recency_direction import (
     aggregate_direction_metrics,
     hierarchical_promotion_decision,
+    input_content_fingerprint,
+    named_case_diagnostics,
     publish_reports,
     render_report,
 )
@@ -129,6 +131,54 @@ def _passing_regime_metrics():
 
 
 class HierarchicalRecencyRunnerTest(unittest.TestCase):
+    def test_fingerprint_is_content_sensitive_and_named_cases_include_sndk(self):
+        index = pd.MultiIndex.from_product(
+            [["SNDK"], pd.to_datetime(["2026-07-01"])],
+            names=["ticker", "observation_date"],
+        )
+        frame = pd.DataFrame({"feature": [1.0]}, index=index)
+        history = pd.DataFrame(
+            {"Close": [100.0]},
+            index=pd.to_datetime(["2026-07-01"]),
+        )
+        first = input_content_fingerprint(
+            frame,
+            {"SNDK": history},
+            ("SNDK",),
+        )
+        changed = history.copy()
+        changed.iloc[0, 0] = 101.0
+        second = input_content_fingerprint(
+            frame,
+            {"SNDK": changed},
+            ("SNDK",),
+        )
+        self.assertEqual(len(first), 64)
+        self.assertNotEqual(first, second)
+
+        diagnostics = named_case_diagnostics(
+            pd.DataFrame(
+                [
+                    {
+                        "ticker": "SNDK",
+                        "observation_date": "2026-07-01",
+                        "horizon": 5,
+                        "fold": 5,
+                        "specification": "logistic_global",
+                        "actual_return": -0.1,
+                        "actual_direction": "down",
+                        "predicted_direction": "down",
+                        "training_samples": 1_000,
+                    },
+                    {
+                        "ticker": "IGNORED",
+                        "observation_date": "2026-07-01",
+                    },
+                ]
+            )
+        )
+        self.assertEqual(diagnostics["ticker"].tolist(), ["SNDK"])
+
     def test_promotion_gate_requires_every_frozen_condition_but_never_goes_online(self):
         decision = hierarchical_promotion_decision(
             _passing_metrics(),

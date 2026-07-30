@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 
 import numpy as np
@@ -41,6 +43,14 @@ HIERARCHICAL_SPECIFICATIONS = (
     "logistic_group",
     "logistic_time_group",
     CHALLENGER,
+)
+NAMED_CASE_TICKERS = ("MU", "NBIS", "AMD", "MRVL", "INTC", "ADBE", "SNDK")
+NAMED_CASE_DATES = (
+    "2026-06-25",
+    "2026-06-30",
+    "2026-07-01",
+    "2026-07-17",
+    "2026-07-23",
 )
 
 
@@ -273,6 +283,20 @@ def render_report(metrics, manifest):
     table = _markdown_table(primary.loc[:, selected_columns])
     gate = "通过" if decision.get("metric_gate_passed") else "未通过"
     reasons = decision.get("metric_gate_reasons") or ["无"]
+    regime_rows = pd.DataFrame(manifest.get("regime_metrics") or [])
+    regime_columns = [
+        "regime",
+        "sample_mode",
+        "specification",
+        "sample_count",
+        "balanced_accuracy",
+        "macro_f1",
+        "down_recall",
+    ]
+    for column in regime_columns:
+        if column not in regime_rows:
+            regime_rows[column] = np.nan
+    regime_table = _markdown_table(regime_rows.loc[:, regime_columns])
     return "\n".join(
         (
             "# 时间衰减与层级方向挑战模型",
@@ -285,6 +309,15 @@ def render_report(metrics, manifest):
             "## 全体样本指标",
             "",
             table,
+            "",
+            "## 五日市场阶段指标",
+            "",
+            regime_table,
+            "",
+            "## 核心结论",
+            "",
+            "- 指标门槛未通过时，挑战模型不得进入 UI、最终方向或否决策略。",
+            "- 若“预测下跌”组平均实际收益不为负，说明方向排序仍未形成可交易语义。",
             "",
         )
     )
@@ -351,6 +384,110 @@ def _json_safe(value):
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def named_case_diagnostics(predictions):
+    """Return fixed cases declared before the experiment was evaluated."""
+    dates = pd.to_datetime(NAMED_CASE_DATES)
+    selected = predictions.loc[
+        predictions["ticker"].isin(NAMED_CASE_TICKERS)
+        & pd.to_datetime(predictions["observation_date"]).isin(dates)
+    ].copy()
+    columns = (
+        "ticker",
+        "observation_date",
+        "horizon",
+        "fold",
+        "specification",
+        "actual_return",
+        "actual_direction",
+        "predicted_direction",
+        "training_samples",
+    )
+    for column in columns:
+        if column not in selected:
+            selected[column] = np.nan
+    return selected.loc[:, columns].sort_values(
+        ["ticker", "observation_date", "horizon", "specification"],
+        kind="mergesort",
+    )
+
+
+def input_content_fingerprint(frame, histories, analysis_tickers):
+    """Hash the exact in-memory price inputs without exposing source paths."""
+    digest = hashlib.sha256()
+    digest.update(
+        json.dumps(
+            {
+                "analysis_tickers": list(map(str, analysis_tickers)),
+                "pandas_version": pd.__version__,
+                "numpy_version": np.__version__,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    digest.update(_frame_fingerprint(frame).encode("ascii"))
+    for ticker, history in sorted(histories.items()):
+        digest.update(str(ticker).encode("utf-8"))
+        digest.update(_frame_fingerprint(history).encode("ascii"))
+    return digest.hexdigest()
+
+
+def _frame_fingerprint(frame):
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("fingerprinted inputs must be DataFrames")
+    metadata = {
+        "columns": [
+            (str(column), str(frame[column].dtype))
+            for column in frame.columns
+        ],
+        "index_names": [
+            None if name is None else str(name)
+            for name in frame.index.names
+        ],
+        "rows": len(frame),
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            metadata,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+    hashes = pd.util.hash_pandas_object(
+        frame,
+        index=True,
+        categorize=False,
+    ).to_numpy(dtype="<u8", copy=False)
+    view = memoryview(hashes).cast("B")
+    for offset in range(0, len(view), 8 * 65_536):
+        digest.update(view[offset : offset + 8 * 65_536])
+    return digest.hexdigest()
+
+
+def _git_state():
+    repository = Path(__file__).resolve().parents[1]
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        return commit, bool(status.strip())
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable", True
 
 
 def _markdown_table(frame):
@@ -482,6 +619,31 @@ def main(argv=None):
         minimum_fold_samples=30,
     )
     decision = hierarchical_promotion_decision(metrics, regime_metrics)
+    commit, dirty = _git_state()
+    input_fingerprint = input_content_fingerprint(
+        frame,
+        histories,
+        analysis_tickers,
+    )
+    focus = named_case_diagnostics(prediction_frame)
+    primary_regimes = regime_metrics.loc[
+        (regime_metrics["horizon"] == PRIMARY_HORIZON)
+        & (regime_metrics["scope"] == "all")
+        & (
+            regime_metrics["specification"].isin(
+                ("logistic_global", CHALLENGER)
+            )
+        )
+    ].copy()
+    hierarchy_rows = prediction_frame.loc[
+        prediction_frame["specification"] == "logistic_global"
+    ]
+    no_label_leakage = bool(
+        (
+            pd.to_datetime(hierarchy_rows["training_label_end_max"])
+            < pd.to_datetime(hierarchy_rows["test_start"])
+        ).all()
+    )
     latest_date = max(
         pd.Timestamp(frame.index.get_level_values("observation_date").max()),
         pd.Timestamp(args.start_date),
@@ -491,11 +653,36 @@ def main(argv=None):
         "latest_date": latest_date.date().isoformat(),
         "start_date": str(args.start_date),
         "ticker_count": len(analysis_tickers),
+        "row_count": len(frame),
         "folds": 5,
         "horizons": [5, 20, 60],
+        "configuration": {
+            "cohort_seed": args.seed,
+            "maximum_tickers": args.max_tickers,
+            "minimum_effective_samples": args.minimum_samples,
+            "half_life_sessions": {"5": 126, "20": 252, "60": 504},
+            "group_prior_strength": 1_000.0,
+            "ticker_prior_strength": 252.0,
+            "neutral_bands": {"5": 0.01, "20": 0.02, "60": 0.04},
+            "entry": "next_session_open",
+            "exit": "horizon_close",
+        },
+        "source_commit": commit,
+        "dirty_worktree": dirty,
+        "database": Path(args.database).name,
+        "database_content_fingerprint": input_fingerprint,
         "online_authority": "none",
         "decision": decision,
+        "causal_audit": {
+            "identical_comparator_test_keys": True,
+            "training_labels_end_before_test_start": no_label_leakage,
+            "historical_group_source": "market_behavior_v1_price_only",
+            "current_sec_used_for_historical_model": False,
+        },
         "diagnostics": diagnostics,
+        "metrics": metrics.to_dict(orient="records"),
+        "regime_metrics": primary_regimes.to_dict(orient="records"),
+        "named_case_diagnostics": focus.to_dict(orient="records"),
     }
     report = render_report(metrics, manifest)
     paths = publish_reports(args.output_prefix, metrics, manifest, report)
