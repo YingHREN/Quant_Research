@@ -63,14 +63,14 @@ function renderPeriodDetail({
   }
   const heading = node(document, "div", "policy-period-detail-heading");
   heading.append(
-    setText(node(document, "strong"), localizedPeriod(period, locale)),
+    setText(node(document, "h4"), localizedPeriod(period, locale)),
     setText(
       node(document, "span"),
       periodStatus(period, translate),
     ),
   );
   const dates = setText(
-    node(document, "p", "policy-period-detail-dates"),
+    node(document, "p", "policy-period-detail-meta"),
     translate("market.policyMatrix.periodDates", {
       start: period.start_date || "—",
       end: period.end_date
@@ -83,7 +83,7 @@ function renderPeriodDetail({
       || translate("market.policyMatrix.descriptionOnly"),
   );
   const sourceHeading = setText(
-    node(document, "strong", "policy-period-source-title"),
+    node(document, "h5", "policy-period-source-title"),
     translate("market.policyMatrix.sourceTitle"),
   );
   const sources = node(document, "ul", "policy-period-sources");
@@ -110,7 +110,7 @@ function renderPeriodDetail({
     );
   }
   const authority = setText(
-    node(document, "p", "policy-period-authority"),
+    node(document, "p", "policy-period-detail-authority"),
     translate("market.policyMatrix.authority", {
       lifecycle: payload.lifecycle || "research",
       permission: payload.decision_permission || "advisory",
@@ -167,7 +167,7 @@ export function renderPolicyPeriodMatrixView({
   const tickers = [...new Set(
     (payload.rows || []).map((row) => row.ticker),
   )];
-  const scroll = node(document, "div", "policy-period-table-scroll");
+  const scroll = node(document, "div", "policy-period-matrix-scroll");
   const table = node(document, "table", "policy-period-table");
   const head = node(document, "thead");
   const headingRow = node(document, "tr");
@@ -213,7 +213,7 @@ export function renderPolicyPeriodMatrixView({
         cell.dataset.tone = tone(row[activeMetric]);
         setText(cell, metricText(row[activeMetric]));
       } else {
-        cell.dataset.state = row?.status || "missing_history";
+        cell.dataset.status = row?.status || "missing_history";
         setText(
           cell,
           translate(
