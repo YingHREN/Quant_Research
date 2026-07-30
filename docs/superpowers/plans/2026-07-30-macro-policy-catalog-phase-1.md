@@ -87,7 +87,7 @@ Run: `./venv/bin/python -m unittest tests.test_web_macro_store tests.test_fetch_
 
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 git add web/services/macro_store.py fetch_macro_data.py \
@@ -108,7 +108,7 @@ git commit -m "feat: preserve macro revision policies"
 - Produces: `PolicyEventStore.load_events(asof, event_types=()) -> pandas.DataFrame`
 - Produces: `PolicyEventStore.load_periods(asof, include_incomplete=True) -> pandas.DataFrame`
 
-- [ ] **Step 1: 写失败测试，冻结事件与时期字段**
+- [x] **Step 1: 写失败测试，冻结事件与时期字段**
 
 ```python
 EVENT = {
@@ -127,13 +127,13 @@ EVENT = {
 测试同一 `event_id + catalog_version` 幂等、晚于 `asof` 的事件不可见、无 UTC
 偏移拒绝、非官方来源域拒绝、人工时期可独立修改而不改写官方事件。
 
-- [ ] **Step 2: 运行测试并确认模块不存在**
+- [x] **Step 2: 运行测试并确认模块不存在**
 
 Run: `./venv/bin/python -m unittest tests.test_policy_event_store`
 
 Expected: FAIL with `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现两张相互独立的表**
+- [x] **Step 3: 实现两张相互独立的表**
 
 ```sql
 CREATE TABLE policy_events (
@@ -166,7 +166,7 @@ CREATE TABLE policy_periods (
 
 所有 JSON 入库前按 key 排序并验证能解码；加载使用 SQLite 只读 URI。
 
-- [ ] **Step 4: 运行单元测试**
+- [x] **Step 4: 运行单元测试**
 
 Run: `./venv/bin/python -m unittest tests.test_policy_event_store`
 
