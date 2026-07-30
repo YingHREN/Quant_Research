@@ -73,6 +73,19 @@ def _build_fixture(
 
 
 class SupportTouchReactionContractTest(unittest.TestCase):
+    def test_observation_close_at_or_below_zone_upper_is_not_an_event(self):
+        history, signals, observation = _reaction_fixture()
+        history.iloc[observation, history.columns.get_loc("Close")] = 97.0
+
+        result = build_support_touch_reaction_rows(
+            "AAA",
+            history,
+            signals,
+            waiting_horizon=5,
+        )
+
+        self.assertTrue(result.empty)
+
     def test_immature_tail_is_excluded_even_when_touch_would_be_early(self):
         history = _history_with_touch(total=9, touch_position=6)
         signals = _signals(history, active_position=5)

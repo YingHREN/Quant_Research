@@ -80,7 +80,9 @@ def build_support_touch_reaction_rows(
         ):
             continue
         observation_close = float(frame["Close"].iloc[observation_position])
-        distance_atr = max(0.0, (observation_close - upper) / observation_atr)
+        if observation_close <= upper:
+            continue
+        distance_atr = (observation_close - upper) / observation_atr
         if distance_atr > 3.5:
             continue
         center = (lower + upper) / 2.0
