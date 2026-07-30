@@ -335,6 +335,11 @@ class NestedTailWalkForwardTest(unittest.TestCase):
             set(predictions["model_status"]),
             {"available"},
         )
+        self.assertTrue(predictions.attrs["fold_evidence"])
+        self.assertIn(
+            "boundary_candidates",
+            predictions.attrs["fold_evidence"][-1],
+        )
 
     def test_outer_outcomes_cannot_change_same_fold_predictions_or_boundary(self):
         frame = _model_frame()

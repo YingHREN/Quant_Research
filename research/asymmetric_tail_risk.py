@@ -32,6 +32,10 @@ PREDICTION_COLUMNS = (
     "calibrated_down_probability",
     "raw_rebound_probability",
     "calibrated_rebound_probability",
+    "down_calibration_samples",
+    "down_calibration_positive_count",
+    "rebound_calibration_samples",
+    "rebound_calibration_positive_count",
     "raw_predicted_median_return",
     "raw_predicted_lower_quantile_return",
     "predicted_median_return",
@@ -40,6 +44,9 @@ PREDICTION_COLUMNS = (
     "boundary_reason",
     "down_threshold",
     "rebound_cap",
+    "boundary_inner_down_precision",
+    "boundary_inner_coverage",
+    "boundary_inner_mean_terminal_return",
     "predicted_tail_risk",
     "actual_down_event",
     "actual_rebound_event",
@@ -407,6 +414,7 @@ def walk_forward_asymmetric_tail_predictions(
     folds = _purged_folds(frame, checked_folds)
     outputs = []
     failure_reasons = []
+    fold_evidence = []
     for fold_number, (train_positions, test_positions) in enumerate(
         folds,
         start=1,
@@ -415,6 +423,13 @@ def walk_forward_asymmetric_tail_predictions(
         test = frame.iloc[test_positions]
         if len(train) < checked_minimum or test.empty:
             failure_reasons.append("insufficient_training_samples")
+            fold_evidence.append(
+                {
+                    "fold": fold_number,
+                    "status": "unavailable",
+                    "reason": "insufficient_training_samples",
+                }
+            )
             continue
         inner_oof = _inner_oof_head_predictions(
             train,
@@ -422,8 +437,17 @@ def walk_forward_asymmetric_tail_predictions(
             minimum_samples=checked_minimum,
         )
         if inner_oof.empty:
-            failure_reasons.append(
-                inner_oof.attrs.get("reason", "calibration_unavailable")
+            reason = inner_oof.attrs.get(
+                "reason",
+                "calibration_unavailable",
+            )
+            failure_reasons.append(reason)
+            fold_evidence.append(
+                {
+                    "fold": fold_number,
+                    "status": "unavailable",
+                    "reason": reason,
+                }
             )
             continue
         down_calibration = fit_oof_isotonic(
@@ -443,6 +467,17 @@ def walk_forward_asymmetric_tail_predictions(
             or rebound_calibration.status != "available"
         ):
             failure_reasons.append("calibration_unavailable")
+            fold_evidence.append(
+                {
+                    "fold": fold_number,
+                    "status": "unavailable",
+                    "reason": "calibration_unavailable",
+                    "down_calibration_status": down_calibration.status,
+                    "rebound_calibration_status": (
+                        rebound_calibration.status
+                    ),
+                }
+            )
             continue
         inner_oof = inner_oof.copy()
         inner_oof["calibrated_down_probability"] = (
@@ -458,6 +493,30 @@ def walk_forward_asymmetric_tail_predictions(
         boundary = select_tail_boundary(
             inner_oof,
             minimum_rows=checked_boundary,
+        )
+        fold_evidence.append(
+            {
+                "fold": fold_number,
+                "status": "available",
+                "reason": None,
+                "down_calibration_status": down_calibration.status,
+                "down_calibration_samples": down_calibration.sample_count,
+                "down_calibration_positive_count": (
+                    down_calibration.positive_count
+                ),
+                "rebound_calibration_status": rebound_calibration.status,
+                "rebound_calibration_samples": (
+                    rebound_calibration.sample_count
+                ),
+                "rebound_calibration_positive_count": (
+                    rebound_calibration.positive_count
+                ),
+                "boundary_status": boundary.status,
+                "boundary_reason": boundary.reason,
+                "selected_down_threshold": boundary.down_threshold,
+                "selected_rebound_cap": boundary.rebound_cap,
+                "boundary_candidates": boundary.diagnostics,
+            }
         )
         outer_heads = _fit_predict_heads(train, test, columns)
         if outer_heads is None:
@@ -510,6 +569,18 @@ def walk_forward_asymmetric_tail_predictions(
                         "raw_rebound_probability"
                     ],
                     "calibrated_rebound_probability": rebound_probability,
+                    "down_calibration_samples": (
+                        down_calibration.sample_count
+                    ),
+                    "down_calibration_positive_count": (
+                        down_calibration.positive_count
+                    ),
+                    "rebound_calibration_samples": (
+                        rebound_calibration.sample_count
+                    ),
+                    "rebound_calibration_positive_count": (
+                        rebound_calibration.positive_count
+                    ),
                     "raw_predicted_median_return": raw_median,
                     "raw_predicted_lower_quantile_return": raw_lower,
                     "predicted_median_return": raw_median,
@@ -518,6 +589,21 @@ def walk_forward_asymmetric_tail_predictions(
                     "boundary_reason": boundary.reason,
                     "down_threshold": down_threshold,
                     "rebound_cap": rebound_cap,
+                    "boundary_inner_down_precision": (
+                        boundary.down_precision
+                        if boundary.down_precision is not None
+                        else np.nan
+                    ),
+                    "boundary_inner_coverage": (
+                        boundary.coverage
+                        if boundary.coverage is not None
+                        else np.nan
+                    ),
+                    "boundary_inner_mean_terminal_return": (
+                        boundary.mean_terminal_return
+                        if boundary.mean_terminal_return is not None
+                        else np.nan
+                    ),
                     "predicted_tail_risk": pd.array(
                         tail_risk,
                         dtype="boolean",
@@ -538,9 +624,11 @@ def walk_forward_asymmetric_tail_predictions(
             )
         )
     if not outputs:
-        return _empty_predictions(
+        empty = _empty_predictions(
             failure_reasons[0] if failure_reasons else "folds_unavailable"
         )
+        empty.attrs["fold_evidence"] = tuple(fold_evidence)
+        return empty
     result = pd.concat(outputs, ignore_index=True, sort=False)
     if result.duplicated(["ticker", "observation_date"]).any():
         raise RuntimeError("outer prediction keys must be unique")
@@ -552,10 +640,12 @@ def walk_forward_asymmetric_tail_predictions(
         result["rebound_cap"],
         errors="coerce",
     ).astype(float)
-    return result.loc[:, PREDICTION_COLUMNS].sort_values(
+    result = result.loc[:, PREDICTION_COLUMNS].sort_values(
         ["fold", "ticker", "observation_date"],
         kind="mergesort",
     ).reset_index(drop=True)
+    result.attrs["fold_evidence"] = tuple(fold_evidence)
+    return result
 
 
 def select_tail_boundary(
