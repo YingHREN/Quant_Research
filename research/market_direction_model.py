@@ -155,8 +155,8 @@ def walk_forward_direction_predictions(
         test = frame.iloc[test_index]
         if len(train) < int(minimum_samples):
             continue
-        y_train = _directions(train[target_name], checked_horizon)
-        y_test = _directions(test[target_name], checked_horizon)
+        y_train = direction_labels(train[target_name], checked_horizon)
+        y_test = direction_labels(test[target_name], checked_horizon)
         classes, counts = np.unique(y_train, return_counts=True)
         if len(classes) < 2:
             continue
@@ -173,7 +173,7 @@ def walk_forward_direction_predictions(
             )
         )
         for name, columns in checked_sets.items():
-            x_train, x_test = _training_only_design(train, test, columns)
+            x_train, x_test = training_only_design(train, test, columns)
             model = LogisticRegression(
                 class_weight="balanced",
                 max_iter=1_000,
@@ -245,7 +245,7 @@ def walk_forward_ridge_predictions(
         test = frame.iloc[test_index]
         if len(train) < int(minimum_samples):
             continue
-        x_train, x_test = _training_only_design(train, test, columns)
+        x_train, x_test = training_only_design(train, test, columns)
         target = train[target_name].to_numpy(dtype=float)
         if np.min(target) == np.max(target):
             continue
@@ -257,8 +257,8 @@ def walk_forward_ridge_predictions(
         )
         rows = _prediction_rows(
             test,
-            _directions(test[target_name], checked_horizon),
-            _directions(
+            direction_labels(test[target_name], checked_horizon),
+            direction_labels(
                 pd.Series(predicted_return),
                 checked_horizon,
             ),
@@ -305,7 +305,7 @@ def walk_forward_boosted_predictions(
         test = frame.iloc[test_index]
         if len(train) < int(minimum_samples):
             continue
-        target = _directions(train[target_name], checked_horizon)
+        target = direction_labels(train[target_name], checked_horizon)
         classes, counts = np.unique(target, return_counts=True)
         if len(classes) < 2:
             continue
@@ -317,7 +317,7 @@ def walk_forward_boosted_predictions(
             [class_weights[label] for label in target],
             dtype=float,
         )
-        x_train, x_test = _training_only_design(train, test, columns)
+        x_train, x_test = training_only_design(train, test, columns)
         model = HistGradientBoostingClassifier(
             learning_rate=0.05,
             max_iter=80,
@@ -331,7 +331,7 @@ def walk_forward_boosted_predictions(
         output.append(
             _prediction_rows(
                 test,
-                _directions(test[target_name], checked_horizon),
+                direction_labels(test[target_name], checked_horizon),
                 model.predict(x_test),
                 checked_horizon,
                 fold_number,
@@ -403,7 +403,8 @@ def evaluate_direction_ablation(predictions: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("specification").reset_index(drop=True)
 
 
-def _training_only_design(train, test, columns):
+def training_only_design(train, test, columns):
+    """Build train-fitted numeric designs without learning from test rows."""
     train_raw = train.loc[:, columns].apply(pd.to_numeric, errors="coerce")
     test_raw = test.loc[:, columns].apply(pd.to_numeric, errors="coerce")
     train_raw = train_raw.replace((np.inf, -np.inf), np.nan)
@@ -448,6 +449,9 @@ def _training_only_design(train, test, columns):
     )
 
 
+_training_only_design = training_only_design
+
+
 def _logistic_predict(model, design):
     decision = np.sum(
         design[:, None, :] * model.coef_[None, :, :],
@@ -484,14 +488,19 @@ def _prediction_rows(
     )
 
 
-def _directions(returns, horizon):
+def direction_labels(returns, horizon):
+    """Map executable returns to versioned direction bands."""
+    checked_horizon = _validate_horizons((horizon,))[0]
     values = pd.to_numeric(returns, errors="coerce").to_numpy(dtype=float)
-    band = NEUTRAL_BANDS[horizon]
+    band = NEUTRAL_BANDS[checked_horizon]
     return np.select(
         (values < -band, values > band),
         ("down", "up"),
         default="neutral",
     )
+
+
+_directions = direction_labels
 
 
 def _mean_return(group, direction):

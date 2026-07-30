@@ -5,10 +5,11 @@ import numpy as np
 import pandas as pd
 
 from research.market_direction_model import (
-    _directions,
     attach_next_open_targets,
     chronological_purged_folds,
+    direction_labels,
     evaluate_direction_ablation,
+    training_only_design,
     walk_forward_direction_predictions,
     walk_forward_boosted_predictions,
     walk_forward_ridge_predictions,
@@ -65,9 +66,70 @@ class MarketDirectionModelTest(unittest.TestCase):
         values = pd.Series([-0.02, 0.0, 0.02])
 
         self.assertEqual(
-            _directions(values, 10).tolist(),
+            direction_labels(values, 10).tolist(),
             ["down", "neutral", "up"],
         )
+
+    def test_direction_labels_reject_unsupported_horizon(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "supported positive session counts",
+        ):
+            direction_labels(pd.Series([-0.02, 0.0, 0.02]), 7)
+
+    def test_public_direction_labels_match_walk_forward_actual_directions(self):
+        frame = feature_frame()
+
+        predictions = walk_forward_direction_predictions(
+            frame,
+            horizon=5,
+            feature_sets={"stock": ("stock",)},
+            n_folds=4,
+            minimum_samples=30,
+        )
+
+        self.assertEqual(
+            predictions["actual_direction"].tolist(),
+            direction_labels(predictions["actual_return"], 5).tolist(),
+        )
+
+    def test_training_design_fit_does_not_depend_on_test_values(self):
+        train = pd.DataFrame(
+            {
+                "stock": [0.0, 1.0, 2.0, 3.0],
+                "market": [np.nan, -1.0, 1.0, 2.0],
+            }
+        )
+        ordinary_test = pd.DataFrame(
+            {
+                "stock": [4.0, 5.0],
+                "market": [3.0, np.nan],
+            }
+        )
+        changed_test = pd.DataFrame(
+            {
+                "stock": [-1.0e300, 1.0e300],
+                "market": [np.inf, -np.inf],
+            }
+        )
+
+        ordinary_train_design, ordinary_test_design = training_only_design(
+            train,
+            ordinary_test,
+            ("stock", "market"),
+        )
+        changed_train_design, changed_test_design = training_only_design(
+            train,
+            changed_test,
+            ("stock", "market"),
+        )
+
+        np.testing.assert_array_equal(
+            ordinary_train_design,
+            changed_train_design,
+        )
+        self.assertTrue(np.isfinite(ordinary_test_design).all())
+        self.assertTrue(np.isfinite(changed_test_design).all())
 
     def test_next_open_targets_use_next_open_and_horizon_close(self):
         histories = {"AAA": history(), "BBB": history(start=200.0)}
