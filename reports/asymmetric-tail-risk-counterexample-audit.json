@@ -1,0 +1,447 @@
+{
+  "audit_code_provenance": {
+    "content_fingerprint": "b74fd6bfa84f2909a2ee782501fbdb57f87c51665b0653c0fe5454b0083aba5c",
+    "dirty_worktree": true,
+    "source_commit": "f38c0b91ee887417d332db2f824a0c742a33307b"
+  },
+  "audit_row_count": 9405,
+  "audit_version": "asymmetric_tail_counterexample_audit_v1",
+  "data_availability": {
+    "atr20_percentile_available": 9366,
+    "dollar_volume_available": 9366,
+    "earnings_proximity_available": 0,
+    "opening_gap_available": 9397,
+    "point_in_time_group_available": 0,
+    "point_in_time_market_cap_available": 0,
+    "price_available": 9405,
+    "realized_volatility_available": 9251,
+    "realized_volatility_percentile_available": 9251
+  },
+  "fixed_band_definitions": {
+    "dollar_volume": [
+      "below_10m: x < 10000000",
+      "10m_to_100m: 10000000 <= x < 100000000",
+      "100m_to_1b: 100000000 <= x < 1000000000",
+      "at_least_1b: x >= 1000000000"
+    ],
+    "opening_gap": [
+      "gap_down_3pct_or_more: x < -0.03",
+      "within_3pct: -0.03 <= x < 0.03",
+      "gap_up_3pct_or_more: x >= 0.03"
+    ],
+    "percentile": [
+      "low_25pct: x <= 0.25",
+      "middle_50pct: 0.25 < x <= 0.75",
+      "high_25pct: x > 0.75"
+    ],
+    "price": [
+      "below_5: x < 5",
+      "5_to_20: 5 <= x < 20",
+      "20_to_100: 20 <= x < 100",
+      "at_least_100: x >= 100"
+    ]
+  },
+  "limitations": [
+    "descriptive_counterexample_only_no_reference_rate",
+    "earnings_proximity_unavailable_without_point_in_time_calendar",
+    "point_in_time_market_cap_unavailable_price_liquidity_proxies_only",
+    "published_group_snapshot_not_used_as_point_in_time_evidence",
+    "no_model_threshold_feature_or_authority_change"
+  ],
+  "model": {
+    "lifecycle": "research",
+    "name": "asymmetric_tail_counterexample_audit_v1",
+    "online_authority": "none"
+  },
+  "point_in_time_contract": {
+    "feature_join": "exact_ticker_observation_date",
+    "future_outcome_use": "source_sample_definition_only",
+    "percentile_reference": "same_observation_date_frozen_study_cohort",
+    "ticker_specific_tuning": false
+  },
+  "preregistered_feature_hypotheses": [
+    {
+      "fields": [
+        "opening_gap",
+        "calibrated_down_probability",
+        "calibrated_rebound_probability"
+      ],
+      "lifecycle": "research",
+      "name": "gap_discontinuity_interaction",
+      "online_authority": "none",
+      "status": "preregistered",
+      "test": "只在训练折拟合跳空交互，并要求样本外极端反弹误报下降"
+    },
+    {
+      "fields": [
+        "realized_volatility_percentile",
+        "atr20_percentile"
+      ],
+      "lifecycle": "research",
+      "name": "cross_sectional_volatility_interaction",
+      "online_authority": "none",
+      "status": "preregistered",
+      "test": "在嵌套折比较固定百分位档，不修改已发布尾部阈值"
+    },
+    {
+      "fields": [
+        "price",
+        "dollar_volume"
+      ],
+      "lifecycle": "research",
+      "name": "price_liquidity_nonlinearity",
+      "online_authority": "none",
+      "status": "preregistered",
+      "test": "在每个外层折比较固定价格/成交额交互与现有特征集"
+    },
+    {
+      "fields": [
+        "earnings_proximity"
+      ],
+      "lifecycle": "research",
+      "name": "earnings_calendar_availability",
+      "online_authority": "none",
+      "status": "preregistered",
+      "test": "在版本化点时财报日历可用前保持缺失，接入前另行冻结日期窗口"
+    }
+  ],
+  "reconstruction": {
+    "cohort_seed": 20260726,
+    "database_content_fingerprint": "34601a9bb7f608469ef2e09ebd06038c209267468fd13ac66c04f1a25586016d",
+    "group_assignment_evidence_fingerprint": "88419fc4df56b839ec33906a92d6bc92e05ad9700c18775d72b735a8b20e067f",
+    "matched_source_fingerprint": true,
+    "start_date": "2018-01-01",
+    "ticker_count": 240
+  },
+  "source_commit": "39e779b1dea52985bc7ab5b2a03aa2e4ab4c6a81",
+  "source_counterexamples_file": "asymmetric-tail-risk-counterexamples.csv",
+  "source_database": "research_prices.db",
+  "source_database_content_fingerprint": "34601a9bb7f608469ef2e09ebd06038c209267468fd13ac66c04f1a25586016d",
+  "source_sample_count": 9405,
+  "source_sample_definition": {
+    "calibrated_down_probability_minimum": 0.4,
+    "raw_terminal_return_minimum": 0.1
+  },
+  "source_study_version": "asymmetric_tail_risk_v1",
+  "summary": [
+    {
+      "dimension": "overall",
+      "mean_terminal_return": 0.22689764721492733,
+      "median_down_probability": 0.4705882352941176,
+      "median_path_mae": -0.0294087297492517,
+      "median_rebound_probability": 0.1771070615034168,
+      "median_terminal_return": 0.1687752355316285,
+      "row_count": 9405,
+      "share": 1.0,
+      "stratum": "all"
+    },
+    {
+      "dimension": "group",
+      "mean_terminal_return": 0.22689764721492733,
+      "median_down_probability": 0.4705882352941176,
+      "median_path_mae": -0.0294087297492517,
+      "median_rebound_probability": 0.1771070615034168,
+      "median_terminal_return": 0.1687752355316285,
+      "row_count": 9405,
+      "share": 1.0,
+      "stratum": "unavailable"
+    },
+    {
+      "dimension": "regime",
+      "mean_terminal_return": 0.2123163869165162,
+      "median_down_probability": 0.4705882352941176,
+      "median_path_mae": -0.036170024324435404,
+      "median_rebound_probability": 0.1717557251908397,
+      "median_terminal_return": 0.1709881630726306,
+      "row_count": 1152,
+      "share": 0.12248803827751197,
+      "stratum": "acute_selloff"
+    },
+    {
+      "dimension": "regime",
+      "mean_terminal_return": 0.18877800967487046,
+      "median_down_probability": 0.4593572778827978,
+      "median_path_mae": -0.027709029852816848,
+      "median_rebound_probability": 0.1771070615034168,
+      "median_terminal_return": 0.15272724811024055,
+      "row_count": 2348,
+      "share": 0.24965443912812335,
+      "stratum": "correction"
+    },
+    {
+      "dimension": "regime",
+      "mean_terminal_return": 0.2134708624311182,
+      "median_down_probability": 0.4490166414523449,
+      "median_path_mae": -0.025741565575389,
+      "median_rebound_probability": 0.17024401326358946,
+      "median_terminal_return": 0.17118422339593115,
+      "row_count": 810,
+      "share": 0.0861244019138756,
+      "stratum": "range_bound"
+    },
+    {
+      "dimension": "regime",
+      "mean_terminal_return": 0.21172305835467561,
+      "median_down_probability": 0.4778219639033344,
+      "median_path_mae": -0.0265698958662037,
+      "median_rebound_probability": 0.18,
+      "median_terminal_return": 0.1661834628319609,
+      "row_count": 1943,
+      "share": 0.20659223817118555,
+      "stratum": "under_pressure"
+    },
+    {
+      "dimension": "regime",
+      "mean_terminal_return": 0.2734276099808467,
+      "median_down_probability": 0.4778219639033344,
+      "median_path_mae": -0.031788135236411,
+      "median_rebound_probability": 0.1778047792628594,
+      "median_terminal_return": 0.18677895506028497,
+      "row_count": 3152,
+      "share": 0.3351408825093036,
+      "stratum": "uptrend"
+    },
+    {
+      "dimension": "opening_gap",
+      "mean_terminal_return": 0.240375426926884,
+      "median_down_probability": 0.4873219868009725,
+      "median_path_mae": -0.03152289519006825,
+      "median_rebound_probability": 0.186952288218111,
+      "median_terminal_return": 0.1788808655010316,
+      "row_count": 1374,
+      "share": 0.14609250398724083,
+      "stratum": "gap_down_3pct_or_more"
+    },
+    {
+      "dimension": "opening_gap",
+      "mean_terminal_return": 0.2668727565058117,
+      "median_down_probability": 0.4917192429022082,
+      "median_path_mae": -0.0332993218449673,
+      "median_rebound_probability": 0.1907020872865275,
+      "median_terminal_return": 0.17622528577736346,
+      "row_count": 1404,
+      "share": 0.1492822966507177,
+      "stratum": "gap_up_3pct_or_more"
+    },
+    {
+      "dimension": "opening_gap",
+      "mean_terminal_return": 0.2964571063297795,
+      "median_down_probability": 0.42430017891353566,
+      "median_path_mae": -0.03884778729716615,
+      "median_rebound_probability": 0.15355382120347916,
+      "median_terminal_return": 0.2425994887240231,
+      "row_count": 8,
+      "share": 0.0008506113769271664,
+      "stratum": "unavailable"
+    },
+    {
+      "dimension": "opening_gap",
+      "mean_terminal_return": 0.21553641463575393,
+      "median_down_probability": 0.4657939189189189,
+      "median_path_mae": -0.0283018867924528,
+      "median_rebound_probability": 0.1717557251908397,
+      "median_terminal_return": 0.1657303370786518,
+      "row_count": 6619,
+      "share": 0.7037745879851143,
+      "stratum": "within_3pct"
+    },
+    {
+      "dimension": "realized_volatility",
+      "mean_terminal_return": 0.23493383931278264,
+      "median_down_probability": 0.4778219639033344,
+      "median_path_mae": -0.0304047344798824,
+      "median_rebound_probability": 0.1809364548494983,
+      "median_terminal_return": 0.1719872611464969,
+      "row_count": 8015,
+      "share": 0.8522062732589049,
+      "stratum": "high_25pct"
+    },
+    {
+      "dimension": "realized_volatility",
+      "mean_terminal_return": 0.16528809406635372,
+      "median_down_probability": 0.4121621621621621,
+      "median_path_mae": -0.0230436869899183,
+      "median_rebound_probability": 0.148471615720524,
+      "median_terminal_return": 0.1445020149683362,
+      "row_count": 99,
+      "share": 0.010526315789473684,
+      "stratum": "low_25pct"
+    },
+    {
+      "dimension": "realized_volatility",
+      "mean_terminal_return": 0.1752294284383369,
+      "median_down_probability": 0.4259882253994954,
+      "median_path_mae": -0.0234708392603129,
+      "median_rebound_probability": 0.1507537688442211,
+      "median_terminal_return": 0.1512789732110622,
+      "row_count": 1137,
+      "share": 0.12089314194577352,
+      "stratum": "middle_50pct"
+    },
+    {
+      "dimension": "realized_volatility",
+      "mean_terminal_return": 0.22972901634727852,
+      "median_down_probability": 0.445735294117647,
+      "median_path_mae": -0.03391744660508515,
+      "median_rebound_probability": 0.186952288218111,
+      "median_terminal_return": 0.18234199009088553,
+      "row_count": 154,
+      "share": 0.016374269005847954,
+      "stratum": "unavailable"
+    },
+    {
+      "dimension": "atr20",
+      "mean_terminal_return": 0.23381257939998876,
+      "median_down_probability": 0.4778219639033344,
+      "median_path_mae": -0.030176141277138,
+      "median_rebound_probability": 0.1809364548494983,
+      "median_terminal_return": 0.1723076923076922,
+      "row_count": 8309,
+      "share": 0.8834662413609782,
+      "stratum": "high_25pct"
+    },
+    {
+      "dimension": "atr20",
+      "mean_terminal_return": 0.1366480659664977,
+      "median_down_probability": 0.4121621621621621,
+      "median_path_mae": -0.0159602302459446,
+      "median_rebound_probability": 0.1415525114155251,
+      "median_terminal_return": 0.1315461346633415,
+      "row_count": 51,
+      "share": 0.005422647527910686,
+      "stratum": "low_25pct"
+    },
+    {
+      "dimension": "atr20",
+      "mean_terminal_return": 0.17236506472967197,
+      "median_down_probability": 0.4150684931506849,
+      "median_path_mae": -0.0246335078998915,
+      "median_rebound_probability": 0.148471615720524,
+      "median_terminal_return": 0.14833441318701857,
+      "row_count": 1006,
+      "share": 0.10696438064859118,
+      "stratum": "middle_50pct"
+    },
+    {
+      "dimension": "atr20",
+      "mean_terminal_return": 0.2783421369113776,
+      "median_down_probability": 0.4259882253994954,
+      "median_path_mae": -0.0341666666666665,
+      "median_rebound_probability": 0.1469586374695863,
+      "median_terminal_return": 0.2222222222222223,
+      "row_count": 39,
+      "share": 0.004146730462519936,
+      "stratum": "unavailable"
+    },
+    {
+      "dimension": "price",
+      "mean_terminal_return": 0.1957844884191234,
+      "median_down_probability": 0.4593572778827978,
+      "median_path_mae": -0.026547849182548898,
+      "median_rebound_probability": 0.1717557251908397,
+      "median_terminal_return": 0.1626105121252662,
+      "row_count": 3426,
+      "share": 0.36427432216905903,
+      "stratum": "20_to_100"
+    },
+    {
+      "dimension": "price",
+      "mean_terminal_return": 0.24157971208628218,
+      "median_down_probability": 0.4873219868009725,
+      "median_path_mae": -0.0316742081447964,
+      "median_rebound_probability": 0.186952288218111,
+      "median_terminal_return": 0.1766612641815235,
+      "row_count": 2795,
+      "share": 0.29718234981392877,
+      "stratum": "5_to_20"
+    },
+    {
+      "dimension": "price",
+      "mean_terminal_return": 0.17271101455467724,
+      "median_down_probability": 0.4490166414523449,
+      "median_path_mae": -0.0240861214374225,
+      "median_rebound_probability": 0.1575720416922133,
+      "median_terminal_return": 0.1502661596958174,
+      "row_count": 1311,
+      "share": 0.1393939393939394,
+      "stratum": "at_least_100"
+    },
+    {
+      "dimension": "price",
+      "mean_terminal_return": 0.2998266307368578,
+      "median_down_probability": 0.4907063197026022,
+      "median_path_mae": -0.0360360360360361,
+      "median_rebound_probability": 0.1972972972972973,
+      "median_terminal_return": 0.1958405545927208,
+      "row_count": 1873,
+      "share": 0.19914938862307283,
+      "stratum": "below_5"
+    },
+    {
+      "dimension": "dollar_volume",
+      "mean_terminal_return": 0.20852447084715753,
+      "median_down_probability": 0.4657939189189189,
+      "median_path_mae": -0.027067795079438,
+      "median_rebound_probability": 0.1717557251908397,
+      "median_terminal_return": 0.16369863507365195,
+      "row_count": 4114,
+      "share": 0.43742690058479533,
+      "stratum": "100m_to_1b"
+    },
+    {
+      "dimension": "dollar_volume",
+      "mean_terminal_return": 0.2113480550788642,
+      "median_down_probability": 0.4709453599306157,
+      "median_path_mae": -0.0298507462686567,
+      "median_rebound_probability": 0.1717557251908397,
+      "median_terminal_return": 0.1674029386007589,
+      "row_count": 2498,
+      "share": 0.26560340244550773,
+      "stratum": "10m_to_100m"
+    },
+    {
+      "dimension": "dollar_volume",
+      "mean_terminal_return": 0.2061262620217191,
+      "median_down_probability": 0.4778219639033344,
+      "median_path_mae": -0.0271616843458694,
+      "median_rebound_probability": 0.1771070615034168,
+      "median_terminal_return": 0.1626807563959957,
+      "row_count": 987,
+      "share": 0.10494417862838916,
+      "stratum": "at_least_1b"
+    },
+    {
+      "dimension": "dollar_volume",
+      "mean_terminal_return": 0.3021241049514445,
+      "median_down_probability": 0.4817586529466792,
+      "median_path_mae": -0.035667107001321,
+      "median_rebound_probability": 0.1907020872865275,
+      "median_terminal_return": 0.1928571428571428,
+      "row_count": 1767,
+      "share": 0.18787878787878787,
+      "stratum": "below_10m"
+    },
+    {
+      "dimension": "dollar_volume",
+      "mean_terminal_return": 0.2783421369113776,
+      "median_down_probability": 0.4259882253994954,
+      "median_path_mae": -0.0341666666666665,
+      "median_rebound_probability": 0.1469586374695863,
+      "median_terminal_return": 0.2222222222222223,
+      "row_count": 39,
+      "share": 0.004146730462519936,
+      "stratum": "unavailable"
+    },
+    {
+      "dimension": "earnings_proximity",
+      "mean_terminal_return": 0.22689764721492733,
+      "median_down_probability": 0.4705882352941176,
+      "median_path_mae": -0.0294087297492517,
+      "median_rebound_probability": 0.1771070615034168,
+      "median_terminal_return": 0.1687752355316285,
+      "row_count": 9405,
+      "share": 1.0,
+      "stratum": "unavailable"
+    }
+  ]
+}
