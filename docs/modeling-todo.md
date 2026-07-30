@@ -775,6 +775,15 @@
 
 - [ ] 建立版本化联储政策事件目录，覆盖政策利率、QE/QT、再投资、准备金
   管理购买和时期边界；官方事件、人工时期标签及机制解释分开存储。
+  - [x] 完成第一阶段点时存储与受控导入：宏观观测新增
+    `revision_policy` 并兼容迁移旧库；官方事件和人工时期使用独立表，
+    `available_at` 之后才可读取。首批 `fed-policy-v1` 仅纳入能从美联储官网
+    核实发布时间的 6 条事件和 3 个时期标签，仍需继续扩充历史覆盖。
+  - [x] 发布第一份纯描述覆盖审计：截至 2026-07-29，本地 13 个市场/板块
+    ETF 对两个完整时期形成 26 行可计算记录，进行中时期 13 行全部保持
+    `incomplete`；输出继续为 `research/advisory/none`，不修改 Ridge、
+    向下否决或板块方向。证据见
+    `reports/policy-catalog-audit.{md,json}`。
 - [ ] 补齐联邦基金目标区间、联储总资产/国债/MBS、银行准备金、TGA、
   ON RRP、10 年实际利率、PCE/核心 PCE、HYG/IEF 等点时数据。
 - [ ] 所有宏观输入保存 `observation_date`、`available_at`、vintage 和来源；

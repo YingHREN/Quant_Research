@@ -286,7 +286,7 @@ Run: `./venv/bin/python -m unittest tests.test_policy_period_returns`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add research/policy_period_returns.py tests/test_policy_period_returns.py
@@ -306,7 +306,7 @@ git commit -m "feat: describe policy period returns"
 - Consumes: 政策事件/时期只读接口、本地 ETF 复权历史、`describe_policy_periods`
 - Produces: 严格 JSON 报告和人类可读 Markdown；不产生模型分数
 
-- [ ] **Step 1: 写失败测试，冻结审计报告契约**
+- [x] **Step 1: 写失败测试，冻结审计报告契约**
 
 ```python
 def test_report_keeps_missing_and_incomplete_rows():
@@ -318,13 +318,13 @@ def test_report_has_no_model_score_or_online_authority():
     # 且没有 probability/recommendation 字段。
 ```
 
-- [ ] **Step 2: 运行测试并确认 runner 不存在**
+- [x] **Step 2: 运行测试并确认 runner 不存在**
 
 Run: `./venv/bin/python -m unittest tests.test_run_policy_catalog_audit`
 
 Expected: FAIL with `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现可重复审计 runner**
+- [x] **Step 3: 实现可重复审计 runner**
 
 报告固定包含：
 
@@ -346,18 +346,18 @@ Expected: FAIL with `ModuleNotFoundError`。
 
 JSON 使用 `allow_nan=False`；缺失数值序列化为 `null`；不写本机绝对路径。
 
-- [ ] **Step 4: 运行审计并更新中文全局 TODO**
+- [x] **Step 4: 运行审计并更新中文全局 TODO**
 
 只有在真实目录与本地数据成功生成报告后，才勾选“存储契约”和“描述审计”
 子项；不得把完整 `MACRO-ROTATION-001` 标为完成。
 
-- [ ] **Step 5: 运行阶段回归**
+- [x] **Step 5: 运行阶段回归**
 
 Run: `./venv/bin/python -m unittest tests.test_web_macro_store tests.test_fetch_macro_data tests.test_policy_event_store tests.test_import_policy_catalog tests.test_policy_period_returns tests.test_run_policy_catalog_audit tests.test_macro_risk tests.test_web_macro_risk_service`
 
 Expected: PASS。
 
-- [ ] **Step 6: 做产物与秘密检查**
+- [x] **Step 6: 做产物与秘密检查**
 
 Run: `git diff --check`
 
