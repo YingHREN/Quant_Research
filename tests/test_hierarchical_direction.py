@@ -8,6 +8,7 @@ import pandas as pd
 from research.hierarchical_direction import (
     DIRECTION_CLASSES,
     HALF_LIFE_BY_HORIZON,
+    _ordered_log_probabilities,
     adjust_log_probabilities,
     fit_hierarchical_priors,
     freeze_behavior_groups,
@@ -119,6 +120,30 @@ class RecencyWeightTest(unittest.TestCase):
         self.assertEqual(
             diagnostics["reason"],
             "insufficient_class_effective_samples",
+        )
+
+
+class StableProbabilityTest(unittest.TestCase):
+    def test_log_probabilities_use_stable_finite_logits(self):
+        class FittedModel:
+            classes_ = np.asarray(["down", "neutral", "up"], dtype=object)
+            coef_ = np.linspace(-1.1, 1.1, 3 * 48).reshape(3, 48)
+            intercept_ = np.asarray([-0.2, -0.5, -0.1])
+
+            def predict_log_proba(self, design):
+                raise AssertionError("unstable estimator matmul path used")
+
+        design = np.linspace(-10.9, 10.9, 396 * 48).reshape(396, 48)
+
+        result = _ordered_log_probabilities(FittedModel(), design)
+
+        self.assertEqual(result.shape, (396, 3))
+        self.assertTrue(np.isfinite(result).all())
+        np.testing.assert_allclose(
+            np.exp(result).sum(axis=1),
+            np.ones(len(result)),
+            rtol=1e-12,
+            atol=1e-12,
         )
 
 

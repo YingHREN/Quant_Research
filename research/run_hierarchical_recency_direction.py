@@ -418,7 +418,7 @@ def main(argv=None):
                 histories,
                 horizon=horizon,
                 feature_columns=RIDGE_V4_FEATURE_COLUMNS,
-                n_folds=6,
+                n_test_folds=5,
                 minimum_samples=args.minimum_samples,
             )
         )

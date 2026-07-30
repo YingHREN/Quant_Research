@@ -698,7 +698,17 @@ def _fit_logistic(design, labels, weights):
 
 
 def _ordered_log_probabilities(model, design):
-    raw = model.predict_log_proba(design)
+    values = np.asarray(design, dtype=float)
+    coefficients = np.asarray(model.coef_, dtype=float)
+    intercept = np.asarray(model.intercept_, dtype=float)
+    logits = np.sum(
+        values[:, None, :] * coefficients[None, :, :],
+        axis=2,
+    ) + intercept
+    maximum = np.max(logits, axis=1, keepdims=True)
+    raw = logits - maximum - np.log(
+        np.exp(logits - maximum).sum(axis=1, keepdims=True)
+    )
     positions = {
         str(label): index
         for index, label in enumerate(model.classes_)
