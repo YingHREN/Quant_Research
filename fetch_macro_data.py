@@ -100,6 +100,7 @@ def fetch_initial_release_observations(
                         "9999-12-31",
                     ),
                     "source": "ALFRED_initial_release",
+                    "revision_policy": "initial_release_only",
                 }
             )
         realtime_start = realtime_end + timedelta(days=1)

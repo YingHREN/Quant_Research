@@ -29,6 +29,7 @@ class MacroObservationStore:
                     realtime_start TEXT NOT NULL,
                     realtime_end TEXT NOT NULL,
                     source TEXT NOT NULL,
+                    revision_policy TEXT NOT NULL,
                     PRIMARY KEY (
                         series_id,
                         observation_date,
@@ -37,6 +38,7 @@ class MacroObservationStore:
                 )
                 """
             )
+            _ensure_revision_policy_column(connection)
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS macro_available_idx
@@ -53,15 +55,16 @@ class MacroObservationStore:
                 """
                 INSERT INTO macro_observations (
                     series_id, observation_date, available_at, value,
-                    realtime_start, realtime_end, source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    realtime_start, realtime_end, source, revision_policy
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (
                     series_id, observation_date, realtime_start
                 ) DO UPDATE SET
                     available_at=excluded.available_at,
                     value=excluded.value,
                     realtime_end=excluded.realtime_end,
-                    source=excluded.source
+                    source=excluded.source,
+                    revision_policy=excluded.revision_policy
                 """,
                 normalized,
             )
@@ -77,7 +80,7 @@ class MacroObservationStore:
             cutoff = cutoff.tz_convert("UTC")
         query = """
             SELECT series_id, observation_date, available_at, value,
-                   realtime_start, realtime_end, source
+                   realtime_start, realtime_end, source, revision_policy
             FROM macro_observations
             WHERE available_at <= ?
         """
@@ -112,6 +115,7 @@ def _normalized_row(row):
         "realtime_start",
         "realtime_end",
         "source",
+        "revision_policy",
     )
     missing = [key for key in required if row.get(key) is None]
     if missing:
@@ -132,4 +136,20 @@ def _normalized_row(row):
             else pd.Timestamp(row["realtime_end"]).date().isoformat()
         ),
         str(row["source"]),
+        str(row["revision_policy"]),
     )
+
+
+def _ensure_revision_policy_column(connection):
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(macro_observations)"
+        )
+    }
+    if "revision_policy" not in columns:
+        connection.execute(
+            "ALTER TABLE macro_observations "
+            "ADD COLUMN revision_policy TEXT NOT NULL "
+            "DEFAULT 'legacy_unspecified'"
+        )

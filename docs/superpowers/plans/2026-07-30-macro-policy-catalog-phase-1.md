@@ -32,7 +32,7 @@
 - Consumes: `MacroObservationStore.initialize()`, `MacroObservationStore.upsert(rows)`
 - Produces: `macro_observations.revision_policy TEXT NOT NULL`；旧数据库自动迁移；`load_available()` 返回 `revision_policy`
 
-- [ ] **Step 1: 写失败测试，覆盖新库、旧库迁移和缺失字段拒绝**
+- [x] **Step 1: 写失败测试，覆盖新库、旧库迁移和缺失字段拒绝**
 
 ```python
 class MacroObservationRevisionPolicyTest(unittest.TestCase):
@@ -47,13 +47,13 @@ class MacroObservationRevisionPolicyTest(unittest.TestCase):
         # 写入 initial_release_only，断言读取结果保留该值。
 ```
 
-- [ ] **Step 2: 运行测试并确认因缺少列/校验而失败**
+- [x] **Step 2: 运行测试并确认因缺少列/校验而失败**
 
 Run: `./venv/bin/python -m unittest tests.test_web_macro_store`
 
 Expected: FAIL，错误指向 `revision_policy` 尚未实现。
 
-- [ ] **Step 3: 实现幂等迁移和严格行校验**
+- [x] **Step 3: 实现幂等迁移和严格行校验**
 
 ```python
 REVISION_POLICY_LEGACY = "legacy_unspecified"
@@ -73,7 +73,7 @@ def _ensure_revision_policy_column(connection):
 
 更新建表、插入、冲突更新、查询和 `_normalized_row()`，不改变现有主键。
 
-- [ ] **Step 4: 让 ALFRED 初次发布导入显式写入修订策略**
+- [x] **Step 4: 让 ALFRED 初次发布导入显式写入修订策略**
 
 ```python
 row["revision_policy"] = "initial_release_only"
@@ -81,7 +81,7 @@ row["revision_policy"] = "initial_release_only"
 
 不得从日志或报告输出 API key。
 
-- [ ] **Step 5: 运行相关回归**
+- [x] **Step 5: 运行相关回归**
 
 Run: `./venv/bin/python -m unittest tests.test_web_macro_store tests.test_fetch_macro_data tests.test_web_macro_risk_service tests.test_macro_risk`
 
