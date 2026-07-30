@@ -1,5 +1,6 @@
 import copy
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -147,6 +148,22 @@ class MonthlyAssignmentTest(unittest.TestCase):
             row["residual_correlation"],
             direct.residual_correlation,
         )
+
+    def test_monthly_builder_uses_precomputed_panels_not_scalar_rebuilds(self):
+        histories = _synthetic_histories(periods=90)
+        with mock.patch(
+            "research.point_in_time_sector_features."
+            "classify_market_behavior",
+            side_effect=AssertionError("scalar classifier was called"),
+        ):
+            assignments = build_monthly_behavior_assignments(
+                histories,
+                ("AAA",),
+                minimum_observations=20,
+                maximum_observations=40,
+            )
+
+        self.assertFalse(assignments.empty)
 
     def test_appended_future_prices_do_not_change_existing_assignments(self):
         full = _synthetic_histories(periods=120)

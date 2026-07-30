@@ -78,23 +78,21 @@ def build_monthly_behavior_assignments(
             "minimum_observations must not exceed maximum_observations"
         )
     checked_start = _optional_date(start_date)
-    price_rows = {
-        ticker: [
-            (date.date().isoformat(), float(close))
-            for date, close in frame["Close"].items()
-        ]
-        for ticker, frame in prepared.items()
-    }
     candidates = OrderedDict(
         (key, ticker)
         for key, ticker in PIT_SECTOR_CANDIDATES.items()
         if ticker in prepared
     )
+    returns = {
+        ticker: _return_series(frame)
+        for ticker, frame in prepared.items()
+    }
     rows = []
     for ticker in requested:
         history = prepared.get(ticker)
         if history is None or history.empty:
             continue
+        panels = _behavior_panels(returns, ticker, candidates)
         sessions = history.index
         cutoffs = (
             pd.Series(sessions, index=sessions)
@@ -112,14 +110,11 @@ def build_monthly_behavior_assignments(
                 < checked_start - pd.Timedelta(days=age_days)
             ):
                 continue
-            result = classify_market_behavior(
-                price_rows,
-                ticker,
-                candidates,
-                sec_sector="",
-                asof=cutoff.date().isoformat(),
-                min_observations=minimum,
-                max_observations=maximum,
+            result = _classify_precomputed_panels(
+                panels,
+                cutoff,
+                minimum_observations=minimum,
+                maximum_observations=maximum,
             )
             if result is None:
                 continue
@@ -130,11 +125,13 @@ def build_monthly_behavior_assignments(
                     "effective_from": future_sessions[0],
                     "expires_after": cutoff
                     + pd.Timedelta(days=age_days),
-                    "sector_key": result.sector_key,
-                    "benchmark_ticker": result.benchmark_ticker,
-                    "residual_correlation": result.residual_correlation,
-                    "residual_beta": result.residual_beta,
-                    "common_days": int(result.common_days),
+                    "sector_key": result["sector_key"],
+                    "benchmark_ticker": result["benchmark_ticker"],
+                    "residual_correlation": result[
+                        "residual_correlation"
+                    ],
+                    "residual_beta": result["residual_beta"],
+                    "common_days": int(result["common_days"]),
                     "rule_version": ASSIGNMENT_RULE_VERSION,
                 }
             )
@@ -281,6 +278,120 @@ def build_point_in_time_sector_features(
         "pit_sector_assignment_available"
     ].astype(bool)
     return result
+
+
+def _return_series(history):
+    close = history["Close"].dropna()
+    if close.empty:
+        return pd.Series(index=pd.DatetimeIndex(()), dtype=float)
+    return close.pct_change(fill_method=None).iloc[1:]
+
+
+def _behavior_panels(returns, ticker, candidates):
+    if ticker not in returns or "SPY" not in returns:
+        return {}
+    panels = {}
+    for sector_key, benchmark_ticker in candidates.items():
+        benchmark_returns = returns.get(benchmark_ticker)
+        if benchmark_returns is None:
+            continue
+        aligned = pd.concat(
+            (
+                returns[ticker].rename("stock"),
+                returns["SPY"].rename("spy"),
+                benchmark_returns.rename("benchmark"),
+            ),
+            axis=1,
+            join="inner",
+        ).dropna()
+        panels[sector_key] = (
+            benchmark_ticker,
+            aligned.index.to_numpy(dtype="datetime64[ns]"),
+            aligned.to_numpy(dtype=float),
+        )
+    return panels
+
+
+def _classify_precomputed_panels(
+    panels,
+    cutoff,
+    *,
+    minimum_observations,
+    maximum_observations,
+):
+    candidates = []
+    cutoff_value = pd.Timestamp(cutoff).to_datetime64()
+    for sector_key, (
+        benchmark_ticker,
+        dates,
+        values,
+    ) in panels.items():
+        stop = int(np.searchsorted(dates, cutoff_value, side="right"))
+        start = max(0, stop - maximum_observations)
+        selected = values[start:stop]
+        if len(selected) < minimum_observations:
+            continue
+        stock = selected[:, 0]
+        spy = selected[:, 1]
+        benchmark = selected[:, 2]
+        spy_variance = _population_covariance(spy, spy)
+        if spy_variance <= 0.0:
+            continue
+        stock_beta = _population_covariance(stock, spy) / spy_variance
+        benchmark_beta = (
+            _population_covariance(benchmark, spy) / spy_variance
+        )
+        stock_residual = stock - stock_beta * spy
+        benchmark_residual = benchmark - benchmark_beta * spy
+        benchmark_variance = _population_covariance(
+            benchmark_residual,
+            benchmark_residual,
+        )
+        if benchmark_variance <= 0.0:
+            continue
+        stock_variance = _population_covariance(
+            stock_residual,
+            stock_residual,
+        )
+        denominator = float(
+            np.sqrt(stock_variance * benchmark_variance)
+        )
+        covariance = _population_covariance(
+            stock_residual,
+            benchmark_residual,
+        )
+        correlation = covariance / denominator if denominator > 0.0 else 0.0
+        candidates.append(
+            (
+                float(correlation),
+                str(sector_key),
+                str(benchmark_ticker),
+                float(covariance / benchmark_variance),
+                int(len(selected)),
+            )
+        )
+    if not candidates:
+        return None
+    correlation, sector_key, benchmark, residual_beta, common_days = max(
+        candidates,
+        key=lambda row: (row[0], row[1]),
+    )
+    return {
+        "sector_key": sector_key,
+        "benchmark_ticker": benchmark,
+        "residual_correlation": correlation,
+        "residual_beta": residual_beta,
+        "common_days": common_days,
+    }
+
+
+def _population_covariance(left, right):
+    return float(
+        np.mean(
+            (left - np.mean(left))
+            * (right - np.mean(right))
+        )
+    )
 
 
 def _validated_histories(histories):
