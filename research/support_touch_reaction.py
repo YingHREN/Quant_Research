@@ -159,9 +159,7 @@ def _build_episode_row(
         "distance_bin": _distance_bin(distance_atr),
     }
     if touch_offset is None:
-        end_position = (
-            observation_position + waiting_horizon + reaction_sessions - 1
-        )
+        end_position = observation_position + waiting_horizon
         return {
             **common,
             "touch_status": "not_touched",

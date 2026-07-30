@@ -94,7 +94,7 @@ The tracked Markdown, CSV, and JSON artifacts are
 `reports/support-touch-reaction-study.*`. Strict baseline/challenger distance
 slices use the baseline event's distance bin for both rows so every paired
 slice compares the same events. The 2026-07-30 run did not promote the model:
-the confirmation acceptance-rate gain was only 0.50 percentage points, the
+the confirmation acceptance-rate gain was only 0.51 percentage points, the
 confirmation cohort covered only one of the three preregistered groups, the
 historical group audit failed, and no future temporal holdout exists. This
 workflow does not change API payloads, charts, Ridge, downside vetoes, or the

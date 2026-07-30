@@ -1,8 +1,8 @@
 # 支撑区首触反应研究
 
 - 数据截止：2026-07-24
-- 首触事件：1462712
-- 实际触达：1192109
+- 首触事件：1525199
+- 实际触达：1241380
 - 模型权限：`advisory_only`
 - 标签：首次触达后 3 个交易日内，失败优先于接受；未触达不进入反应率分母。
 - 该研究不修改 Ridge、下行否决、最终决策策略或 UI。
@@ -16,9 +16,9 @@
 
 ## 预注册性能条件（确认队列、10 日严格配对）
 
-- 承接率增量：+0.50 pp
-- 失效率变化：-1.29 pp
-- 最大穿透 ATR 变化：-0.0232
+- 承接率增量：+0.51 pp
+- 失效率变化：-1.24 pp
+- 最大穿透 ATR 变化：-0.0237
 - 改善时间折：5/5
 - 改善板块组：1/1（要求覆盖 3 组且至少 2 组改善）
 - 同向距离分箱：4/4
@@ -28,26 +28,26 @@
 
 | cohort | variant | fold | event_count | touch_rate | accepted_rate | failed_rate | ambiguous_rate | mean_maximum_rebound_atr | mean_maximum_penetration_atr |
 |---|---|---|---|---|---|---|---|---|---|
-| confirmation | baseline | 1.0000 | 6243 | 0.7793 | 0.5821 | 0.3764 | 0.0415 | 1.0065 | 0.7607 |
-| confirmation | baseline | 2.0000 | 6145 | 0.7738 | 0.5971 | 0.3596 | 0.0433 | 1.0083 | 0.7664 |
-| confirmation | baseline | 3.0000 | 7322 | 0.8062 | 0.5648 | 0.3944 | 0.0408 | 0.9587 | 0.7367 |
-| confirmation | baseline | 4.0000 | 7110 | 0.7745 | 0.5814 | 0.3735 | 0.0450 | 1.0624 | 0.7231 |
-| confirmation | baseline | 5.0000 | 6928 | 0.7822 | 0.5857 | 0.3656 | 0.0487 | 1.0054 | 0.7110 |
-| confirmation | baseline_plus_historical_demand | 1.0000 | 6243 | 0.7985 | 0.5878 | 0.3623 | 0.0499 | 0.9905 | 0.7318 |
-| confirmation | baseline_plus_historical_demand | 2.0000 | 6145 | 0.7897 | 0.5982 | 0.3499 | 0.0519 | 0.9930 | 0.7469 |
-| confirmation | baseline_plus_historical_demand | 3.0000 | 7322 | 0.8229 | 0.5706 | 0.3821 | 0.0473 | 0.9482 | 0.7180 |
-| confirmation | baseline_plus_historical_demand | 4.0000 | 7110 | 0.7968 | 0.5908 | 0.3555 | 0.0537 | 1.0506 | 0.6954 |
-| confirmation | baseline_plus_historical_demand | 5.0000 | 6928 | 0.7998 | 0.5882 | 0.3557 | 0.0561 | 0.9898 | 0.6893 |
-| development | baseline | 1.0000 | 5156 | 0.7775 | 0.5622 | 0.3974 | 0.0404 | 0.9734 | 0.8237 |
-| development | baseline | 2.0000 | 5304 | 0.7787 | 0.6015 | 0.3622 | 0.0363 | 1.0104 | 0.7583 |
-| development | baseline | 3.0000 | 6903 | 0.8336 | 0.5551 | 0.4046 | 0.0403 | 0.9439 | 0.7383 |
-| development | baseline | 4.0000 | 6917 | 0.7928 | 0.5802 | 0.3682 | 0.0516 | 0.9645 | 0.6847 |
-| development | baseline | 5.0000 | 6756 | 0.8111 | 0.5803 | 0.3653 | 0.0544 | 0.9823 | 0.7304 |
-| development | baseline_plus_historical_demand | 1.0000 | 5156 | 0.7969 | 0.5702 | 0.3797 | 0.0501 | 0.9663 | 0.7907 |
-| development | baseline_plus_historical_demand | 2.0000 | 5304 | 0.7949 | 0.6084 | 0.3446 | 0.0470 | 0.9963 | 0.7294 |
-| development | baseline_plus_historical_demand | 3.0000 | 6903 | 0.8435 | 0.5598 | 0.3946 | 0.0455 | 0.9320 | 0.7147 |
-| development | baseline_plus_historical_demand | 4.0000 | 6917 | 0.8095 | 0.5824 | 0.3570 | 0.0605 | 0.9570 | 0.6633 |
-| development | baseline_plus_historical_demand | 5.0000 | 6756 | 0.8245 | 0.5837 | 0.3578 | 0.0585 | 0.9747 | 0.7132 |
+| confirmation | baseline | 1.0000 | 6681 | 0.7728 | 0.5847 | 0.3728 | 0.0424 | 1.0178 | 0.7492 |
+| confirmation | baseline | 2.0000 | 6484 | 0.7725 | 0.5947 | 0.3604 | 0.0449 | 1.0053 | 0.7564 |
+| confirmation | baseline | 3.0000 | 7758 | 0.8032 | 0.5720 | 0.3877 | 0.0403 | 0.9734 | 0.7324 |
+| confirmation | baseline | 4.0000 | 7510 | 0.7694 | 0.5760 | 0.3809 | 0.0431 | 1.0591 | 0.7424 |
+| confirmation | baseline | 5.0000 | 7413 | 0.7825 | 0.5796 | 0.3689 | 0.0515 | 1.0143 | 0.7090 |
+| confirmation | baseline_plus_historical_demand | 1.0000 | 6681 | 0.7945 | 0.5908 | 0.3578 | 0.0514 | 0.9985 | 0.7209 |
+| confirmation | baseline_plus_historical_demand | 2.0000 | 6484 | 0.7890 | 0.5968 | 0.3477 | 0.0555 | 0.9919 | 0.7346 |
+| confirmation | baseline_plus_historical_demand | 3.0000 | 7758 | 0.8202 | 0.5758 | 0.3777 | 0.0465 | 0.9579 | 0.7151 |
+| confirmation | baseline_plus_historical_demand | 4.0000 | 7510 | 0.7923 | 0.5854 | 0.3649 | 0.0497 | 1.0471 | 0.7154 |
+| confirmation | baseline_plus_historical_demand | 5.0000 | 7413 | 0.8010 | 0.5834 | 0.3602 | 0.0564 | 0.9955 | 0.6841 |
+| development | baseline | 1.0000 | 5646 | 0.7860 | 0.5723 | 0.3858 | 0.0419 | 0.9931 | 0.7997 |
+| development | baseline | 2.0000 | 5689 | 0.7812 | 0.5927 | 0.3688 | 0.0385 | 1.0107 | 0.7641 |
+| development | baseline | 3.0000 | 7219 | 0.8295 | 0.5671 | 0.3911 | 0.0418 | 0.9512 | 0.7187 |
+| development | baseline | 4.0000 | 7296 | 0.7908 | 0.5775 | 0.3716 | 0.0510 | 0.9603 | 0.6854 |
+| development | baseline | 5.0000 | 7262 | 0.8089 | 0.5804 | 0.3669 | 0.0528 | 0.9931 | 0.7296 |
+| development | baseline_plus_historical_demand | 1.0000 | 5646 | 0.8018 | 0.5761 | 0.3744 | 0.0495 | 0.9797 | 0.7746 |
+| development | baseline_plus_historical_demand | 2.0000 | 5689 | 0.7986 | 0.6003 | 0.3520 | 0.0478 | 1.0027 | 0.7375 |
+| development | baseline_plus_historical_demand | 3.0000 | 7219 | 0.8390 | 0.5699 | 0.3839 | 0.0462 | 0.9389 | 0.6999 |
+| development | baseline_plus_historical_demand | 4.0000 | 7296 | 0.8083 | 0.5811 | 0.3602 | 0.0587 | 0.9522 | 0.6640 |
+| development | baseline_plus_historical_demand | 5.0000 | 7262 | 0.8247 | 0.5842 | 0.3570 | 0.0588 | 0.9867 | 0.7053 |
 
 ## 零事件变体
 

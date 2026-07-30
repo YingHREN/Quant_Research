@@ -207,6 +207,16 @@ class SupportTouchReactionLabelTest(unittest.TestCase):
         self.assertFalse(row["failed"])
         self.assertFalse(row["ambiguous"])
 
+    def test_no_touch_episode_ends_when_waiting_horizon_expires(self):
+        history, signals, observation = _reaction_fixture()
+
+        row = _build_fixture(history, signals)
+
+        self.assertEqual(
+            row["event_end_date"],
+            history.index[observation + 5],
+        )
+
 
 class SupportTouchReactionEpisodeTest(unittest.TestCase):
     def test_same_unresolved_zone_creates_one_episode(self):

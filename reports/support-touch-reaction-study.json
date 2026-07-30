@@ -509,13 +509,13 @@
     "no_environment",
     "no_decay"
   ],
-  "episode_count": 1462712,
-  "touch_count": 1192109,
+  "episode_count": 1525199,
+  "touch_count": 1241380,
   "reaction_labels": {
-    "touched": 1192109,
-    "accepted": 708609,
-    "failed": 403570,
-    "ambiguous": 79930
+    "touched": 1241380,
+    "accepted": 737812,
+    "failed": 420366,
+    "ambiguous": 83202
   },
   "excluded_tickers": [
     {
@@ -565,12 +565,12 @@
       "causal_audit_failed",
       "future_holdout_required"
     ],
-    "metric_row_count": 19331,
+    "metric_row_count": 19397,
     "performance_conditions": {
       "available": true,
-      "acceptance_rate_delta": 0.005003832813378684,
-      "failure_rate_delta": -0.012864655316347728,
-      "maximum_penetration_atr_delta": -0.023247870972679885,
+      "acceptance_rate_delta": 0.005074254672498668,
+      "failure_rate_delta": -0.012405238465355406,
+      "maximum_penetration_atr_delta": -0.023718537401485662,
       "stable_fold_wins": 5,
       "improved_group_count": 1,
       "group_count": 1,
