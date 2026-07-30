@@ -1,0 +1,3 @@
+sample_mode,scope_type,scope_name,fold,row_count,risk_count,coverage,down_precision,down_recall,baseline_down_precision,down_precision_gain,mean_terminal_return,risk_rebound_rate,all_rebound_rate
+non_overlapping,overall,all,,0,0,,,,,,,,
+overlapping,overall,all,,0,0,,,,,,,,
