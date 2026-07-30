@@ -230,6 +230,338 @@ def match_extreme_up_to_terminal_down(
     return pairs, coverage
 
 
+def paired_feature_evidence(
+    pairs: pd.DataFrame,
+    *,
+    feature_types: Mapping[str, str],
+    bootstrap_samples: int = 2_000,
+    bootstrap_block_days: int = 20,
+    seed: int = 20260730,
+) -> pd.DataFrame:
+    """Summarize paired feature differences with deterministic date blocks."""
+    checked, registry = _validated_evidence_inputs(
+        pairs,
+        feature_types,
+        bootstrap_samples=bootstrap_samples,
+        bootstrap_block_days=bootstrap_block_days,
+        seed=seed,
+    )
+    rows = []
+    for feature, feature_type in registry.items():
+        case = _feature_values(
+            checked[f"case_{feature}"],
+            feature_type=feature_type,
+        )
+        control = _feature_values(
+            checked[f"control_{feature}"],
+            feature_type=feature_type,
+        )
+        both = case.notna() & control.notna()
+        differences = case.loc[both] - control.loc[both]
+        status = "available"
+        standardized = np.nan
+        paired_mean = np.nan
+        paired_median = np.nan
+        ci_low = np.nan
+        ci_high = np.nan
+        raw_p_value = np.nan
+        if len(differences):
+            paired_mean = float(differences.mean())
+            paired_median = float(differences.median())
+        if len(differences) < 2:
+            status = "insufficient_pairs"
+        else:
+            scale = float(differences.std(ddof=1))
+            if not np.isfinite(scale) or scale <= 0.0:
+                status = "effect_unavailable"
+            else:
+                standardized = paired_mean / scale
+                replicates = _date_block_bootstrap(
+                    differences,
+                    checked.loc[both, "case_observation_date"],
+                    samples=bootstrap_samples,
+                    block_days=bootstrap_block_days,
+                    seed=seed,
+                )
+                ci_low, ci_high = np.quantile(
+                    replicates,
+                    (0.025, 0.975),
+                )
+                raw_p_value = min(
+                    1.0,
+                    2.0
+                    * min(
+                        float((replicates <= 0.0).mean()),
+                        float((replicates >= 0.0).mean()),
+                    ),
+                )
+        direction = (
+            int(np.sign(standardized))
+            if np.isfinite(standardized) and standardized != 0.0
+            else 0
+        )
+        rows.append(
+            {
+                "feature": feature,
+                "feature_type": feature_type,
+                "provenance": "observation_date_causal",
+                "pair_count": int(len(checked)),
+                "case_available_count": int(case.notna().sum()),
+                "control_available_count": int(control.notna().sum()),
+                "both_available_count": int(both.sum()),
+                "case_availability": (
+                    float(case.notna().mean()) if len(checked) else 0.0
+                ),
+                "control_availability": (
+                    float(control.notna().mean()) if len(checked) else 0.0
+                ),
+                "case_median": _finite_or_nan(case.median()),
+                "control_median": _finite_or_nan(control.median()),
+                "paired_mean_difference": paired_mean,
+                "paired_median_difference": paired_median,
+                "standardized_difference": standardized,
+                "ci_low": _finite_or_nan(ci_low),
+                "ci_high": _finite_or_nan(ci_high),
+                "raw_p_value": _finite_or_nan(raw_p_value),
+                "adjusted_p_value": np.nan,
+                "consistent_folds": _consistent_slice_count(
+                    checked.loc[both],
+                    differences,
+                    column="fold",
+                    direction=direction,
+                ),
+                "consistent_large_groups": _consistent_group_count(
+                    checked.loc[both],
+                    differences,
+                    direction=direction,
+                ),
+                "status": status,
+            }
+        )
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    result["adjusted_p_value"] = _benjamini_hochberg(
+        result["raw_p_value"]
+    )
+    gate_reasons = [
+        _admission_reasons(row)
+        for row in result.to_dict(orient="records")
+    ]
+    result["gate_reasons"] = gate_reasons
+    result["gate_passed"] = [not reasons for reasons in gate_reasons]
+    return result.sort_values("feature", kind="mergesort").reset_index(
+        drop=True
+    )
+
+
+def admitted_feature_hypotheses(evidence: pd.DataFrame) -> tuple[str, ...]:
+    """Return features satisfying every frozen point-in-time admission gate."""
+    if not isinstance(evidence, pd.DataFrame):
+        raise TypeError("evidence must be a DataFrame")
+    required = (
+        "feature",
+        "pair_count",
+        "case_availability",
+        "control_availability",
+        "standardized_difference",
+        "ci_low",
+        "ci_high",
+        "consistent_folds",
+        "consistent_large_groups",
+        "provenance",
+    )
+    missing = [column for column in required if column not in evidence]
+    if missing:
+        raise ValueError(f"evidence is missing columns: {missing}")
+    admitted = []
+    for row in evidence.loc[:, required].to_dict(orient="records"):
+        if not _admission_reasons(row):
+            admitted.append(str(row["feature"]))
+    return tuple(sorted(set(admitted)))
+
+
+def _admission_reasons(row):
+    numeric_fields = (
+        "pair_count",
+        "case_availability",
+        "control_availability",
+        "standardized_difference",
+        "ci_low",
+        "ci_high",
+        "consistent_folds",
+        "consistent_large_groups",
+    )
+    if not all(
+        _finite_or_none(row.get(field)) is not None
+        for field in numeric_fields
+    ):
+        return ("effect_unavailable",)
+    reasons = []
+    if row.get("status", "available") != "available":
+        reasons.append("effect_unavailable")
+    if str(row.get("provenance")) != "observation_date_causal":
+        reasons.append("non_causal_provenance")
+    if float(row["pair_count"]) < 1_000:
+        reasons.append("insufficient_matched_pairs")
+    if float(row["case_availability"]) < 0.90:
+        reasons.append("case_availability_below_gate")
+    if float(row["control_availability"]) < 0.90:
+        reasons.append("control_availability_below_gate")
+    if abs(float(row["standardized_difference"])) < 0.20:
+        reasons.append("effect_size_below_gate")
+    if not (
+        float(row["ci_low"]) > 0.0 or float(row["ci_high"]) < 0.0
+    ):
+        reasons.append("confidence_interval_crosses_zero")
+    if float(row["consistent_folds"]) < 4:
+        reasons.append("fold_stability_below_gate")
+    if float(row["consistent_large_groups"]) < 2:
+        reasons.append("group_stability_below_gate")
+    return tuple(reasons)
+
+
+def _validated_evidence_inputs(
+    pairs,
+    feature_types,
+    *,
+    bootstrap_samples,
+    bootstrap_block_days,
+    seed,
+):
+    if not isinstance(pairs, pd.DataFrame):
+        raise TypeError("pairs must be a DataFrame")
+    if not isinstance(feature_types, Mapping) or not feature_types:
+        raise ValueError("feature_types must be a non-empty mapping")
+    registry = OrderedDict()
+    for feature, feature_type in feature_types.items():
+        normalized_feature = str(feature).strip()
+        normalized_type = str(feature_type).strip()
+        if not normalized_feature or normalized_type not in {
+            "numeric",
+            "boolean",
+        }:
+            raise ValueError("feature registry is invalid")
+        registry[normalized_feature] = normalized_type
+    required = (
+        "case_observation_date",
+        "fold",
+        "group",
+        *tuple(
+            column
+            for feature in registry
+            for column in (f"case_{feature}", f"control_{feature}")
+        ),
+    )
+    missing = [column for column in required if column not in pairs]
+    if missing:
+        raise ValueError(f"pairs are missing columns: {missing}")
+    for value, name in (
+        (bootstrap_samples, "bootstrap_samples"),
+        (bootstrap_block_days, "bootstrap_block_days"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 2:
+            raise ValueError(f"{name} must be an integer of at least two")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed must be a non-negative integer")
+    checked = pairs.loc[:, required].copy(deep=True)
+    checked["case_observation_date"] = pd.to_datetime(
+        checked["case_observation_date"],
+        errors="raise",
+    ).dt.tz_localize(None)
+    return checked, registry
+
+
+def _feature_values(values, *, feature_type):
+    result = pd.to_numeric(values, errors="coerce").astype(float)
+    finite = np.isfinite(result.to_numpy())
+    result = result.where(finite)
+    if feature_type == "boolean":
+        invalid = result.notna() & ~result.isin((0.0, 1.0))
+        if invalid.any():
+            raise ValueError("boolean audit feature must contain only 0/1")
+    return result
+
+
+def _date_block_bootstrap(
+    differences,
+    dates,
+    *,
+    samples,
+    block_days,
+    seed,
+):
+    aligned = pd.DataFrame(
+        {
+            "difference": np.asarray(differences, dtype=float),
+            "date": pd.to_datetime(dates).to_numpy(),
+        }
+    ).sort_values("date", kind="mergesort")
+    unique_dates = pd.Index(aligned["date"].unique()).sort_values()
+    date_positions = {
+        date: position for position, date in enumerate(unique_dates)
+    }
+    aligned["_block"] = aligned["date"].map(
+        lambda date: date_positions[date] // block_days
+    )
+    blocks = tuple(
+        selected["difference"].to_numpy(dtype=float)
+        for _, selected in aligned.groupby("_block", sort=True)
+    )
+    rng = np.random.default_rng(seed)
+    result = np.empty(samples, dtype=float)
+    for index in range(samples):
+        chosen = rng.integers(0, len(blocks), size=len(blocks))
+        values = np.concatenate([blocks[position] for position in chosen])
+        result[index] = values.mean()
+    return result
+
+
+def _consistent_slice_count(frame, differences, *, column, direction):
+    if direction == 0 or frame.empty:
+        return 0
+    aligned = frame.loc[:, [column]].copy()
+    aligned["_difference"] = np.asarray(differences, dtype=float)
+    return int(
+        sum(
+            np.sign(selected["_difference"].mean()) == direction
+            for _, selected in aligned.groupby(column, sort=True)
+        )
+    )
+
+
+def _consistent_group_count(frame, differences, *, direction):
+    if direction == 0 or frame.empty:
+        return 0
+    aligned = frame.loc[:, ["group"]].copy()
+    aligned["_difference"] = np.asarray(differences, dtype=float)
+    count = 0
+    for group in ("semiconductor", "software", "other"):
+        selected = aligned.loc[aligned["group"] == group, "_difference"]
+        if len(selected) and np.sign(selected.mean()) == direction:
+            count += 1
+    return count
+
+
+def _benjamini_hochberg(values):
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    result = np.full(len(numeric), np.nan, dtype=float)
+    finite_positions = np.flatnonzero(np.isfinite(numeric))
+    if not len(finite_positions):
+        return result
+    order = finite_positions[
+        np.argsort(numeric[finite_positions], kind="mergesort")
+    ]
+    total = len(order)
+    adjusted = np.minimum(
+        numeric[order] * total / np.arange(1, total + 1),
+        1.0,
+    )
+    adjusted = np.minimum.accumulate(adjusted[::-1])[::-1]
+    result[order] = adjusted
+    return result
+
+
 def _validated_predictions(predictions):
     if not isinstance(predictions, pd.DataFrame):
         raise TypeError("predictions must be a DataFrame")
@@ -499,3 +831,8 @@ def _finite_or_none(value):
     except (TypeError, ValueError):
         return None
     return converted if np.isfinite(converted) else None
+
+
+def _finite_or_nan(value):
+    converted = _finite_or_none(value)
+    return converted if converted is not None else np.nan

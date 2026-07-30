@@ -5,8 +5,10 @@ import pandas as pd
 
 from research.tail_direction_counterexample_audit import (
     AUDIT_FEATURE_TYPES,
+    admitted_feature_hypotheses,
     build_audit_population,
     match_extreme_up_to_terminal_down,
+    paired_feature_evidence,
 )
 
 
@@ -281,6 +283,167 @@ class DeterministicMatchingTest(unittest.TestCase):
         pairs, _ = match_extreme_up_to_terminal_down(extra)
 
         self.assertEqual(pairs.loc[0, "control_ticker"], "FINITE")
+
+
+def _paired_fixture(case_values, control_values, *, feature="feature_a"):
+    count = len(case_values)
+    groups = ("semiconductor", "software", "other")
+    return pd.DataFrame(
+        {
+            "pair_id": np.arange(1, count + 1),
+            "case_observation_date": pd.date_range(
+                "2025-01-02",
+                periods=count,
+                freq="B",
+            ),
+            "fold": (np.arange(count) % 5) + 1,
+            "group": [groups[index % 3] for index in range(count)],
+            "regime": "uptrend",
+            f"case_{feature}": case_values,
+            f"control_{feature}": control_values,
+        }
+    )
+
+
+class PairedFeatureEvidenceTest(unittest.TestCase):
+    def test_numeric_evidence_is_deterministic_and_reports_positive_effect(self):
+        pairs = _paired_fixture(
+            [3.0, 4.0, 6.0, 7.0, 9.0, 10.0],
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        )
+
+        first = paired_feature_evidence(
+            pairs,
+            feature_types={"feature_a": "numeric"},
+            bootstrap_samples=200,
+            bootstrap_block_days=2,
+            seed=7,
+        )
+        second = paired_feature_evidence(
+            pairs,
+            feature_types={"feature_a": "numeric"},
+            bootstrap_samples=200,
+            bootstrap_block_days=2,
+            seed=7,
+        )
+
+        pd.testing.assert_frame_equal(first, second)
+        self.assertGreater(first.loc[0, "paired_median_difference"], 0.0)
+        self.assertGreater(first.loc[0, "standardized_difference"], 0.0)
+        self.assertGreater(first.loc[0, "ci_low"], 0.0)
+        self.assertEqual(first.loc[0, "case_available_count"], 6)
+        self.assertEqual(first.loc[0, "control_available_count"], 6)
+        self.assertIn("gate_passed", first)
+        self.assertIn("gate_reasons", first)
+        self.assertIn(
+            "insufficient_matched_pairs",
+            first.loc[0, "gate_reasons"],
+        )
+
+    def test_boolean_evidence_uses_rate_difference_and_preserves_missing(self):
+        pairs = _paired_fixture(
+            [True, True, np.nan, False],
+            [False, False, True, False],
+            feature="flag",
+        )
+
+        result = paired_feature_evidence(
+            pairs,
+            feature_types={"flag": "boolean"},
+            bootstrap_samples=100,
+            bootstrap_block_days=2,
+            seed=9,
+        )
+
+        self.assertEqual(result.loc[0, "case_available_count"], 3)
+        self.assertEqual(result.loc[0, "control_available_count"], 4)
+        self.assertAlmostEqual(result.loc[0, "case_availability"], 0.75)
+        self.assertGreater(result.loc[0, "paired_mean_difference"], 0.0)
+
+    def test_zero_variance_effect_is_explicitly_unavailable(self):
+        pairs = _paired_fixture([2.0] * 4, [1.0] * 4)
+
+        result = paired_feature_evidence(
+            pairs,
+            feature_types={"feature_a": "numeric"},
+            bootstrap_samples=100,
+            seed=3,
+        )
+
+        self.assertEqual(result.loc[0, "status"], "effect_unavailable")
+        self.assertTrue(
+            pd.isna(result.loc[0, "standardized_difference"])
+        )
+
+
+class FeatureAdmissionGateTest(unittest.TestCase):
+    @staticmethod
+    def _qualifying_row():
+        return pd.DataFrame(
+            [
+                {
+                    "feature": "feature_a",
+                    "feature_type": "numeric",
+                    "pair_count": 1_000,
+                    "case_availability": 0.90,
+                    "control_availability": 0.90,
+                    "standardized_difference": 0.20,
+                    "ci_low": 0.01,
+                    "ci_high": 0.30,
+                    "consistent_folds": 4,
+                    "consistent_large_groups": 2,
+                    "provenance": "observation_date_causal",
+                }
+            ]
+        )
+
+    def test_gate_requires_every_preregistered_condition(self):
+        evidence = self._qualifying_row()
+        self.assertEqual(
+            admitted_feature_hypotheses(evidence),
+            ("feature_a",),
+        )
+        for field, value in (
+            ("pair_count", 999),
+            ("case_availability", 0.899),
+            ("control_availability", 0.899),
+            ("standardized_difference", 0.199),
+            ("ci_low", -0.001),
+            ("consistent_folds", 3),
+            ("consistent_large_groups", 1),
+        ):
+            with self.subTest(field=field):
+                rejected = evidence.copy()
+                rejected.loc[0, field] = value
+                self.assertEqual(admitted_feature_hypotheses(rejected), ())
+
+    def test_gate_rejects_future_derived_provenance(self):
+        evidence = self._qualifying_row()
+        evidence.loc[0, "provenance"] = "future_target_derived"
+
+        self.assertEqual(admitted_feature_hypotheses(evidence), ())
+
+    def test_bh_adjusted_values_are_monotonic_by_raw_probability(self):
+        pairs = _paired_fixture(
+            np.arange(20, dtype=float) + 4.0,
+            np.arange(20, dtype=float),
+            feature="strong",
+        )
+        pairs["case_weak"] = np.arange(20, dtype=float) + (
+            np.arange(20) % 2
+        )
+        pairs["control_weak"] = np.arange(20, dtype=float)
+
+        result = paired_feature_evidence(
+            pairs,
+            feature_types={"strong": "numeric", "weak": "numeric"},
+            bootstrap_samples=300,
+            bootstrap_block_days=4,
+            seed=11,
+        ).sort_values("raw_p_value")
+
+        adjusted = result["adjusted_p_value"].dropna().to_numpy()
+        self.assertTrue((np.diff(adjusted) >= -1e-12).all())
 
 
 if __name__ == "__main__":
