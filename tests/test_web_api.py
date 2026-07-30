@@ -3118,6 +3118,46 @@ class WebApiTest(unittest.TestCase):
         )
         service.build.assert_not_called()
 
+    def test_policy_period_matrix_service_is_registered_from_config(self):
+        matrix_service = object()
+
+        app = create_app(
+            test_config(
+                POLICY_PERIOD_MATRIX_SERVICE=matrix_service,
+            ),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+
+        self.assertIs(
+            app.extensions["dashboard_policy_period_matrix_service"],
+            matrix_service,
+        )
+
+    def test_missing_policy_catalog_keeps_market_api_read_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing-macro.db"
+            app = create_app(
+                test_config(MACRO_DATABASE=str(missing)),
+                repository=FakeRepository(),
+                update_manager=FakeManager(),
+            )
+
+            response = app.test_client().get(
+                "/api/market-overview"
+                "?horizon=5&sector=semiconductor"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            matrix = response.get_json()["policy_period_matrix"]
+            self.assertEqual(
+                matrix["unavailable_reason"],
+                "policy_catalog_unavailable",
+            )
+            self.assertEqual(matrix["decision_permission"], "advisory")
+            self.assertEqual(matrix["online_authority"], "none")
+            self.assertFalse(missing.exists())
+
     def test_macro_history_route_passes_validated_query_to_service(self):
         service = mock.Mock()
         service.build.return_value = {

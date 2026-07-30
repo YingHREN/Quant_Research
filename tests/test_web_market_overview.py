@@ -75,7 +75,61 @@ class PolicyContextServiceStub:
         return ("policy", 1)
 
 
+class PolicyPeriodMatrixServiceStub:
+    def __init__(self):
+        self.received_asof = None
+        self.received_histories = None
+
+    def build(self, asof, histories):
+        self.received_asof = asof
+        self.received_histories = histories
+        return {
+            "artifact_key": "policy_period_matrix_v1",
+            "rows": [],
+            "periods": [],
+            "lifecycle": "research",
+            "decision_permission": "advisory",
+            "online_authority": "none",
+        }
+
+    def cache_token(self):
+        return ("matrix", 1)
+
+
 class MarketOverviewServiceTest(unittest.TestCase):
+    def test_includes_policy_matrix_without_changing_existing_scores(self):
+        repository = FakeRepository(fixture_histories())
+        baseline = MarketOverviewService(repository).build()
+        matrix_service = PolicyPeriodMatrixServiceStub()
+
+        payload = MarketOverviewService(
+            repository,
+            policy_period_matrix_service=matrix_service,
+        ).build()
+
+        self.assertEqual(
+            payload["policy_period_matrix"]["artifact_key"],
+            "policy_period_matrix_v1",
+        )
+        self.assertEqual(
+            matrix_service.received_asof,
+            payload["asof"],
+        )
+        self.assertEqual(
+            set(matrix_service.received_histories),
+            set(fixture_histories()),
+        )
+        for key in (
+            "market_posture",
+            "sectors",
+            "selected_group",
+            "constituents",
+            "calibration",
+            "macro_risk",
+            "policy_context",
+        ):
+            self.assertEqual(payload[key], baseline[key])
+
     def test_includes_policy_context_without_changing_existing_outputs(self):
         repository = FakeRepository(fixture_histories())
         baseline = MarketOverviewService(repository).build()
