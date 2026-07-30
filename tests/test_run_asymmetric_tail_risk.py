@@ -2,10 +2,12 @@ from pathlib import Path
 import json
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 
+import research.run_asymmetric_tail_risk as tail_runner
 from research.run_asymmetric_tail_risk import (
     publish_tail_reports,
     render_tail_report,
@@ -14,6 +16,32 @@ from research.run_asymmetric_tail_risk import (
 
 
 class AsymmetricTailRunnerTest(unittest.TestCase):
+    def test_run_study_delegates_reusable_dataset_construction(self):
+        class DatasetSentinel(RuntimeError):
+            pass
+
+        with mock.patch.object(
+            tail_runner,
+            "build_tail_study_dataset",
+            side_effect=DatasetSentinel("dataset-built"),
+        ) as builder:
+            with self.assertRaisesRegex(DatasetSentinel, "dataset-built"):
+                tail_runner.run_study(
+                    database="research.db",
+                    start_date="2020-01-01",
+                    max_tickers=12,
+                    seed=7,
+                    minimum_samples=20,
+                )
+
+        builder.assert_called_once_with(
+            database="research.db",
+            start_date="2020-01-01",
+            max_tickers=12,
+            seed=7,
+            minimum_samples=20,
+        )
+
     @staticmethod
     def _metrics():
         return pd.DataFrame(

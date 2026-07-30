@@ -176,7 +176,7 @@ def publish_tail_reports(
     return paths
 
 
-def run_study(
+def build_tail_study_dataset(
     *,
     database="data/research_prices.db",
     start_date="2018-01-01",
@@ -184,7 +184,7 @@ def run_study(
     seed=20260726,
     minimum_samples=1_000,
 ):
-    """Build predictions, audits and a strict manifest from frozen inputs."""
+    """Build the reusable point-in-time dataset for the tail study."""
     repository = ExpandedMarketDataRepository(database)
     classifications = repository.load_classifications()
     groups = classify_study_groups(classifications)
@@ -272,6 +272,45 @@ def run_study(
         frame,
         histories,
     )
+    return {
+        "predictions": predictions,
+        "feature_frame": feature_frame,
+        "target_frame": frame,
+        "histories": histories,
+        "groups": normalized_groups,
+        "analysis_tickers": tuple(analysis_tickers),
+        "regimes": regimes,
+        "nested_fold_evidence": nested_fold_evidence,
+        "metadata": {
+            "latest_date": pd.Timestamp(
+                frame.index.get_level_values("observation_date").max()
+            ).date().isoformat(),
+        },
+    }
+
+
+def run_study(
+    *,
+    database="data/research_prices.db",
+    start_date="2018-01-01",
+    max_tickers=240,
+    seed=20260726,
+    minimum_samples=1_000,
+):
+    """Build predictions, audits and a strict manifest from frozen inputs."""
+    dataset = build_tail_study_dataset(
+        database=database,
+        start_date=start_date,
+        max_tickers=max_tickers,
+        seed=seed,
+        minimum_samples=minimum_samples,
+    )
+    predictions = dataset["predictions"]
+    frame = dataset["target_frame"]
+    histories = dataset["histories"]
+    normalized_groups = dataset["groups"]
+    analysis_tickers = dataset["analysis_tickers"]
+    nested_fold_evidence = dataset["nested_fold_evidence"]
     metrics = evaluate_tail_predictions(
         predictions,
         group_map=normalized_groups,
@@ -341,9 +380,7 @@ def run_study(
     )
     manifest = {
         "study_version": STUDY_VERSION,
-        "latest_date": pd.Timestamp(
-            frame.index.get_level_values("observation_date").max()
-        ).date().isoformat(),
+        "latest_date": dataset["metadata"]["latest_date"],
         "start_date": str(start_date),
         "ticker_count": len(analysis_tickers),
         "row_count": len(frame),
