@@ -8,10 +8,16 @@ from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 
 from data.market_behavior import (
     RULE_VERSION as MARKET_BEHAVIOR_VERSION,
     classify_market_behavior,
+)
+from research.market_direction_model import (
+    chronological_purged_folds,
+    direction_labels,
+    training_only_design,
 )
 from web.market_groups import SECTOR_ETFS
 
@@ -360,6 +366,278 @@ def adjust_log_probabilities(
     return scores
 
 
+def walk_forward_hierarchical_predictions(
+    frame,
+    histories,
+    *,
+    horizon,
+    feature_columns,
+    n_test_folds=5,
+    minimum_samples=1_000,
+):
+    """Evaluate fixed global, recency, group, and ticker ablations."""
+    checked_horizon = _checked_horizon(horizon)
+    if (
+        isinstance(n_test_folds, bool)
+        or not isinstance(n_test_folds, Integral)
+        or int(n_test_folds) < 2
+    ):
+        raise ValueError("n_test_folds must be an integer of at least two")
+    if (
+        isinstance(minimum_samples, bool)
+        or not isinstance(minimum_samples, Integral)
+        or int(minimum_samples) <= 0
+    ):
+        raise ValueError("minimum_samples must be a positive integer")
+    columns = tuple(map(str, feature_columns))
+    if not columns:
+        raise ValueError("feature_columns must not be empty")
+    target_name = f"executable_return_{checked_horizon}"
+    end_name = f"executable_label_end_date_{checked_horizon}"
+    predictions = []
+    weight_rows = []
+    group_rows = []
+    folds = chronological_purged_folds(
+        frame,
+        checked_horizon,
+        n_folds=int(n_test_folds) + 1,
+    )
+    for fold, (train_index, test_index) in enumerate(folds, start=1):
+        train = frame.iloc[train_index]
+        test = frame.iloc[test_index]
+        test_start = pd.Timestamp(
+            test.index.get_level_values("observation_date").min()
+        )
+        train_label_end_max = pd.Timestamp(train[end_name].max())
+        base_group_row = {
+            "horizon": checked_horizon,
+            "fold": fold,
+            "test_start": test_start,
+            "training_cutoff": pd.Timestamp(
+                train.index.get_level_values("observation_date").max()
+            ),
+        }
+        if len(train) < int(minimum_samples):
+            weight_rows.append(
+                {
+                    "horizon": checked_horizon,
+                    "fold": fold,
+                    "weight_type": "recency",
+                    "status": "unavailable",
+                    "reason": "insufficient_training_samples",
+                    "raw_sample_count": len(train),
+                }
+            )
+            group_rows.append(
+                {
+                    **base_group_row,
+                    "status": "unavailable",
+                    "reason": "insufficient_training_samples",
+                }
+            )
+            continue
+        y_train = direction_labels(train[target_name], checked_horizon)
+        y_test = direction_labels(test[target_name], checked_horizon)
+        if set(y_train) != set(DIRECTION_CLASSES):
+            weight_rows.append(
+                {
+                    "horizon": checked_horizon,
+                    "fold": fold,
+                    "weight_type": "recency",
+                    "status": "unavailable",
+                    "reason": "missing_direction_class",
+                    "raw_sample_count": len(train),
+                }
+            )
+            group_rows.append(
+                {
+                    **base_group_row,
+                    "status": "unavailable",
+                    "reason": "missing_direction_class",
+                }
+            )
+            continue
+
+        minimum_class = max(1.0, float(minimum_samples) / 10.0)
+        time_weights, time_diagnostics = recency_class_weights(
+            train.index,
+            y_train,
+            checked_horizon,
+            minimum_effective_samples=float(minimum_samples),
+            minimum_class_effective_samples=minimum_class,
+        )
+        weight_rows.append(
+            {
+                "horizon": checked_horizon,
+                "fold": fold,
+                "weight_type": "recency",
+                **time_diagnostics,
+            }
+        )
+        if time_weights is None:
+            group_rows.append(
+                {
+                    **base_group_row,
+                    "status": "unavailable",
+                    "reason": time_diagnostics["reason"],
+                }
+            )
+            continue
+        balanced_weights = _balanced_class_weights(y_train)
+        weight_rows.append(
+            {
+                "horizon": checked_horizon,
+                "fold": fold,
+                "weight_type": "balanced",
+                "status": "available",
+                "reason": None,
+                "raw_sample_count": len(train),
+                "weight_sum": float(balanced_weights.sum()),
+                "effective_sample_size": _kish_effective_sample(
+                    balanced_weights
+                ),
+            }
+        )
+
+        ticker_values = np.asarray(
+            train.index.get_level_values("ticker"),
+            dtype=object,
+        )
+        test_tickers = np.asarray(
+            test.index.get_level_values("ticker"),
+            dtype=object,
+        )
+        group_map, group_diagnostics = freeze_behavior_groups(
+            histories,
+            sorted(set(ticker_values) | set(test_tickers)),
+            base_group_row["training_cutoff"],
+        )
+        train_groups = np.asarray(
+            [group_map.get(str(ticker)) for ticker in ticker_values],
+            dtype=object,
+        )
+        test_groups = np.asarray(
+            [group_map.get(str(ticker)) for ticker in test_tickers],
+            dtype=object,
+        )
+        group_rows.append(
+            {
+                **base_group_row,
+                "status": "available",
+                "reason": None,
+                **group_diagnostics,
+            }
+        )
+        x_train, x_test = training_only_design(train, test, columns)
+        balanced_model = _fit_logistic(
+            x_train,
+            y_train,
+            balanced_weights,
+        )
+        time_model = _fit_logistic(x_train, y_train, time_weights)
+        balanced_log = _ordered_log_probabilities(
+            balanced_model,
+            x_test,
+        )
+        time_log = _ordered_log_probabilities(time_model, x_test)
+        balanced_priors = fit_hierarchical_priors(
+            y_train,
+            balanced_weights,
+            ticker_values,
+            train_groups,
+            DIRECTION_CLASSES,
+        )
+        time_priors = fit_hierarchical_priors(
+            y_train,
+            time_weights,
+            ticker_values,
+            train_groups,
+            DIRECTION_CLASSES,
+        )
+        candidates = {
+            "logistic_global": balanced_log,
+            "logistic_time": time_log,
+            "logistic_group": adjust_log_probabilities(
+                balanced_log,
+                test_tickers,
+                test_groups,
+                balanced_priors,
+                include_group=True,
+                include_ticker=False,
+            ),
+            "logistic_time_group": adjust_log_probabilities(
+                time_log,
+                test_tickers,
+                test_groups,
+                time_priors,
+                include_group=True,
+                include_ticker=False,
+            ),
+            "logistic_time_group_ticker": adjust_log_probabilities(
+                time_log,
+                test_tickers,
+                test_groups,
+                time_priors,
+                include_group=True,
+                include_ticker=True,
+            ),
+        }
+        for specification, scores in candidates.items():
+            predicted = np.asarray(DIRECTION_CLASSES, dtype=object)[
+                np.argmax(scores, axis=1)
+            ]
+            predictions.append(
+                pd.DataFrame(
+                    {
+                        "ticker": test_tickers,
+                        "observation_date": test.index.get_level_values(
+                            "observation_date"
+                        ),
+                        "horizon": checked_horizon,
+                        "fold": fold,
+                        "specification": specification,
+                        "actual_return": test[target_name].to_numpy(
+                            dtype=float
+                        ),
+                        "actual_direction": y_test,
+                        "predicted_direction": predicted,
+                        "training_samples": len(train),
+                        "training_label_end_max": train_label_end_max,
+                        "test_start": test_start,
+                    }
+                )
+            )
+    prediction_frame = (
+        pd.concat(predictions, ignore_index=True)
+        if predictions
+        else pd.DataFrame(
+            columns=(
+                "ticker",
+                "observation_date",
+                "horizon",
+                "fold",
+                "specification",
+                "actual_return",
+                "actual_direction",
+                "predicted_direction",
+                "training_samples",
+                "training_label_end_max",
+                "test_start",
+            )
+        )
+    )
+    if not prediction_frame.empty:
+        prediction_frame = prediction_frame.sort_values(
+            ["specification", "fold", "ticker", "observation_date"],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    return (
+        prediction_frame,
+        pd.DataFrame(weight_rows),
+        pd.DataFrame(group_rows),
+    )
+
+
 def _price_rows(frame, cutoff):
     if not isinstance(frame, pd.DataFrame) or frame.empty:
         return []
@@ -390,6 +668,45 @@ def _weighted_counts(labels, weights, classes):
         ],
         dtype=float,
     )
+
+
+def _balanced_class_weights(labels):
+    values = np.asarray(labels, dtype=object)
+    counts = {
+        label: int(np.sum(values == label))
+        for label in DIRECTION_CLASSES
+        if np.any(values == label)
+    }
+    weights = np.asarray(
+        [
+            len(values) / (len(counts) * counts[str(label)])
+            for label in values
+        ],
+        dtype=float,
+    )
+    return weights / float(weights.mean())
+
+
+def _fit_logistic(design, labels, weights):
+    model = LogisticRegression(
+        max_iter=1_000,
+        random_state=0,
+        solver="liblinear",
+    )
+    model.fit(design, labels, sample_weight=weights)
+    return model
+
+
+def _ordered_log_probabilities(model, design):
+    raw = model.predict_log_proba(design)
+    positions = {
+        str(label): index
+        for index, label in enumerate(model.classes_)
+    }
+    return raw[
+        :,
+        [positions[label] for label in DIRECTION_CLASSES],
+    ]
 
 
 def _observation_dates(index):

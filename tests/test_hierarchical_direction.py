@@ -12,6 +12,7 @@ from research.hierarchical_direction import (
     fit_hierarchical_priors,
     freeze_behavior_groups,
     recency_class_weights,
+    walk_forward_hierarchical_predictions,
 )
 
 
@@ -326,6 +327,171 @@ class HierarchicalPriorTest(unittest.TestCase):
         )
         self.assertFalse(np.allclose(group_only, with_ticker))
         self.assertGreater(with_ticker[0, 0], group_only[0, 0])
+
+
+def _walk_forward_fixture(periods=330):
+    dates = pd.bdate_range("2023-01-03", periods=periods)
+    market_returns = 0.002 * np.sin(np.arange(periods - 1) / 5.0)
+    tech_returns = market_returns + 0.006 * np.sin(
+        np.arange(periods - 1) / 3.0
+    )
+    energy_returns = market_returns + 0.005 * np.cos(
+        np.arange(periods - 1) / 4.0
+    )
+    histories = {
+        "SPY": _price_frame(market_returns, start=str(dates[0].date())),
+        "XLK": _price_frame(tech_returns, start=str(dates[0].date())),
+        "XLE": _price_frame(energy_returns, start=str(dates[0].date())),
+    }
+    rows = []
+    keys = []
+    for offset, ticker in enumerate(("AAA", "BBB", "CCC")):
+        stock_returns = (
+            market_returns
+            + 0.008 * np.sin(
+                np.arange(periods - 1) / (3.0 + offset)
+            )
+        )
+        histories[ticker] = _price_frame(
+            stock_returns,
+            start=str(dates[0].date()),
+        )
+        for position, date in enumerate(dates):
+            signal = np.sin(position / (5.0 + offset))
+            context = np.cos(position / 11.0)
+            executable_return = 0.035 * signal + 0.012 * context
+            rows.append(
+                {
+                    "signal": signal,
+                    "context": context,
+                    "executable_return_5": executable_return,
+                    "executable_label_end_date_5": (
+                        date + pd.offsets.BDay(5)
+                    ),
+                }
+            )
+            keys.append((ticker, date))
+    frame = pd.DataFrame(
+        rows,
+        index=pd.MultiIndex.from_tuples(
+            keys,
+            names=("ticker", "observation_date"),
+        ),
+    ).sort_index()
+    return frame, histories
+
+
+class HierarchicalWalkForwardTest(unittest.TestCase):
+    def test_all_ablation_candidates_share_five_causal_test_folds(self):
+        frame, histories = _walk_forward_fixture()
+
+        predictions, weights, groups = (
+            walk_forward_hierarchical_predictions(
+                frame,
+                histories,
+                horizon=5,
+                feature_columns=("signal", "context"),
+                n_test_folds=5,
+                minimum_samples=30,
+            )
+        )
+
+        specifications = {
+            "logistic_global",
+            "logistic_time",
+            "logistic_group",
+            "logistic_time_group",
+            "logistic_time_group_ticker",
+        }
+        self.assertEqual(set(predictions["specification"]), specifications)
+        self.assertEqual(set(predictions["fold"]), {1, 2, 3, 4, 5})
+        expected = None
+        for specification in sorted(specifications):
+            selected = predictions.loc[
+                predictions["specification"] == specification,
+                ["ticker", "observation_date", "horizon", "fold"],
+            ].reset_index(drop=True)
+            if expected is None:
+                expected = selected
+            else:
+                pd.testing.assert_frame_equal(selected, expected)
+        self.assertTrue(
+            (
+                pd.to_datetime(predictions["training_label_end_max"])
+                < pd.to_datetime(predictions["test_start"])
+            ).all()
+        )
+        self.assertEqual(set(weights["status"]), {"available"})
+        self.assertEqual(set(groups["fold"]), {1, 2, 3, 4, 5})
+
+    def test_last_fold_outcomes_cannot_change_its_predictions(self):
+        frame, histories = _walk_forward_fixture()
+        before, _, _ = walk_forward_hierarchical_predictions(
+            frame,
+            histories,
+            horizon=5,
+            feature_columns=("signal", "context"),
+            n_test_folds=5,
+            minimum_samples=30,
+        )
+        last_keys = before.loc[
+            before["fold"] == 5,
+            ["ticker", "observation_date"],
+        ].drop_duplicates()
+        changed = frame.copy(deep=True)
+        for row in last_keys.itertuples(index=False):
+            changed.loc[
+                (row.ticker, row.observation_date),
+                "executable_return_5",
+            ] *= -50.0
+
+        after, _, _ = walk_forward_hierarchical_predictions(
+            changed,
+            histories,
+            horizon=5,
+            feature_columns=("signal", "context"),
+            n_test_folds=5,
+            minimum_samples=30,
+        )
+
+        columns = [
+            "ticker",
+            "observation_date",
+            "fold",
+            "specification",
+            "predicted_direction",
+        ]
+        pd.testing.assert_frame_equal(
+            before.loc[before["fold"] == 5, columns].reset_index(drop=True),
+            after.loc[after["fold"] == 5, columns].reset_index(drop=True),
+        )
+
+    def test_insufficient_effective_samples_emit_diagnostics_not_predictions(self):
+        frame, histories = _walk_forward_fixture(periods=120)
+
+        predictions, weights, groups = (
+            walk_forward_hierarchical_predictions(
+                frame,
+                histories,
+                horizon=5,
+                feature_columns=("signal", "context"),
+                n_test_folds=5,
+                minimum_samples=10_000,
+            )
+        )
+
+        self.assertTrue(predictions.empty)
+        self.assertFalse(weights.empty)
+        self.assertTrue(
+            weights["reason"].isin(
+                {
+                    "insufficient_training_samples",
+                    "insufficient_effective_samples",
+                    "insufficient_class_effective_samples",
+                }
+            ).all()
+        )
+        self.assertFalse(groups.empty)
 
 
 if __name__ == "__main__":
