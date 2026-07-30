@@ -5,6 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from research.market_direction_model import direction_labels
 from research.regime_threshold_direction import (
     RegimeThresholdDataUnavailable,
     adjust_regime_log_probabilities,
@@ -12,6 +13,7 @@ from research.regime_threshold_direction import (
     fit_regime_priors,
     select_economic_down_threshold,
     threshold_directions,
+    walk_forward_qqq_relative_predictions,
     walk_forward_regime_threshold_predictions,
 )
 
@@ -415,11 +417,13 @@ def _nested_fixture(periods=420):
             signal = np.sin(position / (4.0 + offset))
             context = np.cos(position / (7.0 + offset))
             target = 0.035 * signal + 0.018 * context
+            relative_target = 0.035 * signal - 0.018 * context
             rows.append(
                 {
                     "signal": signal,
                     "context": context,
                     "absolute_return_5": target,
+                    "qqq_relative_return_5": relative_target,
                     "executable_return_5": target,
                     "executable_label_end_date_5": (
                         date + pd.offsets.BDay(5)
@@ -598,6 +602,68 @@ class NestedWalkForwardTest(unittest.TestCase):
             set(diagnostics["reason"]),
             {"missing_direction_class"},
         )
+
+
+class RelativeHeadTest(unittest.TestCase):
+    def test_relative_head_is_semantically_separate_and_shares_outer_keys(self):
+        frame, regimes = _nested_fixture()
+        absolute, _ = walk_forward_regime_threshold_predictions(
+            frame,
+            regimes,
+            feature_columns=("signal", "context"),
+            minimum_samples=30,
+        )
+
+        relative = walk_forward_qqq_relative_predictions(
+            frame,
+            feature_columns=("signal", "context"),
+            minimum_samples=30,
+        )
+
+        self.assertEqual(
+            set(relative["specification"]),
+            {"logistic_qqq_relative"},
+        )
+        self.assertNotIn("actual_direction", relative.columns)
+        self.assertNotIn("predicted_direction", relative.columns)
+        absolute_keys = absolute.loc[
+            absolute["specification"] == "logistic_global",
+            ["ticker", "observation_date", "horizon", "fold"],
+        ].reset_index(drop=True)
+        relative_keys = relative.loc[
+            :,
+            ["ticker", "observation_date", "horizon", "fold"],
+        ].reset_index(drop=True)
+        pd.testing.assert_frame_equal(relative_keys, absolute_keys)
+        semantic_example = relative.loc[
+            (relative["actual_return"] > 0.01)
+            & (relative["actual_relative_return"] < -0.01)
+        ].iloc[0]
+        self.assertEqual(
+            semantic_example["actual_relative_direction"],
+            "down",
+        )
+        self.assertEqual(
+            direction_labels(
+                pd.Series([semantic_example["actual_return"]]),
+                5,
+            )[0],
+            "up",
+        )
+
+    def test_missing_relative_targets_produce_no_fabricated_rows(self):
+        frame, _ = _nested_fixture(periods=180)
+        frame["qqq_relative_return_5"] = np.nan
+
+        relative = walk_forward_qqq_relative_predictions(
+            frame,
+            feature_columns=("signal", "context"),
+            minimum_samples=20,
+        )
+
+        self.assertTrue(relative.empty)
+        self.assertIn("actual_relative_direction", relative.columns)
+        self.assertNotIn("actual_direction", relative.columns)
 
 
 if __name__ == "__main__":

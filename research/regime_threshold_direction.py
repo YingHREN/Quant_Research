@@ -421,6 +421,115 @@ def walk_forward_regime_threshold_predictions(
     return prediction_frame, pd.DataFrame(diagnostics)
 
 
+def walk_forward_qqq_relative_predictions(
+    frame,
+    *,
+    feature_columns,
+    n_test_folds=5,
+    minimum_samples=1_000,
+):
+    """Evaluate a separately named QQQ-relative direction head."""
+    columns = tuple(map(str, feature_columns))
+    if not columns:
+        raise ValueError("feature_columns must not be empty")
+    required = (
+        *columns,
+        "absolute_return_5",
+        "qqq_relative_return_5",
+        "executable_return_5",
+        "executable_label_end_date_5",
+    )
+    missing = [column for column in required if column not in frame]
+    if missing:
+        raise ValueError(f"frame is missing required columns: {missing}")
+    if (
+        isinstance(n_test_folds, bool)
+        or int(n_test_folds) < 2
+        or int(n_test_folds) != n_test_folds
+    ):
+        raise ValueError("n_test_folds must be an integer of at least two")
+    if (
+        isinstance(minimum_samples, bool)
+        or int(minimum_samples) <= 0
+        or int(minimum_samples) != minimum_samples
+    ):
+        raise ValueError("minimum_samples must be a positive integer")
+
+    predictions = []
+    outer_folds = chronological_purged_folds(
+        frame,
+        HORIZON,
+        n_folds=int(n_test_folds) + 1,
+    )
+    for fold, (train_index, test_index) in enumerate(
+        outer_folds,
+        start=1,
+    ):
+        train = frame.iloc[train_index]
+        test = frame.iloc[test_index]
+        train_valid = pd.to_numeric(
+            train["qqq_relative_return_5"],
+            errors="coerce",
+        ).notna()
+        test_valid = pd.to_numeric(
+            test["qqq_relative_return_5"],
+            errors="coerce",
+        ).notna()
+        train = train.loc[train_valid]
+        test = test.loc[test_valid]
+        if len(train) < int(minimum_samples) or test.empty:
+            continue
+        y_train = direction_labels(
+            train["qqq_relative_return_5"],
+            HORIZON,
+        )
+        if set(map(str, y_train)) != set(DIRECTION_CLASSES):
+            continue
+        x_train, x_test = training_only_design(train, test, columns)
+        weights = _balanced_class_weights(y_train)
+        model = _fit_logistic(x_train, y_train, weights)
+        probabilities = _ordered_probabilities(model, x_test)
+        predicted = np.asarray(
+            DIRECTION_CLASSES,
+            dtype=object,
+        )[np.argmax(probabilities, axis=1)]
+        predictions.append(
+            pd.DataFrame(
+                {
+                    "ticker": test.index.get_level_values("ticker"),
+                    "observation_date": _observation_dates(test.index),
+                    "horizon": HORIZON,
+                    "fold": fold,
+                    "specification": "logistic_qqq_relative",
+                    "actual_return": test[
+                        "absolute_return_5"
+                    ].to_numpy(dtype=float),
+                    "actual_relative_return": test[
+                        "qqq_relative_return_5"
+                    ].to_numpy(dtype=float),
+                    "actual_relative_direction": direction_labels(
+                        test["qqq_relative_return_5"],
+                        HORIZON,
+                    ),
+                    "predicted_relative_direction": predicted,
+                    "training_samples": len(train),
+                    "training_label_end_max": pd.Timestamp(
+                        train["executable_label_end_date_5"].max()
+                    ),
+                    "test_start": pd.Timestamp(
+                        _observation_dates(test.index).min()
+                    ),
+                }
+            )
+        )
+    if not predictions:
+        return _empty_relative_prediction_frame()
+    return pd.concat(predictions, ignore_index=True).sort_values(
+        ["fold", "ticker", "observation_date"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
 def fit_regime_priors(
     labels,
     weights,
@@ -931,6 +1040,25 @@ def _empty_prediction_frame():
             "actual_return",
             "actual_direction",
             "predicted_direction",
+            "training_samples",
+            "training_label_end_max",
+            "test_start",
+        )
+    )
+
+
+def _empty_relative_prediction_frame():
+    return pd.DataFrame(
+        columns=(
+            "ticker",
+            "observation_date",
+            "horizon",
+            "fold",
+            "specification",
+            "actual_return",
+            "actual_relative_return",
+            "actual_relative_direction",
+            "predicted_relative_direction",
             "training_samples",
             "training_label_end_max",
             "test_start",
