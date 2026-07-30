@@ -315,8 +315,8 @@ def paired_feature_evidence(
                 "control_availability": (
                     float(control.notna().mean()) if len(checked) else 0.0
                 ),
-                "case_median": _finite_or_nan(case.median()),
-                "control_median": _finite_or_nan(control.median()),
+                "case_median": _series_median(case),
+                "control_median": _series_median(control),
                 "paired_mean_difference": paired_mean,
                 "paired_median_difference": paired_median,
                 "standardized_difference": standardized,
@@ -836,3 +836,10 @@ def _finite_or_none(value):
 def _finite_or_nan(value):
     converted = _finite_or_none(value)
     return converted if converted is not None else np.nan
+
+
+def _series_median(values):
+    available = values.dropna()
+    if available.empty:
+        return np.nan
+    return _finite_or_nan(available.median())
