@@ -14,6 +14,14 @@ BOTTOM_MODEL_VERSION = "v1"
 MEMORY_SESSIONS = 10
 FAILURE_MEMORY_SESSIONS = 3
 MIN_HISTORY = 63
+BOTTOM_COMPONENT_ORDER = (
+    "location",
+    "exhaustion",
+    "demand",
+    "structure",
+    "environment",
+)
+BOTTOM_COMPONENTS = frozenset(BOTTOM_COMPONENT_ORDER)
 
 REQUIRED_PRICE_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 POSITIVE_STATES = (
@@ -38,9 +46,18 @@ STATE_RANK = {
 def build_bottom_state_rows(
     history: pd.DataFrame,
     evidence: pd.DataFrame,
+    *,
+    disabled_components: frozenset[str] = frozenset(),
 ) -> pd.DataFrame:
     """Return one point-in-time bottoming-state diagnosis per session."""
     _validate_inputs(history, evidence)
+    disabled = frozenset(disabled_components)
+    unknown_disabled = disabled - BOTTOM_COMPONENTS
+    if unknown_disabled:
+        raise ValueError(
+            "disabled_components contains unknown components: "
+            f"{sorted(unknown_disabled)}"
+        )
     if history.empty:
         return pd.DataFrame(index=history.index)
 
@@ -78,28 +95,57 @@ def build_bottom_state_rows(
         proof = aligned.iloc[position]
         conditions = []
         counter_conditions = []
+        component_conditions = {
+            component: [] for component in BOTTOM_COMPONENT_ORDER
+        }
 
         location_score, location_available = _location_score(
             source,
             proof,
-            conditions,
+            component_conditions["location"],
         )
         exhaustion_score, exhaustion_available = _exhaustion_score(
             proof,
-            conditions,
+            component_conditions["exhaustion"],
         )
         demand_score, demand_available = _demand_score(
             proof,
-            conditions,
+            component_conditions["demand"],
         )
         structure_score, structure_available = _structure_score(
             proof,
-            conditions,
+            component_conditions["structure"],
         )
         environment_score, environment_available = _environment_score(
             proof,
-            conditions,
+            component_conditions["environment"],
         )
+        component_values = {
+            "location": [location_score, location_available],
+            "exhaustion": [exhaustion_score, exhaustion_available],
+            "demand": [demand_score, demand_available],
+            "structure": [structure_score, structure_available],
+            "environment": [environment_score, environment_available],
+        }
+        for component in disabled:
+            component_values[component] = [0.0, False]
+        (
+            location_score,
+            location_available,
+        ) = component_values["location"]
+        (
+            exhaustion_score,
+            exhaustion_available,
+        ) = component_values["exhaustion"]
+        demand_score, demand_available = component_values["demand"]
+        structure_score, structure_available = component_values["structure"]
+        (
+            environment_score,
+            environment_available,
+        ) = component_values["environment"]
+        for component in BOTTOM_COMPONENT_ORDER:
+            if component not in disabled:
+                conditions.extend(component_conditions[component])
         coverage = sum(
             (
                 True,

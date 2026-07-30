@@ -5,7 +5,12 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.bottom_state_evaluation import build_bottom_transition_events
+from research.bottom_state_evaluation import (
+    bottom_evaluation_decision,
+    build_bottom_transition_events,
+    evaluate_bottom_events,
+    match_downtrend_baselines,
+)
 from tests.helpers import make_ohlcv
 
 
@@ -32,6 +37,49 @@ def _states(index):
         },
         index=index,
     )
+
+
+def _matching_event(
+    event_id,
+    *,
+    ticker="AAA",
+    date="2024-01-10",
+    state="seller_exhaustion_watch",
+    role="event",
+    drawdown_bin="-15_-25",
+    group="semiconductor",
+    regime="market_in_correction",
+    fold=1,
+    cohort="confirmation",
+    variant="full",
+    horizon=10,
+    scope="non_overlapping",
+    forward_return=0.05,
+):
+    return {
+        "event_id": event_id,
+        "ticker": ticker,
+        "observation_date": pd.Timestamp(date),
+        "observation_state": state,
+        "event_role": role,
+        "drawdown_bin": drawdown_bin,
+        "group": group,
+        "market_regime": regime,
+        "fold": fold,
+        "cohort": cohort,
+        "variant": variant,
+        "horizon": horizon,
+        "scope": scope,
+        "forward_return": forward_return,
+        "positive_return": forward_return > 0,
+        "maximum_favorable_excursion": max(forward_return, 0.08),
+        "maximum_adverse_excursion": min(forward_return, -0.03),
+        "confirmed_within_horizon": state == "bullish_structure_confirmed",
+        "failed_within_horizon": False,
+        "sessions_to_confirmation": 3.0,
+        "sessions_to_failure": np.nan,
+        "state_maintained": True,
+    }
 
 
 class BottomTransitionContractTest(unittest.TestCase):
@@ -345,6 +393,354 @@ class BottomTransitionOutcomeTest(unittest.TestCase):
             mature,
             expected.reset_index(drop=True),
         )
+
+
+class BottomBaselineMatchingTest(unittest.TestCase):
+    def test_matching_prefers_same_ticker_then_same_group(self):
+        events = pd.DataFrame(
+            [
+                _matching_event("event"),
+                _matching_event(
+                    "same-group",
+                    ticker="BBB",
+                    date="2024-01-09",
+                    state="downtrend_continuation",
+                    role="baseline",
+                ),
+                _matching_event(
+                    "same-ticker",
+                    date="2024-01-08",
+                    state="downtrend_continuation",
+                    role="baseline",
+                ),
+            ]
+        )
+
+        matched = match_downtrend_baselines(events)
+
+        self.assertEqual(matched.iloc[0]["baseline_ticker"], "AAA")
+        self.assertEqual(
+            matched.iloc[0]["match_tier"],
+            "same_ticker_exact_bin",
+        )
+
+    def test_matching_never_crosses_market_regime(self):
+        events = pd.DataFrame(
+            [
+                _matching_event("event"),
+                _matching_event(
+                    "baseline",
+                    state="downtrend_continuation",
+                    role="baseline",
+                    regime="confirmed_uptrend",
+                ),
+            ]
+        )
+
+        self.assertTrue(match_downtrend_baselines(events).empty)
+
+    def test_matching_can_use_only_an_adjacent_drawdown_bin(self):
+        events = pd.DataFrame(
+            [
+                _matching_event("event", drawdown_bin="-15_-25"),
+                _matching_event(
+                    "distant",
+                    date="2024-01-09",
+                    state="downtrend_continuation",
+                    role="baseline",
+                    drawdown_bin="below_-40",
+                ),
+                _matching_event(
+                    "adjacent",
+                    date="2024-01-08",
+                    state="downtrend_continuation",
+                    role="baseline",
+                    drawdown_bin="-25_-40",
+                ),
+            ]
+        )
+
+        matched = match_downtrend_baselines(events)
+
+        self.assertEqual(
+            matched.iloc[0]["baseline_drawdown_bin"],
+            "-25_-40",
+        )
+        self.assertEqual(
+            matched.iloc[0]["match_tier"],
+            "same_ticker_adjacent_bin",
+        )
+
+    def test_one_baseline_row_cannot_be_reused(self):
+        events = pd.DataFrame(
+            [
+                _matching_event("event-1", date="2024-01-10"),
+                _matching_event("event-2", date="2024-01-11"),
+                _matching_event(
+                    "baseline",
+                    date="2024-01-09",
+                    state="downtrend_continuation",
+                    role="baseline",
+                ),
+            ]
+        )
+
+        matched = match_downtrend_baselines(events)
+
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(
+            matched["baseline_event_id"].nunique(),
+            len(matched),
+        )
+
+    def test_matching_is_independent_of_future_outcome_columns(self):
+        source = pd.DataFrame(
+            [
+                _matching_event("event"),
+                _matching_event(
+                    "baseline-near",
+                    date="2024-01-09",
+                    state="downtrend_continuation",
+                    role="baseline",
+                ),
+                _matching_event(
+                    "baseline-far",
+                    date="2024-01-01",
+                    state="downtrend_continuation",
+                    role="baseline",
+                ),
+            ]
+        )
+        changed = source.copy()
+        for column in (
+            "forward_return",
+            "maximum_favorable_excursion",
+            "maximum_adverse_excursion",
+        ):
+            changed.loc[:, column] = source[column] * -100.0
+
+        first = match_downtrend_baselines(source)
+        second = match_downtrend_baselines(changed)
+
+        self.assertEqual(
+            first[["event_id", "baseline_event_id"]].to_dict("records"),
+            second[["event_id", "baseline_event_id"]].to_dict("records"),
+        )
+
+
+class BottomEvaluationAggregationTest(unittest.TestCase):
+    def test_matched_metrics_report_exact_event_baseline_deltas(self):
+        event = _matching_event(
+            "event",
+            forward_return=0.10,
+        )
+        event.update(
+            {
+                "maximum_favorable_excursion": 0.15,
+                "maximum_adverse_excursion": -0.04,
+                "confirmed_within_horizon": True,
+                "failed_within_horizon": False,
+                "sessions_to_confirmation": 2.0,
+                "sessions_to_failure": np.nan,
+                "state_maintained": True,
+            }
+        )
+        baseline = _matching_event(
+            "baseline",
+            date="2024-01-09",
+            state="downtrend_continuation",
+            role="baseline",
+            forward_return=-0.02,
+        )
+        baseline.update(
+            {
+                "maximum_favorable_excursion": 0.03,
+                "maximum_adverse_excursion": -0.08,
+                "confirmed_within_horizon": False,
+                "failed_within_horizon": True,
+                "sessions_to_confirmation": np.nan,
+                "sessions_to_failure": 4.0,
+                "state_maintained": False,
+            }
+        )
+
+        metrics = evaluate_bottom_events(pd.DataFrame([event, baseline]))
+        row = metrics.loc[
+            metrics["metric_scope"].eq("matched")
+            & metrics["state_slice"].eq("early_states")
+            & metrics["slice_dimension"].eq("all")
+        ].iloc[0]
+
+        self.assertEqual(row["event_count"], 1)
+        self.assertEqual(row["matched_count"], 1)
+        self.assertEqual(row["match_coverage"], 1.0)
+        self.assertAlmostEqual(row["mean_return"], 0.10)
+        self.assertAlmostEqual(row["median_return"], 0.10)
+        self.assertAlmostEqual(row["positive_rate"], 1.0)
+        self.assertAlmostEqual(row["mean_mfe"], 0.15)
+        self.assertAlmostEqual(row["mean_mae"], -0.04)
+        self.assertAlmostEqual(row["confirmation_rate"], 1.0)
+        self.assertAlmostEqual(row["failure_rate"], 0.0)
+        self.assertAlmostEqual(row["maintenance_rate"], 1.0)
+        self.assertAlmostEqual(row["baseline_mean_return"], -0.02)
+        self.assertAlmostEqual(row["return_gain"], 0.12)
+        self.assertAlmostEqual(row["positive_rate_gain"], 1.0)
+        self.assertAlmostEqual(row["mae_delta"], 0.04)
+
+    def test_unmatched_metrics_remain_visible_when_no_baseline_exists(self):
+        metrics = evaluate_bottom_events(
+            pd.DataFrame([_matching_event("event")])
+        )
+
+        unmatched = metrics.loc[
+            metrics["metric_scope"].eq("all_events")
+            & metrics["state_slice"].eq("early_states")
+            & metrics["slice_dimension"].eq("all")
+        ].iloc[0]
+
+        self.assertEqual(unmatched["event_count"], 1)
+        self.assertEqual(unmatched["matched_count"], 0)
+        self.assertEqual(unmatched["match_coverage"], 0.0)
+
+
+def _gate_metrics(
+    *,
+    group_count=100,
+    fold_wins=3,
+    include_group=True,
+    include_drawdown=True,
+):
+    common = {
+        "cohort": "confirmation",
+        "variant": "full",
+        "horizon": 10,
+        "scope": "non_overlapping",
+        "state_slice": "early_states",
+        "metric_scope": "matched",
+        "event_count": 300,
+        "matched_count": 300,
+        "positive_rate_gain": 0.06,
+        "return_gain": 0.03,
+        "mae_delta": 0.01,
+        "confirmation_rate": 0.40,
+    }
+    rows = [
+        {
+            **common,
+            "slice_dimension": "all",
+            "slice_value": "all",
+        }
+    ]
+    for fold in range(5):
+        rows.append(
+            {
+                **common,
+                "slice_dimension": "fold",
+                "slice_value": str(fold),
+                "return_gain": 0.01 if fold < fold_wins else -0.01,
+                "positive_rate_gain": (
+                    0.01 if fold < fold_wins else -0.01
+                ),
+            }
+        )
+    if include_group:
+        for group in ("semiconductor", "software", "other"):
+            rows.append(
+                {
+                    **common,
+                    "slice_dimension": "group",
+                    "slice_value": group,
+                    "matched_count": group_count,
+                }
+            )
+    if include_drawdown:
+        rows.append(
+            {
+                **common,
+                "slice_dimension": "drawdown_bin",
+                "slice_value": "-15_-25",
+            }
+        )
+    for variant in (
+        "no_location",
+        "no_exhaustion",
+        "no_demand",
+        "no_structure",
+        "no_environment",
+    ):
+        rows.append(
+            {
+                **common,
+                "variant": variant,
+                "slice_dimension": "all",
+                "slice_value": "all",
+                "return_gain": 0.01,
+            }
+        )
+    for state, rate in (
+        ("seller_exhaustion_watch", 0.30),
+        ("early_bullish_reversal_watch", 0.40),
+        ("structure_confirmed", 0.50),
+    ):
+        rows.append(
+            {
+                **common,
+                "state_slice": state,
+                "slice_dimension": "all",
+                "slice_value": "all",
+                "confirmation_rate": rate,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+class BottomEvaluationGateTest(unittest.TestCase):
+    def test_gate_passes_only_with_all_performance_and_audit_conditions(self):
+        decision = bottom_evaluation_decision(
+            _gate_metrics(),
+            evidence_contract_passed=True,
+            group_causal_audit_passed=True,
+            future_holdout_passed=True,
+        )
+
+        self.assertTrue(decision["eligible"])
+        self.assertEqual(decision["authority"], "advisory_only")
+        self.assertEqual(decision["reasons"], [])
+
+    def test_gate_fails_closed_without_future_holdout(self):
+        decision = bottom_evaluation_decision(
+            _gate_metrics(),
+            evidence_contract_passed=True,
+            group_causal_audit_passed=True,
+            future_holdout_passed=False,
+        )
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn("future_holdout_required", decision["reasons"])
+
+    def test_gate_requires_three_fold_wins_and_two_large_group_wins(self):
+        decision = bottom_evaluation_decision(
+            _gate_metrics(group_count=99, fold_wins=2),
+            evidence_contract_passed=True,
+            group_causal_audit_passed=True,
+            future_holdout_passed=True,
+        )
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn("insufficient_fold_wins", decision["reasons"])
+        self.assertIn("insufficient_group_evidence", decision["reasons"])
+
+    def test_gate_fails_when_group_or_drawdown_slices_are_missing(self):
+        decision = bottom_evaluation_decision(
+            _gate_metrics(include_group=False, include_drawdown=False),
+            evidence_contract_passed=True,
+            group_causal_audit_passed=True,
+            future_holdout_passed=True,
+        )
+
+        self.assertFalse(decision["eligible"])
+        self.assertIn("group_slices_missing", decision["reasons"])
+        self.assertIn("drawdown_slices_missing", decision["reasons"])
 
 
 if __name__ == "__main__":

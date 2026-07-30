@@ -57,6 +57,50 @@ def support_evidence(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 class BottomStateModelTest(unittest.TestCase):
+    def test_disabling_demand_does_not_disable_exhaustion(self):
+        frame = downtrend_history()
+        evidence = support_evidence(frame)
+        evidence.loc[:, "demand_confirmation_score"] = 72.0
+        evidence.loc[:, "demand_confirmation_coverage"] = 1.0
+        evidence.at[
+            frame.index[-1],
+            "demand_confirmation_conditions",
+        ] = ["seller_exhaustion", "positive_signed_volume"]
+
+        row = build_bottom_state_rows(
+            frame,
+            evidence,
+            disabled_components=frozenset({"demand"}),
+        ).iloc[-1]
+
+        self.assertGreater(row["bottom_exhaustion_score"], 0.0)
+        self.assertEqual(row["bottom_demand_score"], 0.0)
+        self.assertIn("seller_exhaustion", row["bottom_conditions"])
+        self.assertNotIn("positive_signed_volume", row["bottom_conditions"])
+
+    def test_unknown_disabled_component_is_rejected(self):
+        frame = downtrend_history()
+
+        with self.assertRaisesRegex(ValueError, "disabled"):
+            build_bottom_state_rows(
+                frame,
+                blank_evidence(frame.index),
+                disabled_components=frozenset({"unknown"}),
+            )
+
+    def test_explicit_empty_ablation_preserves_default_output(self):
+        frame = downtrend_history()
+        evidence = support_evidence(frame)
+
+        expected = build_bottom_state_rows(frame, evidence)
+        actual = build_bottom_state_rows(
+            frame,
+            evidence,
+            disabled_components=frozenset(),
+        )
+
+        pd.testing.assert_frame_equal(actual, expected)
+
     def test_historical_demand_support_labels_location_without_recounting_demand(self):
         frame = downtrend_history()
         evidence = support_evidence(frame)
