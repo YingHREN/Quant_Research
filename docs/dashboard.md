@@ -191,6 +191,38 @@ the sector query and drill-down while the stock links return to the existing
 stock dashboard. Page and API reads are local and never start a provider
 request or the intraday collector.
 
+### Policy and liquidity context
+
+The macro card includes a separate `macro_policy_context_v1` research layer.
+It uses only observations whose `available_at` timestamp is on or before the
+requested date and reports:
+
+- the Federal funds target range and its 63-day direction;
+- the Federal Reserve balance-sheet and bank-reserve 91-day directions;
+- the 10-year real-yield 63-day direction;
+- headline and core PCE year-over-year levels and directions;
+- a descriptive combined state and evidence coverage.
+
+The output is descriptive and advisory. It has no online authority, does not
+alter Ridge or sector scores, and is not a sector forecast. Reserve-management
+purchases are not automatically labelled QE: event intent and mechanism need
+an official, separately versioned policy-event catalog before that
+classification is shown.
+
+Populate or update the release-aware local macro database explicitly:
+
+```bash
+source env.sh
+./venv/bin/python fetch_macro_data.py \
+  --series DFEDTARL DFEDTARU WALCL WSHOSHO WSHOMCB \
+  WRESBAL WTREGEN RRPONTSYD DFII10 PCEPI PCEPILFE \
+  --start 2010-01-01
+```
+
+Opening `/market` or calling `/api/market-overview` never starts this fetch.
+If required observations or history are missing, the policy state is shown as
+unavailable rather than neutral.
+
 The fixed reference pool is:
 
 ```text
