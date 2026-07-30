@@ -8,10 +8,13 @@ from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 
 from research.market_direction_model import (
     attach_next_open_targets,
+    chronological_purged_folds,
     direction_labels,
+    training_only_design,
 )
 
 
@@ -224,6 +227,198 @@ def select_economic_down_threshold(
         reason=None,
         diagnostics=tuple(diagnostics),
     )
+
+
+def walk_forward_regime_threshold_predictions(
+    frame,
+    regimes,
+    *,
+    feature_columns,
+    n_test_folds=5,
+    minimum_samples=1_000,
+):
+    """Evaluate global, causal-regime, and nested-threshold challengers."""
+    columns = tuple(map(str, feature_columns))
+    if not columns:
+        raise ValueError("feature_columns must not be empty")
+    missing = [
+        column
+        for column in (
+            *columns,
+            "absolute_return_5",
+            "executable_return_5",
+            "executable_label_end_date_5",
+        )
+        if column not in frame
+    ]
+    if missing:
+        raise ValueError(f"frame is missing required columns: {missing}")
+    if (
+        isinstance(n_test_folds, bool)
+        or int(n_test_folds) < 2
+        or int(n_test_folds) != n_test_folds
+    ):
+        raise ValueError("n_test_folds must be an integer of at least two")
+    if (
+        isinstance(minimum_samples, bool)
+        or int(minimum_samples) <= 0
+        or int(minimum_samples) != minimum_samples
+    ):
+        raise ValueError("minimum_samples must be a positive integer")
+    regime_series = _prepare_regime_series(regimes)
+    predictions = []
+    diagnostics = []
+    outer_folds = chronological_purged_folds(
+        frame,
+        HORIZON,
+        n_folds=int(n_test_folds) + 1,
+    )
+    for outer_fold, (train_index, test_index) in enumerate(
+        outer_folds,
+        start=1,
+    ):
+        train = frame.iloc[train_index]
+        test = frame.iloc[test_index]
+        test_start = _observation_dates(test.index).min()
+        train_label_end_max = pd.Timestamp(
+            train["executable_label_end_date_5"].max()
+        )
+        base_diagnostic = {
+            "outer_fold": outer_fold,
+            "status": "available",
+            "reason": None,
+            "outer_training_samples": len(train),
+            "outer_test_samples": len(test),
+            "outer_train_label_end_max": train_label_end_max,
+            "outer_test_start": pd.Timestamp(test_start),
+            "inner_oof_rows": 0,
+            "inner_fold_boundaries": (),
+            "selected_threshold": np.nan,
+            "threshold_status": "unavailable",
+            "threshold_reason": "economic_threshold_unavailable",
+            "threshold_diagnostics": (),
+        }
+        if len(train) < int(minimum_samples):
+            base_diagnostic.update(
+                status="unavailable",
+                reason="insufficient_training_samples",
+            )
+            diagnostics.append(base_diagnostic)
+            continue
+        y_train = direction_labels(
+            train["absolute_return_5"],
+            HORIZON,
+        )
+        if set(map(str, y_train)) != set(DIRECTION_CLASSES):
+            base_diagnostic.update(
+                status="unavailable",
+                reason="missing_direction_class",
+            )
+            diagnostics.append(base_diagnostic)
+            continue
+
+        inner_oof, inner_boundaries = _inner_oof_regime_predictions(
+            train,
+            regime_series,
+            columns,
+            minimum_samples=int(minimum_samples),
+        )
+        threshold_result = select_economic_down_threshold(inner_oof)
+        base_diagnostic.update(
+            inner_oof_rows=len(inner_oof),
+            inner_fold_boundaries=inner_boundaries,
+            selected_threshold=(
+                float(threshold_result.threshold)
+                if threshold_result.threshold is not None
+                else np.nan
+            ),
+            threshold_status=threshold_result.status,
+            threshold_reason=threshold_result.reason,
+            threshold_diagnostics=threshold_result.diagnostics,
+        )
+
+        x_train, x_test = training_only_design(train, test, columns)
+        weights = _balanced_class_weights(y_train)
+        model = _fit_logistic(x_train, y_train, weights)
+        global_probabilities = _ordered_probabilities(model, x_test)
+        train_regimes = _regimes_for_index(regime_series, train.index)
+        test_regimes = _regimes_for_index(regime_series, test.index)
+        priors = fit_regime_priors(
+            y_train,
+            weights,
+            train_regimes,
+        )
+        prior_probabilities = _normalized_probabilities(
+            adjust_regime_log_probabilities(
+                np.log(
+                    np.clip(
+                        global_probabilities,
+                        np.finfo(float).tiny,
+                        1.0,
+                    )
+                ),
+                test_regimes,
+                priors,
+            )
+        )
+        y_test = direction_labels(
+            test["absolute_return_5"],
+            HORIZON,
+        )
+        test_tickers = np.asarray(
+            test.index.get_level_values("ticker"),
+            dtype=object,
+        )
+        test_dates = _observation_dates(test.index)
+        candidate_predictions = {
+            "logistic_global": np.asarray(
+                DIRECTION_CLASSES,
+                dtype=object,
+            )[np.argmax(global_probabilities, axis=1)],
+            "logistic_regime_prior": np.asarray(
+                DIRECTION_CLASSES,
+                dtype=object,
+            )[np.argmax(prior_probabilities, axis=1)],
+        }
+        if threshold_result.threshold is not None:
+            candidate_predictions["logistic_regime_threshold"] = (
+                threshold_directions(
+                    prior_probabilities,
+                    threshold_result.threshold,
+                )
+            )
+        for specification, predicted in candidate_predictions.items():
+            predictions.append(
+                pd.DataFrame(
+                    {
+                        "ticker": test_tickers,
+                        "observation_date": test_dates,
+                        "horizon": HORIZON,
+                        "fold": outer_fold,
+                        "specification": specification,
+                        "actual_return": test[
+                            "absolute_return_5"
+                        ].to_numpy(dtype=float),
+                        "actual_direction": y_test,
+                        "predicted_direction": predicted,
+                        "training_samples": len(train),
+                        "training_label_end_max": train_label_end_max,
+                        "test_start": pd.Timestamp(test_start),
+                    }
+                )
+            )
+        diagnostics.append(base_diagnostic)
+    prediction_frame = (
+        pd.concat(predictions, ignore_index=True)
+        if predictions
+        else _empty_prediction_frame()
+    )
+    if not prediction_frame.empty:
+        prediction_frame = prediction_frame.sort_values(
+            ["specification", "fold", "ticker", "observation_date"],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    return prediction_frame, pd.DataFrame(diagnostics)
 
 
 def fit_regime_priors(
@@ -490,6 +685,256 @@ def _weighted_counts(labels, weights, classes):
             for label in classes
         ],
         dtype=float,
+    )
+
+
+def _inner_oof_regime_predictions(
+    train,
+    regime_series,
+    feature_columns,
+    *,
+    minimum_samples,
+):
+    rows = []
+    boundaries = []
+    folds = chronological_purged_folds(
+        train,
+        HORIZON,
+        n_folds=4,
+    )
+    for inner_fold, (fit_index, validation_index) in enumerate(
+        folds,
+        start=1,
+    ):
+        fit = train.iloc[fit_index]
+        validation = train.iloc[validation_index]
+        if len(fit) < int(minimum_samples):
+            continue
+        y_fit = direction_labels(fit["absolute_return_5"], HORIZON)
+        if set(map(str, y_fit)) != set(DIRECTION_CLASSES):
+            continue
+        validation_start = _observation_dates(validation.index).min()
+        training_label_end_max = pd.Timestamp(
+            fit["executable_label_end_date_5"].max()
+        )
+        if not training_label_end_max < pd.Timestamp(validation_start):
+            raise RuntimeError("inner fold label purge invariant failed")
+        x_fit, x_validation = training_only_design(
+            fit,
+            validation,
+            feature_columns,
+        )
+        weights = _balanced_class_weights(y_fit)
+        model = _fit_logistic(x_fit, y_fit, weights)
+        probabilities = _ordered_probabilities(model, x_validation)
+        fit_regimes = _regimes_for_index(regime_series, fit.index)
+        validation_regimes = _regimes_for_index(
+            regime_series,
+            validation.index,
+        )
+        priors = fit_regime_priors(
+            y_fit,
+            weights,
+            fit_regimes,
+        )
+        adjusted = _normalized_probabilities(
+            adjust_regime_log_probabilities(
+                np.log(
+                    np.clip(
+                        probabilities,
+                        np.finfo(float).tiny,
+                        1.0,
+                    )
+                ),
+                validation_regimes,
+                priors,
+            )
+        )
+        rows.append(
+            pd.DataFrame(
+                {
+                    "ticker": validation.index.get_level_values(
+                        "ticker"
+                    ),
+                    "observation_date": _observation_dates(
+                        validation.index
+                    ),
+                    "inner_fold": inner_fold,
+                    "actual_direction": direction_labels(
+                        validation["absolute_return_5"],
+                        HORIZON,
+                    ),
+                    "actual_return": validation[
+                        "absolute_return_5"
+                    ].to_numpy(dtype=float),
+                    "down_probability": adjusted[:, 0],
+                    "neutral_probability": adjusted[:, 1],
+                    "up_probability": adjusted[:, 2],
+                }
+            )
+        )
+        boundaries.append(
+            MappingProxyType(
+                {
+                    "inner_fold": inner_fold,
+                    "training_samples": len(fit),
+                    "validation_samples": len(validation),
+                    "training_label_end_max": training_label_end_max,
+                    "test_start": pd.Timestamp(validation_start),
+                }
+            )
+        )
+    columns = (
+        "ticker",
+        "observation_date",
+        "inner_fold",
+        "actual_direction",
+        "actual_return",
+        "down_probability",
+        "neutral_probability",
+        "up_probability",
+    )
+    output = (
+        pd.concat(rows, ignore_index=True)
+        if rows
+        else pd.DataFrame(columns=columns)
+    )
+    if not output.empty and not output.duplicated(
+        ["ticker", "observation_date"]
+    ).any():
+        output = output.sort_values(
+            ["inner_fold", "ticker", "observation_date"],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    elif not output.empty:
+        raise RuntimeError("inner OOF keys must be unique")
+    return output, tuple(boundaries)
+
+
+def _prepare_regime_series(regimes):
+    if isinstance(regimes, pd.DataFrame):
+        if "regime" not in regimes:
+            raise ValueError("regimes DataFrame must contain regime")
+        source = regimes["regime"]
+    elif isinstance(regimes, pd.Series):
+        source = regimes
+    else:
+        raise TypeError("regimes must be a Series or DataFrame")
+    result = source.copy(deep=True)
+    dates = pd.DatetimeIndex(pd.to_datetime(result.index, errors="coerce"))
+    if dates.isna().any():
+        raise ValueError("regime dates must be valid")
+    if dates.tz is not None:
+        dates = dates.tz_localize(None)
+    dates = dates.normalize()
+    if dates.has_duplicates:
+        raise ValueError("regime dates must be unique")
+    result.index = dates
+    return result.sort_index()
+
+
+def _regimes_for_index(regime_series, index):
+    values = regime_series.reindex(_observation_dates(index)).to_numpy(
+        dtype=object
+    )
+    return np.asarray(
+        [
+            None
+            if (
+                value is None
+                or pd.isna(value)
+                or not str(value).strip()
+                or str(value).strip() == "unavailable"
+            )
+            else str(value).strip()
+            for value in values
+        ],
+        dtype=object,
+    )
+
+
+def _balanced_class_weights(labels):
+    values = np.asarray(labels, dtype=object)
+    counts = {
+        label: int(np.sum(values == label))
+        for label in DIRECTION_CLASSES
+    }
+    if any(count <= 0 for count in counts.values()):
+        raise ValueError("all direction classes are required")
+    weights = np.asarray(
+        [
+            len(values) / (len(DIRECTION_CLASSES) * counts[str(label)])
+            for label in values
+        ],
+        dtype=float,
+    )
+    return weights / float(weights.mean())
+
+
+def _fit_logistic(design, labels, weights):
+    model = LogisticRegression(
+        max_iter=1_000,
+        random_state=0,
+        solver="liblinear",
+    )
+    model.fit(design, labels, sample_weight=weights)
+    return model
+
+
+def _ordered_probabilities(model, design):
+    raw = np.asarray(model.predict_proba(design), dtype=float)
+    positions = {
+        str(label): position
+        for position, label in enumerate(model.classes_)
+    }
+    if set(positions) != set(DIRECTION_CLASSES):
+        raise ValueError("fitted model must contain all direction classes")
+    return raw[
+        :,
+        [positions[label] for label in DIRECTION_CLASSES],
+    ]
+
+
+def _normalized_probabilities(log_probabilities):
+    scores = np.asarray(log_probabilities, dtype=float)
+    maximum = np.max(scores, axis=1, keepdims=True)
+    exponentiated = np.exp(scores - maximum)
+    return exponentiated / exponentiated.sum(axis=1, keepdims=True)
+
+
+def _observation_dates(index):
+    if not isinstance(index, pd.MultiIndex):
+        raise ValueError("frame index must be a MultiIndex")
+    if "observation_date" not in index.names:
+        raise ValueError("frame index must contain observation_date")
+    dates = pd.DatetimeIndex(
+        pd.to_datetime(
+            index.get_level_values("observation_date"),
+            errors="coerce",
+        )
+    )
+    if dates.isna().any():
+        raise ValueError("observation dates must be valid")
+    if dates.tz is not None:
+        dates = dates.tz_localize(None)
+    return dates.normalize()
+
+
+def _empty_prediction_frame():
+    return pd.DataFrame(
+        columns=(
+            "ticker",
+            "observation_date",
+            "horizon",
+            "fold",
+            "specification",
+            "actual_return",
+            "actual_direction",
+            "predicted_direction",
+            "training_samples",
+            "training_label_end_max",
+            "test_start",
+        )
     )
 
 

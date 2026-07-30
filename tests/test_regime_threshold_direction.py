@@ -12,6 +12,7 @@ from research.regime_threshold_direction import (
     fit_regime_priors,
     select_economic_down_threshold,
     threshold_directions,
+    walk_forward_regime_threshold_predictions,
 )
 
 
@@ -403,6 +404,200 @@ class EconomicThresholdTest(unittest.TestCase):
         )
 
         self.assertEqual(first, second)
+
+
+def _nested_fixture(periods=420):
+    dates = pd.bdate_range("2023-01-03", periods=periods)
+    rows = []
+    keys = []
+    for offset, ticker in enumerate(("AAA", "BBB", "CCC")):
+        for position, date in enumerate(dates):
+            signal = np.sin(position / (4.0 + offset))
+            context = np.cos(position / (7.0 + offset))
+            target = 0.035 * signal + 0.018 * context
+            rows.append(
+                {
+                    "signal": signal,
+                    "context": context,
+                    "absolute_return_5": target,
+                    "executable_return_5": target,
+                    "executable_label_end_date_5": (
+                        date + pd.offsets.BDay(5)
+                    ),
+                }
+            )
+            keys.append((ticker, date))
+    frame = pd.DataFrame(
+        rows,
+        index=pd.MultiIndex.from_tuples(
+            keys,
+            names=("ticker", "observation_date"),
+        ),
+    ).sort_index()
+    regimes = pd.DataFrame(
+        {
+            "regime": np.where(
+                np.arange(periods) % 3 == 0,
+                "under_pressure",
+                "uptrend",
+            )
+        },
+        index=dates,
+    )
+    return frame, regimes
+
+
+class NestedWalkForwardTest(unittest.TestCase):
+    def test_global_and_regime_candidates_share_five_causal_folds(self):
+        frame, regimes = _nested_fixture()
+
+        predictions, diagnostics = (
+            walk_forward_regime_threshold_predictions(
+                frame,
+                regimes,
+                feature_columns=("signal", "context"),
+                minimum_samples=30,
+            )
+        )
+
+        self.assertEqual(set(diagnostics["outer_fold"]), {1, 2, 3, 4, 5})
+        self.assertTrue(
+            (
+                pd.to_datetime(diagnostics["outer_train_label_end_max"])
+                < pd.to_datetime(diagnostics["outer_test_start"])
+            ).all()
+        )
+        available = {
+            "logistic_global",
+            "logistic_regime_prior",
+        }
+        self.assertTrue(available.issubset(set(predictions["specification"])))
+        expected = None
+        for specification in sorted(available):
+            selected = predictions.loc[
+                predictions["specification"] == specification,
+                ["ticker", "observation_date", "horizon", "fold"],
+            ].reset_index(drop=True)
+            if expected is None:
+                expected = selected
+            else:
+                pd.testing.assert_frame_equal(selected, expected)
+        for boundaries in diagnostics["inner_fold_boundaries"]:
+            self.assertTrue(boundaries)
+            for boundary in boundaries:
+                self.assertLess(
+                    pd.Timestamp(boundary["training_label_end_max"]),
+                    pd.Timestamp(boundary["test_start"]),
+                )
+
+    def test_outer_outcomes_and_future_regimes_cannot_change_predictions(self):
+        frame, regimes = _nested_fixture()
+        before, before_diagnostics = (
+            walk_forward_regime_threshold_predictions(
+                frame,
+                regimes,
+                feature_columns=("signal", "context"),
+                minimum_samples=30,
+            )
+        )
+        changed = frame.copy(deep=True)
+        last_test_dates = before.loc[
+            before["fold"] == 5,
+            "observation_date",
+        ].unique()
+        selected = changed.index.get_level_values(
+            "observation_date"
+        ).isin(last_test_dates)
+        changed.loc[selected, "absolute_return_5"] *= -50.0
+        changed.loc[selected, "executable_return_5"] *= -50.0
+        future_regimes = regimes.copy(deep=True)
+        future_dates = pd.bdate_range(
+            regimes.index[-1] + pd.offsets.BDay(),
+            periods=20,
+        )
+        future_regimes = pd.concat(
+            (
+                future_regimes,
+                pd.DataFrame(
+                    {"regime": "acute_selloff"},
+                    index=future_dates,
+                ),
+            )
+        )
+
+        after, after_diagnostics = (
+            walk_forward_regime_threshold_predictions(
+                changed,
+                future_regimes,
+                feature_columns=("signal", "context"),
+                minimum_samples=30,
+            )
+        )
+
+        columns = [
+            "ticker",
+            "observation_date",
+            "fold",
+            "specification",
+            "predicted_direction",
+        ]
+        pd.testing.assert_frame_equal(
+            before.loc[before["fold"] == 5, columns].reset_index(drop=True),
+            after.loc[after["fold"] == 5, columns].reset_index(drop=True),
+        )
+        first_thresholds = before_diagnostics.set_index("outer_fold")[
+            "selected_threshold"
+        ]
+        second_thresholds = after_diagnostics.set_index("outer_fold")[
+            "selected_threshold"
+        ]
+        pd.testing.assert_series_equal(first_thresholds, second_thresholds)
+
+    def test_unavailable_threshold_is_explicit_and_not_fabricated(self):
+        frame, regimes = _nested_fixture(periods=180)
+
+        predictions, diagnostics = (
+            walk_forward_regime_threshold_predictions(
+                frame,
+                regimes,
+                feature_columns=("signal", "context"),
+                minimum_samples=20,
+            )
+        )
+
+        self.assertEqual(
+            set(diagnostics["threshold_status"]),
+            {"unavailable"},
+        )
+        self.assertEqual(
+            set(diagnostics["threshold_reason"]),
+            {"economic_threshold_unavailable"},
+        )
+        self.assertNotIn(
+            "logistic_regime_threshold",
+            set(predictions["specification"]),
+        )
+
+    def test_missing_direction_classes_emit_diagnostics_not_predictions(self):
+        frame, regimes = _nested_fixture(periods=180)
+        frame["absolute_return_5"] = 0.03
+        frame["executable_return_5"] = 0.03
+
+        predictions, diagnostics = (
+            walk_forward_regime_threshold_predictions(
+                frame,
+                regimes,
+                feature_columns=("signal", "context"),
+                minimum_samples=20,
+            )
+        )
+
+        self.assertTrue(predictions.empty)
+        self.assertFalse(diagnostics.empty)
+        self.assertEqual(
+            set(diagnostics["reason"]),
+            {"missing_direction_class"},
+        )
 
 
 if __name__ == "__main__":
