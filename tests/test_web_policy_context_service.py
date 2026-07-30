@@ -23,6 +23,7 @@ def observation(
         "realtime_start": realtime_start,
         "realtime_end": "9999-12-31",
         "source": "FRED/ALFRED",
+        "revision_policy": "initial_release_only",
     }
 
 
