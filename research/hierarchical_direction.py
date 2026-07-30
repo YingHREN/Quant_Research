@@ -7,6 +7,12 @@ from numbers import Integral
 import numpy as np
 import pandas as pd
 
+from data.market_behavior import (
+    RULE_VERSION as MARKET_BEHAVIOR_VERSION,
+    classify_market_behavior,
+)
+from web.market_groups import SECTOR_ETFS
+
 
 HALF_LIFE_BY_HORIZON = {5: 126, 20: 252, 60: 504}
 DIRECTION_CLASSES = ("down", "neutral", "up")
@@ -98,6 +104,95 @@ def recency_class_weights(
         diagnostics["reason"] = "insufficient_class_effective_samples"
         return None, diagnostics
     return combined, diagnostics
+
+
+def freeze_behavior_groups(
+    histories,
+    tickers,
+    cutoff,
+    *,
+    sector_etfs=SECTOR_ETFS,
+):
+    """Freeze price-behavior groups using only prices visible by cutoff."""
+    checked_cutoff = pd.Timestamp(cutoff)
+    if pd.isna(checked_cutoff):
+        raise ValueError("cutoff must be a valid date")
+    if checked_cutoff.tz is not None:
+        checked_cutoff = checked_cutoff.tz_localize(None)
+    checked_cutoff = checked_cutoff.normalize()
+    requested = tuple(
+        sorted(
+            {
+                str(ticker).strip().upper()
+                for ticker in tickers
+                if str(ticker).strip()
+            }
+        )
+    )
+    price_rows = {
+        str(ticker).strip().upper(): _price_rows(frame, checked_cutoff)
+        for ticker, frame in histories.items()
+        if str(ticker).strip()
+    }
+    normalized_etfs = {
+        str(sector): str(ticker).strip().upper()
+        for sector, ticker in sector_etfs.items()
+        if str(sector).strip() and str(ticker).strip()
+    }
+    groups = {}
+    common_days = {}
+    sector_counts = {}
+    for ticker in requested:
+        result = classify_market_behavior(
+            price_rows,
+            ticker,
+            normalized_etfs,
+            sec_sector="",
+            asof=checked_cutoff.date().isoformat(),
+            min_observations=126,
+            max_observations=252,
+        )
+        if result is None:
+            groups[ticker] = None
+            continue
+        groups[ticker] = result.sector_key
+        common_days[ticker] = result.common_days
+        sector_counts[result.sector_key] = (
+            sector_counts.get(result.sector_key, 0) + 1
+        )
+    classified = sum(group is not None for group in groups.values())
+    diagnostics = {
+        "cutoff": checked_cutoff.date().isoformat(),
+        "rule_version": MARKET_BEHAVIOR_VERSION,
+        "requested_count": len(requested),
+        "classified_count": classified,
+        "unavailable_count": len(requested) - classified,
+        "sector_counts": dict(sorted(sector_counts.items())),
+        "common_days": dict(sorted(common_days.items())),
+    }
+    return groups, diagnostics
+
+
+def _price_rows(frame, cutoff):
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+    column = "Adj Close" if "Adj Close" in frame else "Close"
+    if column not in frame:
+        return []
+    dates = pd.DatetimeIndex(pd.to_datetime(frame.index, errors="coerce"))
+    if dates.tz is not None:
+        dates = dates.tz_localize(None)
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    rows = []
+    for raw_date, value in zip(dates, values):
+        if (
+            pd.notna(raw_date)
+            and raw_date.normalize() <= cutoff
+            and np.isfinite(value)
+            and value > 0.0
+        ):
+            rows.append((raw_date.date().isoformat(), float(value)))
+    return rows
 
 
 def _observation_dates(index):

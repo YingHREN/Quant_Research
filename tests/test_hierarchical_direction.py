@@ -7,6 +7,7 @@ import pandas as pd
 
 from research.hierarchical_direction import (
     HALF_LIFE_BY_HORIZON,
+    freeze_behavior_groups,
     recency_class_weights,
 )
 
@@ -115,6 +116,109 @@ class RecencyWeightTest(unittest.TestCase):
             diagnostics["reason"],
             "insufficient_class_effective_samples",
         )
+
+
+def _price_frame(returns, start="2025-01-02"):
+    prices = [100.0]
+    for value in returns:
+        prices.append(prices[-1] * (1.0 + value))
+    dates = pd.bdate_range(start, periods=len(prices))
+    return pd.DataFrame(
+        {
+            "Open": prices,
+            "High": np.asarray(prices) + 1.0,
+            "Low": np.asarray(prices) - 1.0,
+            "Close": prices,
+            "Adj Close": prices,
+            "Volume": np.full(len(prices), 1_000_000.0),
+        },
+        index=dates,
+    )
+
+
+def _behavior_histories(periods=180):
+    market = np.asarray(
+        [0.001 if index % 2 == 0 else -0.0007 for index in range(periods)]
+    )
+    technology_residual = np.asarray(
+        [0.008 if index % 5 in (0, 1) else -0.004 for index in range(periods)]
+    )
+    energy_residual = np.asarray(
+        [0.007 if index % 7 in (0, 3) else -0.002 for index in range(periods)]
+    )
+    return {
+        "ZZZ": _price_frame(market * 1.1 + technology_residual * 1.25),
+        "SPY": _price_frame(market),
+        "XLK": _price_frame(market * 0.9 + technology_residual),
+        "XLE": _price_frame(market * 0.8 + energy_residual),
+    }
+
+
+class FoldFrozenGroupTest(unittest.TestCase):
+    def test_behavior_groups_are_deterministic_and_cutoff_causal(self):
+        histories = _behavior_histories()
+        cutoff = histories["ZZZ"].index[160]
+        before = {
+            ticker: frame.copy(deep=True)
+            for ticker, frame in histories.items()
+        }
+
+        groups, diagnostics = freeze_behavior_groups(
+            histories,
+            ("ZZZ",),
+            cutoff,
+            sector_etfs={"technology": "XLK", "energy": "XLE"},
+        )
+
+        self.assertEqual(groups, {"ZZZ": "technology"})
+        self.assertEqual(diagnostics["classified_count"], 1)
+        self.assertEqual(diagnostics["unavailable_count"], 0)
+        self.assertEqual(diagnostics["rule_version"], "market_behavior_v1")
+        for ticker in histories:
+            pd.testing.assert_frame_equal(histories[ticker], before[ticker])
+
+        for ticker, frame in histories.items():
+            future_date = frame.index[-1] + pd.offsets.BDay()
+            changed = frame.iloc[-1].copy()
+            changed.loc[["Close", "Adj Close"]] *= 20.0
+            histories[ticker].loc[future_date] = changed
+        after_groups, after_diagnostics = freeze_behavior_groups(
+            histories,
+            ("ZZZ",),
+            cutoff,
+            sector_etfs={"technology": "XLK", "energy": "XLE"},
+        )
+        self.assertEqual(after_groups, groups)
+        self.assertEqual(
+            after_diagnostics["sector_counts"],
+            diagnostics["sector_counts"],
+        )
+
+    def test_missing_or_short_reference_history_is_explicitly_unavailable(self):
+        histories = _behavior_histories(periods=40)
+
+        groups, diagnostics = freeze_behavior_groups(
+            histories,
+            ("ZZZ", "AAA"),
+            histories["ZZZ"].index[-1],
+            sector_etfs={"technology": "XLK"},
+        )
+
+        self.assertEqual(list(groups), ["AAA", "ZZZ"])
+        self.assertEqual(groups, {"AAA": None, "ZZZ": None})
+        self.assertEqual(diagnostics["classified_count"], 0)
+        self.assertEqual(diagnostics["unavailable_count"], 2)
+
+        without_spy = dict(histories)
+        del without_spy["SPY"]
+        groups, diagnostics = freeze_behavior_groups(
+            without_spy,
+            ("ZZZ",),
+            histories["ZZZ"].index[-1],
+            sector_etfs={"technology": "XLK"},
+        )
+        self.assertEqual(groups["ZZZ"], None)
+        self.assertEqual(diagnostics["unavailable_count"], 1)
 
 
 if __name__ == "__main__":
