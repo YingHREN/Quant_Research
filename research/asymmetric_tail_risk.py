@@ -87,6 +87,283 @@ class TailBoundaryResult:
     diagnostics: tuple = ()
 
 
+def evaluate_tail_predictions(
+    predictions: pd.DataFrame,
+    *,
+    group_map=None,
+) -> pd.DataFrame:
+    """Evaluate raw economic outcomes on overlapping and spaced samples."""
+    required = (
+        "ticker",
+        "observation_date",
+        "fold",
+        "regime",
+        "boundary_status",
+        "predicted_tail_risk",
+        "actual_down_event",
+        "actual_rebound_event",
+        "actual_terminal_return",
+    )
+    if not isinstance(predictions, pd.DataFrame):
+        raise TypeError("predictions must be a DataFrame")
+    missing = [column for column in required if column not in predictions]
+    if missing:
+        raise ValueError(f"predictions are missing columns: {missing}")
+    checked = predictions.copy(deep=True)
+    checked["ticker"] = checked["ticker"].astype(str).str.upper()
+    checked["observation_date"] = pd.to_datetime(
+        checked["observation_date"],
+        errors="raise",
+    ).dt.tz_localize(None)
+    if checked.duplicated(["ticker", "observation_date"]).any():
+        raise ValueError("predictions contain duplicate ticker/date keys")
+    numeric_columns = (
+        "actual_terminal_return",
+        "actual_down_event",
+        "actual_rebound_event",
+    )
+    for column in numeric_columns:
+        checked[column] = pd.to_numeric(checked[column], errors="coerce")
+    checked = checked.sort_values(
+        ["ticker", "observation_date"],
+        kind="mergesort",
+    )
+    checked["_non_overlapping"] = (
+        checked.groupby("ticker", sort=False).cumcount().mod(5).eq(0)
+    )
+    checked = checked.loc[
+        (checked["boundary_status"] == "available")
+        & checked["predicted_tail_risk"].notna()
+        & np.isfinite(checked[list(numeric_columns)].to_numpy(dtype=float)).all(
+            axis=1
+        )
+    ].copy()
+    checked["predicted_tail_risk"] = checked[
+        "predicted_tail_risk"
+    ].astype(bool)
+    checked["actual_down_event"] = checked["actual_down_event"].astype(bool)
+    checked["actual_rebound_event"] = checked[
+        "actual_rebound_event"
+    ].astype(bool)
+    if "baseline_predicted_down" in checked:
+        checked["baseline_predicted_down"] = checked[
+            "baseline_predicted_down"
+        ].fillna(False).astype(bool)
+    else:
+        checked["baseline_predicted_down"] = False
+        checked.attrs["baseline_unavailable"] = True
+    groups = {}
+    if group_map is not None:
+        if not isinstance(group_map, Mapping):
+            raise TypeError("group_map must be a mapping")
+        groups = {
+            str(ticker).strip().upper(): str(group).strip()
+            for ticker, group in group_map.items()
+            if str(ticker).strip() and str(group).strip()
+        }
+    if groups:
+        checked["group"] = checked["ticker"].map(groups).fillna(
+            "unclassified"
+        )
+    elif "group" not in checked:
+        checked["group"] = "unclassified"
+    sample_frames = {
+        "overlapping": checked,
+        "non_overlapping": checked.loc[checked["_non_overlapping"]],
+    }
+    metric_rows = []
+    for sample_mode, sample in sample_frames.items():
+        scopes = [("overall", "all", None, sample)]
+        scopes.extend(
+            (
+                "group",
+                str(name),
+                None,
+                selected,
+            )
+            for name, selected in sample.groupby("group", sort=True)
+        )
+        scopes.extend(
+            (
+                "regime",
+                str(name),
+                None,
+                selected,
+            )
+            for name, selected in sample.groupby("regime", sort=True)
+        )
+        scopes.extend(
+            (
+                "fold",
+                str(int(name)),
+                int(name),
+                selected,
+            )
+            for name, selected in sample.groupby("fold", sort=True)
+        )
+        for scope_type, scope_name, fold, selected in scopes:
+            metric_rows.append(
+                _tail_metric_row(
+                    selected,
+                    sample_mode=sample_mode,
+                    scope_type=scope_type,
+                    scope_name=scope_name,
+                    fold=fold,
+                    baseline_available=(
+                        not checked.attrs.get("baseline_unavailable", False)
+                    ),
+                )
+            )
+    return pd.DataFrame(metric_rows).sort_values(
+        ["sample_mode", "scope_type", "scope_name"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
+def audit_extreme_counterexamples(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Return risk-flagged extreme winners without altering model evidence."""
+    required = (
+        "ticker",
+        "observation_date",
+        "predicted_tail_risk",
+        "actual_terminal_return",
+        "calibrated_down_probability",
+        "calibrated_rebound_probability",
+    )
+    if not isinstance(predictions, pd.DataFrame):
+        raise TypeError("predictions must be a DataFrame")
+    missing = [column for column in required if column not in predictions]
+    if missing:
+        raise ValueError(f"predictions are missing columns: {missing}")
+    checked = predictions.copy(deep=True)
+    checked["actual_terminal_return"] = pd.to_numeric(
+        checked["actual_terminal_return"],
+        errors="coerce",
+    )
+    selected = checked.loc[
+        checked["predicted_tail_risk"].fillna(False).astype(bool)
+        & (checked["actual_terminal_return"] >= EXTREME_REBOUND_THRESHOLD)
+    ].copy()
+    ordered = [
+        column
+        for column in (
+            "ticker",
+            "observation_date",
+            "fold",
+            "group",
+            "regime",
+            "calibrated_down_probability",
+            "calibrated_rebound_probability",
+            "actual_terminal_return",
+            "actual_path_mae",
+            "opening_gap",
+            "realized_volatility",
+            "dollar_volume",
+            "earnings_proximity",
+        )
+        if column in selected
+    ]
+    if selected.empty:
+        return pd.DataFrame(columns=ordered)
+    return selected.loc[:, ordered].sort_values(
+        ["calibrated_down_probability", "actual_terminal_return"],
+        ascending=(False, False),
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+
+def tail_promotion_decision(
+    metrics: pd.DataFrame,
+    causal_audit: Mapping,
+    *,
+    minimum_group_risk_rows: int = 200,
+) -> dict:
+    """Apply the frozen research gate without granting online authority."""
+    if not isinstance(metrics, pd.DataFrame):
+        raise TypeError("metrics must be a DataFrame")
+    if not isinstance(causal_audit, Mapping):
+        raise TypeError("causal_audit must be a mapping")
+    minimum_group = _positive_integer(
+        minimum_group_risk_rows,
+        "minimum_group_risk_rows",
+    )
+    required = (
+        "sample_mode",
+        "scope_type",
+        "scope_name",
+        "risk_count",
+        "coverage",
+        "down_precision_gain",
+        "mean_terminal_return",
+        "risk_rebound_rate",
+        "all_rebound_rate",
+    )
+    missing = [column for column in required if column not in metrics]
+    if missing:
+        raise ValueError(f"metrics are missing columns: {missing}")
+    selected = metrics.loc[metrics["sample_mode"] == "non_overlapping"]
+    overall = selected.loc[selected["scope_type"] == "overall"]
+    reasons = []
+    if len(overall) != 1:
+        reasons.append("overall_metrics_unavailable")
+        overall_row = None
+    else:
+        overall_row = overall.iloc[0]
+        if not 0.05 <= float(overall_row["coverage"]) <= 0.30:
+            reasons.append("coverage_gate_failed")
+        if not float(overall_row["mean_terminal_return"]) < 0.0:
+            reasons.append("economic_return_gate_failed")
+        if not float(overall_row["down_precision_gain"]) >= 0.03:
+            reasons.append("precision_gain_gate_failed")
+        all_rebound = float(overall_row["all_rebound_rate"])
+        risk_rebound = float(overall_row["risk_rebound_rate"])
+        rebound_limit = 0.70 * all_rebound
+        if not risk_rebound <= rebound_limit:
+            reasons.append("rebound_rate_gate_failed")
+    fold_rows = selected.loc[selected["scope_type"] == "fold"]
+    negative_folds = int(
+        (pd.to_numeric(
+            fold_rows["mean_terminal_return"],
+            errors="coerce",
+        ) < 0.0).sum()
+    )
+    if len(fold_rows) < 5 or negative_folds < 4:
+        reasons.append("fold_stability_gate_failed")
+    for group in ("semiconductor", "software"):
+        group_rows = selected.loc[
+            (selected["scope_type"] == "group")
+            & (selected["scope_name"] == group)
+        ]
+        if len(group_rows) != 1:
+            reasons.append(f"{group}_group_unavailable")
+            continue
+        row = group_rows.iloc[0]
+        if (
+            int(row["risk_count"]) < minimum_group
+            or not float(row["mean_terminal_return"]) < 0.0
+        ):
+            reasons.append(f"{group}_group_gate_failed")
+    if causal_audit.get("passed") is not True:
+        reasons.append("causal_audit_failed")
+    conditions = {
+        "overall_available": overall_row is not None,
+        "negative_fold_count": negative_folds,
+        "semiconductor_available": (
+            "semiconductor_group_unavailable" not in reasons
+        ),
+        "software_available": "software_group_unavailable" not in reasons,
+        "causal_audit_passed": causal_audit.get("passed") is True,
+    }
+    return {
+        "promoted": not reasons,
+        "status": "passed" if not reasons else "rejected",
+        "reasons": tuple(reasons),
+        "conditions": conditions,
+        "lifecycle": "research",
+        "online_authority": "none",
+    }
+
+
 def walk_forward_asymmetric_tail_predictions(
     frame: pd.DataFrame,
     *,
@@ -625,6 +902,66 @@ def _purged_folds(frame, n_folds):
         if len(train_positions) and len(test_positions):
             folds.append((train_positions, test_positions))
     return folds
+
+
+def _tail_metric_row(
+    selected,
+    *,
+    sample_mode,
+    scope_type,
+    scope_name,
+    fold,
+    baseline_available,
+):
+    row_count = len(selected)
+    risk = selected["predicted_tail_risk"].astype(bool)
+    actual_down = selected["actual_down_event"].astype(bool)
+    actual_rebound = selected["actual_rebound_event"].astype(bool)
+    risk_count = int(risk.sum())
+    actual_down_count = int(actual_down.sum())
+    risk_rows = selected.loc[risk]
+    true_down = int((risk & actual_down).sum())
+    baseline = selected["baseline_predicted_down"].astype(bool)
+    baseline_count = int(baseline.sum())
+    risk_precision = true_down / risk_count if risk_count else np.nan
+    baseline_precision = (
+        int((baseline & actual_down).sum()) / baseline_count
+        if baseline_available and baseline_count
+        else np.nan
+    )
+    return {
+        "sample_mode": sample_mode,
+        "scope_type": scope_type,
+        "scope_name": scope_name,
+        "fold": fold,
+        "row_count": row_count,
+        "risk_count": risk_count,
+        "coverage": risk_count / row_count if row_count else np.nan,
+        "down_precision": risk_precision,
+        "down_recall": (
+            true_down / actual_down_count if actual_down_count else np.nan
+        ),
+        "baseline_down_precision": baseline_precision,
+        "down_precision_gain": (
+            risk_precision - baseline_precision
+            if np.isfinite(risk_precision)
+            and np.isfinite(baseline_precision)
+            else np.nan
+        ),
+        "mean_terminal_return": (
+            float(risk_rows["actual_terminal_return"].mean())
+            if risk_count
+            else np.nan
+        ),
+        "risk_rebound_rate": (
+            float(risk_rows["actual_rebound_event"].mean())
+            if risk_count
+            else np.nan
+        ),
+        "all_rebound_rate": (
+            float(actual_rebound.mean()) if row_count else np.nan
+        ),
+    }
 
 
 def _inner_oof_head_predictions(frame, columns, *, minimum_samples):

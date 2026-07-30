@@ -5,8 +5,11 @@ import pandas as pd
 
 from research.asymmetric_tail_risk import (
     attach_asymmetric_tail_targets,
+    audit_extreme_counterexamples,
+    evaluate_tail_predictions,
     fit_oof_isotonic,
     select_tail_boundary,
+    tail_promotion_decision,
     walk_forward_asymmetric_tail_predictions,
 )
 
@@ -384,6 +387,181 @@ class NestedTailWalkForwardTest(unittest.TestCase):
             predictions.attrs["reason"],
             "calibration_unavailable",
         )
+
+
+def _evaluation_predictions():
+    rows = []
+    dates = pd.bdate_range("2026-01-02", periods=10)
+    returns = (-0.10, 1.00, -0.06, 0.02, -0.08, 0.01, -0.07, 0.03, -0.09, 0.04)
+    for position, date in enumerate(dates):
+        risk = position < 5
+        rows.append(
+            {
+                "ticker": "AAA" if position % 2 == 0 else "BBB",
+                "observation_date": date,
+                "fold": 1 if position < 5 else 2,
+                "regime": "under_pressure",
+                "group": (
+                    "semiconductor" if position % 2 == 0 else "software"
+                ),
+                "boundary_status": "available",
+                "predicted_tail_risk": risk,
+                "calibrated_down_probability": 0.8 if risk else 0.2,
+                "calibrated_rebound_probability": 0.1,
+                "actual_down_event": returns[position] <= -0.05,
+                "actual_rebound_event": returns[position] >= 0.10,
+                "actual_terminal_return": returns[position],
+                "actual_path_mae": min(returns[position], -0.01),
+                "baseline_predicted_down": position in (0, 2, 6),
+                "opening_gap": 0.02 * position,
+                "realized_volatility": 0.30,
+                "dollar_volume": 5_000_000.0,
+                "earnings_proximity": None,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+class TailEvaluationTest(unittest.TestCase):
+    def test_metrics_keep_extreme_winner_in_untrimmed_risk_mean(self):
+        predictions = _evaluation_predictions()
+
+        metrics = evaluate_tail_predictions(
+            predictions,
+            group_map={"AAA": "semiconductor", "BBB": "software"},
+        )
+        overall = metrics.loc[
+            (metrics["sample_mode"] == "overlapping")
+            & (metrics["scope_type"] == "overall")
+        ].iloc[0]
+
+        self.assertEqual(overall["risk_count"], 5)
+        self.assertAlmostEqual(
+            overall["mean_terminal_return"],
+            (-0.10 + 1.00 - 0.06 + 0.02 - 0.08) / 5,
+        )
+        self.assertGreater(overall["mean_terminal_return"], 0.0)
+        spaced = metrics.loc[
+            (metrics["sample_mode"] == "non_overlapping")
+            & (metrics["scope_type"] == "overall")
+        ].iloc[0]
+        self.assertEqual(spaced["row_count"], 2)
+
+    def test_counterexample_audit_keeps_only_risk_flagged_extreme_winners(self):
+        audited = audit_extreme_counterexamples(_evaluation_predictions())
+
+        self.assertEqual(len(audited), 1)
+        self.assertEqual(audited.iloc[0]["ticker"], "BBB")
+        self.assertGreaterEqual(
+            audited.iloc[0]["actual_terminal_return"],
+            0.10,
+        )
+        self.assertIn("opening_gap", audited)
+        self.assertIn("earnings_proximity", audited)
+
+    def test_gate_fails_when_required_large_group_is_missing(self):
+        metrics = pd.DataFrame(
+            [
+                {
+                    "sample_mode": "non_overlapping",
+                    "scope_type": "overall",
+                    "scope_name": "all",
+                    "fold": None,
+                    "row_count": 100,
+                    "risk_count": 10,
+                    "coverage": 0.10,
+                    "down_precision_gain": 0.05,
+                    "mean_terminal_return": -0.02,
+                    "risk_rebound_rate": 0.02,
+                    "all_rebound_rate": 0.05,
+                },
+                *[
+                    {
+                        "sample_mode": "non_overlapping",
+                        "scope_type": "fold",
+                        "scope_name": str(fold),
+                        "fold": fold,
+                        "row_count": 20,
+                        "risk_count": 2,
+                        "coverage": 0.10,
+                        "down_precision_gain": 0.05,
+                        "mean_terminal_return": -0.01,
+                        "risk_rebound_rate": 0.02,
+                        "all_rebound_rate": 0.05,
+                    }
+                    for fold in range(1, 6)
+                ],
+                {
+                    "sample_mode": "non_overlapping",
+                    "scope_type": "group",
+                    "scope_name": "semiconductor",
+                    "fold": None,
+                    "row_count": 40,
+                    "risk_count": 4,
+                    "coverage": 0.10,
+                    "down_precision_gain": 0.05,
+                    "mean_terminal_return": -0.02,
+                    "risk_rebound_rate": 0.02,
+                    "all_rebound_rate": 0.05,
+                },
+            ]
+        )
+
+        decision = tail_promotion_decision(
+            metrics,
+            {"passed": True},
+            minimum_group_risk_rows=2,
+        )
+
+        self.assertFalse(decision["promoted"])
+        self.assertIn("software_group_unavailable", decision["reasons"])
+        self.assertEqual(decision["online_authority"], "none")
+
+    def test_passing_research_gate_still_has_no_online_authority(self):
+        base = {
+            "sample_mode": "non_overlapping",
+            "row_count": 100,
+            "risk_count": 10,
+            "coverage": 0.10,
+            "down_precision_gain": 0.05,
+            "mean_terminal_return": -0.02,
+            "risk_rebound_rate": 0.02,
+            "all_rebound_rate": 0.05,
+        }
+        rows = [
+            {**base, "scope_type": "overall", "scope_name": "all", "fold": None},
+            *[
+                {
+                    **base,
+                    "scope_type": "fold",
+                    "scope_name": str(fold),
+                    "fold": fold,
+                }
+                for fold in range(1, 6)
+            ],
+            {
+                **base,
+                "scope_type": "group",
+                "scope_name": "semiconductor",
+                "fold": None,
+            },
+            {
+                **base,
+                "scope_type": "group",
+                "scope_name": "software",
+                "fold": None,
+            },
+        ]
+
+        decision = tail_promotion_decision(
+            pd.DataFrame(rows),
+            {"passed": True},
+            minimum_group_risk_rows=10,
+        )
+
+        self.assertTrue(decision["promoted"])
+        self.assertEqual(decision["status"], "passed")
+        self.assertEqual(decision["online_authority"], "none")
 
 
 if __name__ == "__main__":
