@@ -79,6 +79,10 @@ from web.services.macro_history import (
 )
 from web.services.macro_risk import MacroRiskService
 from web.services.policy_context import PolicyContextService
+from web.services.policy_benchmark_history import (
+    PolicyBenchmarkHistoryService,
+    SUPPORTED_POLICY_BENCHMARKS,
+)
 from web.services.policy_period_matrix import PolicyPeriodMatrixService
 from web.services.universe import UniverseSnapshotService
 from web.services.market_cap import market_cap_fields
@@ -262,11 +266,24 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
             policy_context_service=policy_context_service,
             policy_period_matrix_service=policy_period_matrix_service,
         )
+    research_benchmark_repository = ExpandedMarketDataRepository(
+        flask_app.config["RESEARCH_DATABASE"]
+    )
+    policy_benchmark_history_service = flask_app.config.get(
+        "POLICY_BENCHMARK_HISTORY_SERVICE"
+    )
+    if policy_benchmark_history_service is None:
+        policy_benchmark_history_service = PolicyBenchmarkHistoryService(
+            repository,
+            benchmark_repository=research_benchmark_repository,
+            revision_getter=lambda: getattr(
+                forecast_service,
+                "database_revision",
+                0,
+            ),
+        )
     macro_history_service = flask_app.config.get("MACRO_HISTORY_SERVICE")
     if macro_history_service is None:
-        research_benchmark_repository = ExpandedMarketDataRepository(
-            flask_app.config["RESEARCH_DATABASE"]
-        )
         macro_history_service = MacroHistoryService(
             repository,
             macro_risk_service,
@@ -404,6 +421,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         "dashboard_policy_period_matrix_service"
     ] = policy_period_matrix_service
     flask_app.extensions[
+        "dashboard_policy_benchmark_history_service"
+    ] = policy_benchmark_history_service
+    flask_app.extensions[
         "dashboard_macro_history_service"
     ] = macro_history_service
 
@@ -467,6 +487,21 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         payload = macro_history_service.build(
             asof=request.args.get("asof"),
             range_key=range_key,
+            benchmark=benchmark,
+        )
+        return _json_response(payload)
+
+    @flask_app.get("/api/policy-benchmark-history")
+    def policy_benchmark_history():
+        benchmark = request.args.get("benchmark", "SPY")
+        if benchmark not in SUPPORTED_POLICY_BENCHMARKS:
+            return _safe_error(
+                "invalid_policy_benchmark",
+                "Policy benchmark must be SPY or QQQ",
+                400,
+            )
+        payload = policy_benchmark_history_service.build(
+            asof=request.args.get("asof"),
             benchmark=benchmark,
         )
         return _json_response(payload)

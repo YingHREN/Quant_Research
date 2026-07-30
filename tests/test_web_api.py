@@ -3134,6 +3134,63 @@ class WebApiTest(unittest.TestCase):
             matrix_service,
         )
 
+    def test_policy_benchmark_history_route_validates_and_delegates(self):
+        service = mock.Mock()
+        service.build.return_value = {
+            "artifact_key": "policy_benchmark_history_v1",
+            "benchmark": "QQQ",
+            "rows": [],
+            "lifecycle": "research",
+            "decision_permission": "advisory",
+            "online_authority": "none",
+            "unavailable_reason": None,
+        }
+        app = create_app(
+            test_config(POLICY_BENCHMARK_HISTORY_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+        client = app.test_client()
+
+        response = client.get(
+            "/api/policy-benchmark-history"
+            "?benchmark=QQQ&asof=2026-07-23"
+        )
+        invalid = client.get(
+            "/api/policy-benchmark-history?benchmark=AMD"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json()["artifact_key"],
+            "policy_benchmark_history_v1",
+        )
+        service.build.assert_called_once_with(
+            asof="2026-07-23",
+            benchmark="QQQ",
+        )
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(
+            invalid.get_json()["error"]["code"],
+            "invalid_policy_benchmark",
+        )
+
+    def test_policy_benchmark_history_service_is_registered(self):
+        service = object()
+
+        app = create_app(
+            test_config(POLICY_BENCHMARK_HISTORY_SERVICE=service),
+            repository=FakeRepository(),
+            update_manager=FakeManager(),
+        )
+
+        self.assertIs(
+            app.extensions[
+                "dashboard_policy_benchmark_history_service"
+            ],
+            service,
+        )
+
     def test_missing_policy_catalog_keeps_market_api_read_only(self):
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory) / "missing-macro.db"

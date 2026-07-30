@@ -246,6 +246,16 @@ that were not yet visible at the requested point in time remain explicit
 non-numeric states. They are never filled with zero or a proxy. Selecting a
 period shows its dates, interpretation, and linked Federal Reserve sources.
 
+Above the matrix, a fixed-height long-run chart loads adjusted SPY or QQQ
+prices from the independent read-only
+`GET /api/policy-benchmark-history?benchmark=SPY` endpoint. Policy periods are
+drawn as non-interactive HTML bands over the chart: they do not enter the
+price series, price scale, visible-range calculation, or pointer handling.
+Dragging and zooming therefore remain native chart operations. Clicking a
+date on the chart selects the matching period and reuses the matrix's official
+event detail. Switching SPY/QQQ reloads only this lightweight price endpoint;
+it does not replay macro history or request a new market overview.
+
 This artifact is fixed at `lifecycle=research`,
 `decision_permission=advisory`, and `online_authority=none`. It is a historical
 description, not a policy forecast, sector recommendation, Ridge adjustment,

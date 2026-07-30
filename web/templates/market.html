@@ -163,6 +163,33 @@
             </button>
           </div>
         </div>
+        <div class="policy-period-chart-heading">
+          <div>
+            <h4 data-i18n="market.policyChart.title">
+              SPY/QQQ 长期价格与政策时期
+            </h4>
+            <p data-i18n="market.policyChart.disclaimer">
+              色带仅标示政策时期，不改变价格轴，也不构成走势预测。
+            </p>
+          </div>
+          <div class="policy-benchmark-controls" role="group"
+               aria-label="长期价格基准"
+               data-i18n-aria-label="market.policyChart.benchmarkAria">
+            <button type="button" data-policy-benchmark="SPY"
+                    aria-pressed="true">SPY</button>
+            <button type="button" data-policy-benchmark="QQQ"
+                    aria-pressed="false">QQQ</button>
+          </div>
+        </div>
+        <p id="policy-period-chart-status" class="market-status-line"
+           role="status" aria-live="polite"></p>
+        <div class="policy-period-chart-shell">
+          <div id="policy-period-chart"
+               class="policy-period-chart"
+               aria-label="长期价格与政策时期图"
+               data-i18n-aria-label="market.policyChart.chartAria"></div>
+          <div class="policy-period-band-overlay" aria-hidden="true"></div>
+        </div>
         <div id="policy-period-matrix"
              class="policy-period-matrix"></div>
         <div id="policy-period-detail"

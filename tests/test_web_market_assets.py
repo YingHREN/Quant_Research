@@ -17,6 +17,8 @@ class MarketAssetTest(unittest.TestCase):
             "policy-context",
             "policy-period-matrix",
             "policy-period-detail",
+            "policy-period-chart",
+            "policy-period-chart-status",
             "sector-drilldown",
             "market-events",
             "market-data-tier",
@@ -300,6 +302,38 @@ class MarketAssetTest(unittest.TestCase):
                 self.assertGreaterEqual(messages.count(f'"{key}"'), 2)
         self.assertIn(".policy-period-matrix", styles)
         self.assertIn(".policy-period-detail", styles)
+
+    def test_policy_period_chart_uses_non_intercepting_backend_bands(self):
+        template = (ROOT / "web/templates/market.html").read_text()
+        source = (ROOT / "web/static/js/market.js").read_text()
+        api = (ROOT / "web/static/js/api.js").read_text()
+        messages = (ROOT / "web/static/js/i18n.js").read_text()
+        styles = (ROOT / "web/static/css/market.css").read_text()
+
+        self.assertIn('id="policy-period-chart"', template)
+        self.assertIn('id="policy-period-chart-status"', template)
+        self.assertIn('data-policy-benchmark="SPY"', template)
+        self.assertIn('data-policy-benchmark="QQQ"', template)
+        self.assertIn("getPolicyBenchmarkHistory", api)
+        self.assertIn("createPolicyPeriodChart", source)
+        self.assertIn("policyBenchmark: \"SPY\"", source)
+        self.assertIn(
+            "state.payload?.policy_period_matrix?.periods",
+            source,
+        )
+        self.assertNotIn("getMacroHistory({\n      range: \"all\"", source)
+        self.assertIn(".policy-period-band-overlay", styles)
+        self.assertIn("pointer-events: none", styles)
+        for key in (
+            "market.policyChart.title",
+            "market.policyChart.disclaimer",
+            "market.policyChart.price",
+            "market.policyChart.loading",
+            "market.policyChart.loaded",
+            "market.policyChart.benchmarkAria",
+        ):
+            with self.subTest(key=key):
+                self.assertGreaterEqual(messages.count(f'"{key}"'), 2)
 
     def test_directional_signal_names_and_model_sources_are_bilingual(self):
         source = (ROOT / "web/static/js/i18n.js").read_text()

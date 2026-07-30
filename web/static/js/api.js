@@ -114,6 +114,19 @@ export function getMacroHistory({
   return requestJson(`/api/macro-history?${params.toString()}`);
 }
 
+export function getPolicyBenchmarkHistory({
+  asof = "",
+  benchmark = "SPY",
+} = {}) {
+  const params = new URLSearchParams({
+    benchmark: String(benchmark),
+  });
+  if (asof) params.set("asof", String(asof));
+  return requestJson(
+    `/api/policy-benchmark-history?${params.toString()}`,
+  );
+}
+
 export function startUpdate() {
   return requestJson("/api/update", { method: "POST" });
 }
@@ -153,6 +166,7 @@ export const api = Object.freeze({
   setResearchPoolMembership,
   getMarketOverview,
   getMacroHistory,
+  getPolicyBenchmarkHistory,
   startUpdate,
   getUpdateStatus,
   getCacheStatus,
