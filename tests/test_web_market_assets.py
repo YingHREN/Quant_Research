@@ -223,6 +223,9 @@ class MarketAssetTest(unittest.TestCase):
             "market.policy.direction.expanding",
             "market.policy.direction.contracting",
             "market.policy.direction.stable",
+            "market.policy.lifecycle.research",
+            "market.policy.permission.advisory",
+            "market.policy.authority.none",
             "market.unavailable.policy_data_unavailable",
             "market.unavailable.insufficient_policy_coverage",
         )
@@ -237,6 +240,8 @@ class MarketAssetTest(unittest.TestCase):
 
         self.assertIn('id="policy-context"', template)
         self.assertIn("function renderPolicyContext(", source)
+        self.assertIn("function formatPolicyDelta(", source)
+        self.assertIn('`${prefix}${Number(value).toFixed(digits)} pp`', source)
         self.assertIn("policy.dimensions?.policy_rate", source)
         self.assertIn("policy.dimensions?.liquidity", source)
         self.assertIn("policy.dimensions?.reserves", source)
@@ -244,6 +249,9 @@ class MarketAssetTest(unittest.TestCase):
         self.assertIn("policy.dimensions?.pce", source)
         self.assertIn("policy.dimensions?.core_pce", source)
         self.assertIn("renderPolicyContext(payload.policy_context)", source)
+        self.assertIn("policy.lifecycle", source)
+        self.assertIn("policy.decision_permission", source)
+        self.assertIn("policy.online_authority", source)
         self.assertNotIn("derivePolicyState(", source)
         self.assertIn(".policy-context-grid", styles)
         self.assertIn(".policy-context-heading", styles)

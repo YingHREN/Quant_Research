@@ -243,6 +243,12 @@ function formatPolicyPoint(value, digits = 2) {
     : `${Number(value).toFixed(digits)}%`;
 }
 
+function formatPolicyDelta(value, digits = 2) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  const prefix = Number(value) > 0 ? "+" : "";
+  return `${prefix}${Number(value).toFixed(digits)} pp`;
+}
+
 function policyDirection(dimension = {}) {
   return localized(
     `market.policy.direction.${dimension.direction || "unavailable"}`,
@@ -250,7 +256,7 @@ function policyDirection(dimension = {}) {
   );
 }
 
-function policyChange(dimension = {}, formatter = formatPolicyPoint) {
+function policyChange(dimension = {}, formatter = formatPolicyDelta) {
   if (dimension.change == null) {
     return unavailableText(dimension.unavailable_reason);
   }
@@ -318,7 +324,20 @@ function renderPolicyContext(policy = {}) {
     scoreBlock(
       t("market.policy.coverageAuthority"),
       formatPercent(policy.coverage),
-      t("market.policy.authorityDetail"),
+      t("market.policy.authorityDetail", {
+        lifecycle: localized(
+          `market.policy.lifecycle.${policy.lifecycle}`,
+          policy.lifecycle || "—",
+        ),
+        permission: localized(
+          `market.policy.permission.${policy.decision_permission}`,
+          policy.decision_permission || "—",
+        ),
+        authority: localized(
+          `market.policy.authority.${policy.online_authority}`,
+          policy.online_authority || "—",
+        ),
+      }),
     ),
   );
 }
