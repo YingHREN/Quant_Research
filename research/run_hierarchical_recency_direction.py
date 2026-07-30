@@ -379,8 +379,10 @@ def _json_safe(value):
         return [_json_safe(item) for item in value]
     if isinstance(value, (pd.Timestamp, np.datetime64)):
         return pd.Timestamp(value).isoformat()
+    if isinstance(value, (float, np.floating)) and not np.isfinite(value):
+        return None
     if isinstance(value, np.generic):
-        return value.item()
+        return _json_safe(value.item())
     if isinstance(value, Path):
         return str(value)
     return value

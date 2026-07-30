@@ -271,6 +271,7 @@ class HierarchicalRecencyRunnerTest(unittest.TestCase):
             "study_version": "hierarchical_recency_direction_v1",
             "online_authority": "none",
             "decision": decision,
+            "missing_metric": float("nan"),
         }
         report = render_report(metrics, manifest)
         self.assertIn("时间衰减与层级方向挑战模型", report)
@@ -286,6 +287,10 @@ class HierarchicalRecencyRunnerTest(unittest.TestCase):
                     "online_authority"
                 ],
                 "none",
+            )
+            self.assertNotIn(
+                "NaN",
+                paths["json"].read_text(encoding="utf-8"),
             )
             self.assertIn(
                 "不修改线上 Ridge",
