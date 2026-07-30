@@ -6,7 +6,10 @@ import numpy as np
 import pandas as pd
 
 from research.hierarchical_direction import (
+    DIRECTION_CLASSES,
     HALF_LIFE_BY_HORIZON,
+    adjust_log_probabilities,
+    fit_hierarchical_priors,
     freeze_behavior_groups,
     recency_class_weights,
 )
@@ -219,6 +222,110 @@ class FoldFrozenGroupTest(unittest.TestCase):
         )
         self.assertEqual(groups["ZZZ"], None)
         self.assertEqual(diagnostics["unavailable_count"], 1)
+
+
+class HierarchicalPriorTest(unittest.TestCase):
+    def priors(self):
+        labels = np.asarray(
+            ["down"]
+            + ["down"] * 100
+            + ["neutral"] * 200
+            + ["up"] * 200,
+            dtype=object,
+        )
+        tickers = np.asarray(
+            ["SMALL"]
+            + ["LARGE"] * 100
+            + ["BASE"] * 400,
+            dtype=object,
+        )
+        groups = np.asarray(
+            ["small_group"]
+            + ["large_group"] * 100
+            + ["base_group"] * 400,
+            dtype=object,
+        )
+        return fit_hierarchical_priors(
+            labels,
+            np.ones(len(labels)),
+            tickers,
+            groups,
+            DIRECTION_CLASSES,
+        )
+
+    def test_missing_levels_fall_back_to_parent_priors(self):
+        priors = self.priors()
+
+        np.testing.assert_allclose(
+            priors.group_prior("missing"),
+            priors.global_prior,
+        )
+        np.testing.assert_allclose(
+            priors.ticker_prior("missing", "large_group"),
+            priors.group_prior("large_group"),
+        )
+        self.assertAlmostEqual(float(priors.global_prior.sum()), 1.0)
+        for values in priors.group_priors.values():
+            self.assertAlmostEqual(float(np.asarray(values).sum()), 1.0)
+        for values in priors.ticker_priors.values():
+            self.assertAlmostEqual(float(np.asarray(values).sum()), 1.0)
+
+    def test_large_matching_sample_moves_further_from_global_than_small_sample(self):
+        priors = self.priors()
+        global_down = priors.global_prior[0]
+        small_delta = priors.group_prior("small_group")[0] - global_down
+        large_delta = priors.group_prior("large_group")[0] - global_down
+
+        self.assertGreater(small_delta, 0.0)
+        self.assertGreater(large_delta, small_delta)
+
+    def test_unseen_rows_keep_global_scores_and_ticker_layer_is_incremental(self):
+        labels = np.asarray(
+            ["down"] * 60 + ["neutral"] * 60 + ["up"] * 60,
+            dtype=object,
+        )
+        tickers = np.asarray(
+            ["DOWN"] * 60 + ["MIX"] * 60 + ["UP"] * 60,
+            dtype=object,
+        )
+        groups = np.asarray(["one"] * 180, dtype=object)
+        priors = fit_hierarchical_priors(
+            labels,
+            np.ones(len(labels)),
+            tickers,
+            groups,
+            DIRECTION_CLASSES,
+        )
+        base = np.log(np.asarray([[0.30, 0.40, 0.30]]))
+
+        unseen = adjust_log_probabilities(
+            base,
+            np.asarray(["NEW"]),
+            np.asarray([None], dtype=object),
+            priors,
+            include_group=True,
+            include_ticker=True,
+        )
+        np.testing.assert_allclose(unseen, base)
+
+        group_only = adjust_log_probabilities(
+            base,
+            np.asarray(["DOWN"]),
+            np.asarray(["one"]),
+            priors,
+            include_group=True,
+            include_ticker=False,
+        )
+        with_ticker = adjust_log_probabilities(
+            base,
+            np.asarray(["DOWN"]),
+            np.asarray(["one"]),
+            priors,
+            include_group=True,
+            include_ticker=True,
+        )
+        self.assertFalse(np.allclose(group_only, with_ticker))
+        self.assertGreater(with_ticker[0, 0], group_only[0, 0])
 
 
 if __name__ == "__main__":
