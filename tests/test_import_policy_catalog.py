@@ -85,6 +85,29 @@ class ImportPolicyCatalogTest(unittest.TestCase):
             rows = store.load_events("2026-01-01T00:00:00+00:00")
             self.assertTrue(rows.empty)
 
+    def test_period_availability_cannot_precede_referenced_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = root / "catalog.json"
+            database = root / "macro.db"
+            payload = catalog_payload()
+            payload["periods"][0]["available_at"] = (
+                "2020-03-15T20:59:59+00:00"
+            )
+            write_catalog(catalog, payload)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "before referenced event",
+            ):
+                import_catalog(catalog, database)
+
+            store = PolicyEventStore(database)
+            store.initialize()
+            self.assertTrue(
+                store.load_events("2026-01-01T00:00:00+00:00").empty
+            )
+
     def test_import_is_idempotent_and_summary_omits_local_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -8,6 +8,8 @@ import json
 import os
 from pathlib import Path
 
+import pandas as pd
+
 from web.services.policy_event_store import PolicyEventStore
 
 
@@ -63,6 +65,13 @@ def _validated_catalog(payload):
         field="period_id",
         kind="period",
     )
+    event_availability = {
+        row["event_id"]: _aware_timestamp(
+            row.get("available_at"),
+            field="event available_at",
+        )
+        for row in normalized_events
+    }
     for period in normalized_periods:
         references = period.get("source_event_ids_json")
         if isinstance(references, str):
@@ -84,6 +93,21 @@ def _validated_catalog(payload):
             raise ValueError(
                 "policy period references unknown event: "
                 + ", ".join(unknown)
+            )
+        period_available = _aware_timestamp(
+            period.get("available_at"),
+            field="period available_at",
+        )
+        latest_source = max(
+            (event_availability[event_id] for event_id in references),
+            default=None,
+        )
+        if (
+            latest_source is not None
+            and period_available < latest_source
+        ):
+            raise ValueError(
+                "policy period available_at is before referenced event"
             )
         period["source_event_ids_json"] = references
     return version, normalized_events, normalized_periods
@@ -119,6 +143,13 @@ def _unique_ids(rows, *, field, kind):
             f"duplicate policy {kind} id: {', '.join(duplicates)}"
         )
     return set(values)
+
+
+def _aware_timestamp(value, *, field):
+    timestamp = pd.Timestamp(value)
+    if timestamp.tz is None:
+        raise ValueError(f"{field} must include a UTC offset")
+    return timestamp.tz_convert("UTC")
 
 
 def main(argv=None):

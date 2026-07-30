@@ -196,18 +196,25 @@ def _normalize_event(row):
         raise ValueError(
             "policy event source must be an official Federal Reserve URL"
         )
+    available_at = _utc_iso(row["available_at"], field="available_at")
+    published_at = _utc_iso(
+        row["source_published_at"],
+        field="source_published_at",
+    )
+    if pd.Timestamp(available_at) < pd.Timestamp(published_at):
+        raise ValueError(
+            "policy event available_at must not precede "
+            "source_published_at"
+        )
     return (
         str(row["event_id"]),
         str(row["catalog_version"]),
         event_type,
         _date_iso(row["effective_date"], field="effective_date"),
-        _utc_iso(row["available_at"], field="available_at"),
+        available_at,
         source_url,
         str(row["source_title"]),
-        _utc_iso(
-            row["source_published_at"],
-            field="source_published_at",
-        ),
+        published_at,
         _canonical_json(row["payload_json"], expected_type=dict),
     )
 

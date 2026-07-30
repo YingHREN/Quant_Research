@@ -107,6 +107,26 @@ class PolicyEventStoreTest(unittest.TestCase):
                     ]
                 )
 
+    def test_event_availability_cannot_precede_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = PolicyEventStore(Path(directory) / "macro.db")
+            store.initialize()
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "precede source_published_at",
+            ):
+                store.upsert_events(
+                    [
+                        policy_event(
+                            available_at="2026-07-29T17:59:59+00:00",
+                            source_published_at=(
+                                "2026-07-29T18:00:00+00:00"
+                            ),
+                        )
+                    ]
+                )
+
     def test_event_rejects_invalid_payload_json(self):
         with tempfile.TemporaryDirectory() as directory:
             store = PolicyEventStore(Path(directory) / "macro.db")
