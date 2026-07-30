@@ -412,6 +412,13 @@
   路径成熟后报告覆盖率、概率指标、机会成本和策略最大回撤。至少捕获
   60 个交易日且满足分组、召回、特异度和回撤门槛后，才允许进入人工
   评审；`online_authority=none`，TOPRISK-001 继续保持“实施中”。
+  - [x] 2026-07-30 修复冻结产物记录旧 worktree 绝对路径后无法 capture
+    的可移植性缺陷：只有记录路径不存在时才允许读取命令行显式配置的产物，
+    且仍强制核对实验冻结的 SHA-256，不修改不可变实验身份。随后首次真实
+    capture 记录 2026-07-29 的 240 只股票、11 个规格共 2,640 条预测，
+    覆盖率 100%，不可用和不适用均为 0，重复主键为 0；按不可回填契约没有
+    追补错过的 2026-07-28。当前研究库尚无 2026-07-29 之后的交易日，
+    因此成熟 outcome 仍为 0，不提前生成成绩或改变 `online_authority=none`。
 - [x] 为全量统一 benchmark 增加
   `load_inputs`、`build_statistical_predictions`、`build_rule_context`、
   `label_and_align`、`evaluate`、`publish` 和 `total` 分阶段计时及

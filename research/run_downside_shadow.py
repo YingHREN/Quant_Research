@@ -90,22 +90,14 @@ def freeze_experiment(config, dependencies=None):
     store = DownsideShadowStore(checked.shadow_database)
     existing = store.load_experiment(checked.experiment_id)
     if existing is not None:
-        read_shadow_model_bundle(
-            existing.model_artifact_path,
-            expected_checksum=existing.model_artifact_checksum,
-        )
+        bundle = _read_experiment_bundle(existing, checked.model_artifact)
         return {
             "experiment_id": checked.experiment_id,
             "created": False,
             "online_authority": existing.online_authority,
             "frozen_market_asof": existing.frozen_market_asof,
             "ticker_count": len(existing.universe),
-            "model_count": len(
-                read_shadow_model_bundle(
-                    existing.model_artifact_path,
-                    expected_checksum=existing.model_artifact_checksum,
-                )["models"]
-            ),
+            "model_count": len(bundle["models"]),
             "model_artifact_checksum": existing.model_artifact_checksum,
             "database_fingerprint": existing.database_fingerprint,
         }
@@ -215,10 +207,7 @@ def capture_latest(config, dependencies=None):
     experiment = store.load_experiment(checked.experiment_id)
     if experiment is None:
         raise ValueError("shadow experiment does not exist")
-    bundle = read_shadow_model_bundle(
-        experiment.model_artifact_path,
-        expected_checksum=experiment.model_artifact_checksum,
-    )
+    bundle = _read_experiment_bundle(experiment, checked.model_artifact)
     snapshot = _validated_snapshot(runtime.load_inputs(checked))
     observation_date = _latest_common_reference_session(snapshot)
     if observation_date <= experiment.frozen_market_asof:
@@ -277,10 +266,7 @@ def evaluate_shadow(config, dependencies=None):
     experiment = store.load_experiment(checked.experiment_id)
     if experiment is None:
         raise ValueError("shadow experiment does not exist")
-    read_shadow_model_bundle(
-        experiment.model_artifact_path,
-        expected_checksum=experiment.model_artifact_checksum,
-    )
+    _read_experiment_bundle(experiment, checked.model_artifact)
     predictions = store.load_predictions(checked.experiment_id)
     snapshot = _validated_snapshot(runtime.load_inputs(checked))
     new_outcomes = _mature_outcomes(
@@ -335,6 +321,22 @@ def default_dependencies():
         ),
         pressure_features=tuple(SPECIALIST_FEATURE_COLUMNS),
     )
+
+
+def _read_experiment_bundle(experiment, configured_artifact):
+    try:
+        return read_shadow_model_bundle(
+            experiment.model_artifact_path,
+            expected_checksum=experiment.model_artifact_checksum,
+        )
+    except FileNotFoundError:
+        configured_path = Path(configured_artifact)
+        if configured_path == Path(experiment.model_artifact_path):
+            raise
+        return read_shadow_model_bundle(
+            configured_path,
+            expected_checksum=experiment.model_artifact_checksum,
+        )
 
 
 def _prediction_snapshot(

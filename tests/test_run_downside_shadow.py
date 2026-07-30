@@ -77,6 +77,28 @@ class RunDownsideShadowTest(unittest.TestCase):
         self.assertEqual(second["inserted_predictions"], 0)
         self.assertEqual(second["captured_observation_dates"], ["2026-07-29"])
 
+    def test_capture_uses_configured_artifact_when_frozen_path_moved(self):
+        freeze_experiment(
+            self.config,
+            dependencies=_dependencies(_snapshot("2026-07-24")),
+        )
+        relocated_artifact = self.config.model_artifact.with_name(
+            "relocated-model.json"
+        )
+        self.config.model_artifact.rename(relocated_artifact)
+        relocated_config = replace(
+            self.config,
+            model_artifact=relocated_artifact,
+        )
+
+        result = capture_latest(
+            relocated_config,
+            dependencies=_dependencies(_snapshot("2026-07-29")),
+        )
+
+        self.assertEqual(result["captured_observation_dates"], ["2026-07-29"])
+        self.assertEqual(result["inserted_predictions"], 22)
+
     def test_capture_never_replays_missed_sessions(self):
         freeze_experiment(
             self.config,
