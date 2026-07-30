@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from bisect import bisect_left
 import math
 
 import numpy as np
@@ -184,35 +185,73 @@ def match_downtrend_baselines(events: pd.DataFrame) -> pd.DataFrame:
         + ["observation_date", "ticker", "event_id"],
         kind="stable",
     )
+    baseline_rows = {
+        str(row["event_id"]): row
+        for _, row in baselines.iterrows()
+    }
+    ticker_index = _baseline_index(
+        baselines,
+        identity_column="ticker",
+    )
+    group_index = _baseline_index(
+        baselines,
+        identity_column="group",
+    )
     used_baselines: set[str] = set()
     pairs = []
     for _, event in positives.iterrows():
-        candidate_pool = baselines.loc[
-            _same_match_keys(baselines, event)
-            & ~baselines["event_id"].astype(str).isin(used_baselines)
-        ]
-        selected = None
+        match_keys = tuple(event[column] for column in MATCH_KEY_COLUMNS)
+        drawdown_bin = str(event["drawdown_bin"])
+        adjacent_bins = _adjacent_drawdown_bins(drawdown_bin)
+        tiers = (
+            (
+                "same_ticker_exact_bin",
+                ticker_index,
+                ((match_keys, event["ticker"], drawdown_bin),),
+            ),
+            (
+                "same_ticker_adjacent_bin",
+                ticker_index,
+                tuple(
+                    (match_keys, event["ticker"], value)
+                    for value in adjacent_bins
+                ),
+            ),
+            (
+                "same_group_exact_bin",
+                group_index,
+                ((match_keys, event["group"], drawdown_bin),),
+            ),
+            (
+                "same_group_adjacent_bin",
+                group_index,
+                tuple(
+                    (match_keys, event["group"], value)
+                    for value in adjacent_bins
+                ),
+            ),
+        )
+        selected_id = None
         selected_tier = None
-        for tier, candidates in _match_tiers(candidate_pool, event):
-            if candidates.empty:
-                continue
-            ranked = candidates.assign(
-                _date_distance=(
-                    candidates["observation_date"]
-                    - event["observation_date"]
-                ).abs()
-            ).sort_values(
-                ["_date_distance", "ticker", "observation_date", "event_id"],
-                kind="stable",
+        for tier, index, keys in tiers:
+            selected_id = _nearest_available_baseline(
+                index,
+                keys,
+                pd.Timestamp(event["observation_date"]),
+                used_baselines,
+                baseline_rows,
             )
-            selected = ranked.iloc[0]
-            selected_tier = tier
-            break
-        if selected is None:
+            if selected_id is not None:
+                selected_tier = tier
+                break
+        if selected_id is None:
             continue
-        baseline_id = str(selected["event_id"])
-        used_baselines.add(baseline_id)
-        pair = _pair_row(event, selected, match_tier=str(selected_tier))
+        used_baselines.add(selected_id)
+        pair = _pair_row(
+            event,
+            baseline_rows[selected_id],
+            match_tier=str(selected_tier),
+        )
         pairs.append(pair)
     columns = list(PAIR_COLUMNS) + [
         f"{side}_{column}"
@@ -700,34 +739,115 @@ def _empty_pairs() -> pd.DataFrame:
     )
 
 
-def _same_match_keys(
-    candidates: pd.DataFrame,
-    event: pd.Series,
-) -> pd.Series:
-    mask = pd.Series(True, index=candidates.index)
-    for column in MATCH_KEY_COLUMNS:
-        mask &= candidates[column].eq(event[column])
-    return mask
-
-
-def _match_tiers(
-    candidates: pd.DataFrame,
-    event: pd.Series,
-):
-    exact_bin = candidates["drawdown_bin"].eq(event["drawdown_bin"])
-    adjacent_bins = set(_adjacent_drawdown_bins(str(event["drawdown_bin"])))
-    adjacent_bin = candidates["drawdown_bin"].isin(adjacent_bins)
-    same_ticker = candidates["ticker"].eq(event["ticker"])
-    same_group = candidates["group"].eq(event["group"])
-    yield "same_ticker_exact_bin", candidates.loc[same_ticker & exact_bin]
-    yield (
-        "same_ticker_adjacent_bin",
-        candidates.loc[same_ticker & adjacent_bin],
+def _baseline_index(
+    baselines: pd.DataFrame,
+    *,
+    identity_column: str,
+) -> dict[tuple[object, ...], tuple[tuple[pd.Timestamp, ...], dict]]:
+    grouped: dict[tuple[object, ...], dict[pd.Timestamp, list[str]]] = {}
+    ordered = baselines.sort_values(
+        ["observation_date", "ticker", "event_id"],
+        kind="stable",
     )
-    yield "same_group_exact_bin", candidates.loc[same_group & exact_bin]
-    yield (
-        "same_group_adjacent_bin",
-        candidates.loc[same_group & adjacent_bin],
+    for _, row in ordered.iterrows():
+        key = (
+            tuple(row[column] for column in MATCH_KEY_COLUMNS),
+            row[identity_column],
+            str(row["drawdown_bin"]),
+        )
+        date = pd.Timestamp(row["observation_date"])
+        grouped.setdefault(key, {}).setdefault(date, []).append(
+            str(row["event_id"])
+        )
+    return {
+        key: (tuple(sorted(by_date)), by_date)
+        for key, by_date in grouped.items()
+    }
+
+
+def _nearest_available_baseline(
+    index: dict[tuple[object, ...], tuple[tuple[pd.Timestamp, ...], dict]],
+    keys: tuple[tuple[object, ...], ...],
+    event_date: pd.Timestamp,
+    used: set[str],
+    rows: dict[str, pd.Series],
+) -> str | None:
+    candidates = []
+    for key in keys:
+        indexed = index.get(key)
+        if indexed is None:
+            continue
+        candidate = _nearest_in_index(
+            indexed,
+            event_date,
+            used,
+            rows,
+        )
+        if candidate is not None:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    return min(
+        candidates,
+        key=lambda event_id: _baseline_rank(
+            rows[event_id],
+            event_date,
+        ),
+    )
+
+
+def _nearest_in_index(
+    indexed: tuple[tuple[pd.Timestamp, ...], dict],
+    event_date: pd.Timestamp,
+    used: set[str],
+    rows: dict[str, pd.Series],
+) -> str | None:
+    dates, by_date = indexed
+    right = bisect_left(dates, event_date)
+    left = right - 1
+    while left >= 0 or right < len(dates):
+        candidate_dates = []
+        if left >= 0:
+            candidate_dates.append(dates[left])
+        if right < len(dates):
+            candidate_dates.append(dates[right])
+        distance = min(abs(date - event_date) for date in candidate_dates)
+        equally_near = [
+            date
+            for date in candidate_dates
+            if abs(date - event_date) == distance
+        ]
+        available = [
+            event_id
+            for date in equally_near
+            for event_id in by_date[date]
+            if event_id not in used
+        ]
+        if available:
+            return min(
+                available,
+                key=lambda event_id: _baseline_rank(
+                    rows[event_id],
+                    event_date,
+                ),
+            )
+        for date in equally_near:
+            if left >= 0 and dates[left] == date:
+                left -= 1
+            if right < len(dates) and dates[right] == date:
+                right += 1
+    return None
+
+
+def _baseline_rank(
+    row: pd.Series,
+    event_date: pd.Timestamp,
+) -> tuple[object, ...]:
+    return (
+        abs(pd.Timestamp(row["observation_date"]) - event_date),
+        str(row["ticker"]),
+        pd.Timestamp(row["observation_date"]),
+        str(row["event_id"]),
     )
 
 
