@@ -84,6 +84,7 @@ def render_tail_report(metrics, manifest):
         if reasons
         else "- 无"
     )
+    candidate_evidence = _candidate_evidence_frame(manifest)
     return "\n".join(
         (
             "# 不对称五日尾部风险研究",
@@ -101,6 +102,10 @@ def render_tail_report(metrics, manifest):
             "## 非重叠总体结果",
             "",
             _markdown_table(selected.loc[:, summary_columns]),
+            "",
+            "## 训练内候选边界",
+            "",
+            _markdown_table(candidate_evidence),
             "",
             "## 未通过原因",
             "",
@@ -291,6 +296,17 @@ def run_study(
         if key not in ("calibration_source", "boundary_source")
     )
     decision = tail_promotion_decision(metrics, causal_audit)
+    if not (predictions["boundary_status"] == "available").any():
+        decision = dict(decision)
+        decision["reasons"] = (
+            "all_outer_boundaries_unavailable",
+            *tuple(decision["reasons"]),
+        )
+        decision["status"] = "rejected"
+        decision["promoted"] = False
+        conditions = dict(decision["conditions"])
+        conditions["outer_boundary_available"] = False
+        decision["conditions"] = conditions
     counterexamples = audit_extreme_counterexamples(predictions)
     fold_diagnostics = (
         predictions.loc[
@@ -473,6 +489,43 @@ def _records(frame):
         }
         for row in frame.to_dict(orient="records")
     ]
+
+
+def _candidate_evidence_frame(manifest):
+    rows = []
+    for fold_evidence in manifest.get("nested_fold_evidence", ()):
+        if not isinstance(fold_evidence, Mapping):
+            continue
+        for candidate in fold_evidence.get("boundary_candidates", ()):
+            if not isinstance(candidate, Mapping):
+                continue
+            rows.append(
+                {
+                    "fold": fold_evidence.get("fold"),
+                    "down_threshold": candidate.get("down_threshold"),
+                    "rebound_cap": candidate.get("rebound_cap"),
+                    "risk_count": candidate.get("risk_count"),
+                    "coverage": candidate.get("coverage"),
+                    "down_precision": candidate.get("down_precision"),
+                    "mean_terminal_return": candidate.get(
+                        "mean_terminal_return"
+                    ),
+                    "reasons": ", ".join(candidate.get("reasons", ())),
+                }
+            )
+    return pd.DataFrame(
+        rows,
+        columns=(
+            "fold",
+            "down_threshold",
+            "rebound_cap",
+            "risk_count",
+            "coverage",
+            "down_precision",
+            "mean_terminal_return",
+            "reasons",
+        ),
+    )
 
 
 def _json_safe(value):

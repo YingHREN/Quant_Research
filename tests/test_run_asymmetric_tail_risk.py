@@ -59,6 +59,26 @@ class AsymmetricTailRunnerTest(unittest.TestCase):
                 "passed": True,
                 "outer_training_labels_end_before_test_start": True,
             },
+            "nested_fold_evidence": [
+                {
+                    "fold": 1,
+                    "boundary_status": "unavailable",
+                    "boundary_candidates": [
+                        {
+                            "down_threshold": 0.4,
+                            "rebound_cap": 0.2,
+                            "risk_count": 12,
+                            "coverage": 0.02,
+                            "down_precision": 0.6,
+                            "mean_terminal_return": 0.01,
+                            "reasons": [
+                                "insufficient_risk_coverage",
+                                "non_negative_risk_return",
+                            ],
+                        }
+                    ],
+                }
+            ],
             "metrics": [],
             "counterexamples": [],
         }
@@ -109,6 +129,8 @@ class AsymmetricTailRunnerTest(unittest.TestCase):
         self.assertIn("未截尾", report)
         self.assertIn("online_authority=none", report)
         self.assertIn("不修改 Ridge", report)
+        self.assertIn("训练内候选边界", report)
+        self.assertIn("insufficient_risk_coverage", report)
 
 
 if __name__ == "__main__":

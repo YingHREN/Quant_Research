@@ -452,7 +452,7 @@ class TailEvaluationTest(unittest.TestCase):
         ].iloc[0]
         self.assertEqual(spaced["row_count"], 2)
 
-    def test_counterexample_audit_keeps_only_risk_flagged_extreme_winners(self):
+    def test_counterexample_audit_keeps_only_high_score_extreme_winners(self):
         audited = audit_extreme_counterexamples(_evaluation_predictions())
 
         self.assertEqual(len(audited), 1)
@@ -463,6 +463,17 @@ class TailEvaluationTest(unittest.TestCase):
         )
         self.assertIn("opening_gap", audited)
         self.assertIn("earnings_proximity", audited)
+
+    def test_high_down_score_extreme_winner_is_audited_without_boundary(self):
+        predictions = _evaluation_predictions()
+        predictions.loc[:, "predicted_tail_risk"] = False
+        predictions.loc[:, "boundary_status"] = "unavailable"
+
+        audited = audit_extreme_counterexamples(predictions)
+
+        self.assertEqual(len(audited), 1)
+        self.assertEqual(audited.iloc[0]["ticker"], "BBB")
+        self.assertEqual(audited.iloc[0]["boundary_status"], "unavailable")
 
     def test_gate_fails_when_required_large_group_is_missing(self):
         metrics = pd.DataFrame(

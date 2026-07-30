@@ -228,7 +228,7 @@ def evaluate_tail_predictions(
 
 
 def audit_extreme_counterexamples(predictions: pd.DataFrame) -> pd.DataFrame:
-    """Return risk-flagged extreme winners without altering model evidence."""
+    """Return high-down-score extreme winners even when boundaries reject."""
     required = (
         "ticker",
         "observation_date",
@@ -247,8 +247,12 @@ def audit_extreme_counterexamples(predictions: pd.DataFrame) -> pd.DataFrame:
         checked["actual_terminal_return"],
         errors="coerce",
     )
+    checked["calibrated_down_probability"] = pd.to_numeric(
+        checked["calibrated_down_probability"],
+        errors="coerce",
+    )
     selected = checked.loc[
-        checked["predicted_tail_risk"].fillna(False).astype(bool)
+        (checked["calibrated_down_probability"] >= 0.40)
         & (checked["actual_terminal_return"] >= EXTREME_REBOUND_THRESHOLD)
     ].copy()
     ordered = [
@@ -259,6 +263,8 @@ def audit_extreme_counterexamples(predictions: pd.DataFrame) -> pd.DataFrame:
             "fold",
             "group",
             "regime",
+            "boundary_status",
+            "predicted_tail_risk",
             "calibrated_down_probability",
             "calibrated_rebound_probability",
             "actual_terminal_return",
