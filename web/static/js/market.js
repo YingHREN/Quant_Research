@@ -1,5 +1,10 @@
-import { getMacroHistory, getMarketOverview } from "./api.js";
+import {
+  getMacroHistory,
+  getMarketOverview,
+  getPolicyBenchmarkHistory,
+} from "./api.js";
 import { createMacroHistoryCharts } from "./macro-history-chart.mjs";
+import { createPolicyPeriodChart } from "./policy-period-chart.mjs";
 import { renderPolicyPeriodMatrixView } from "./policy-period-matrix.mjs";
 import {
   applyDocumentLocale,
@@ -18,6 +23,12 @@ const state = {
   status: { kind: "idle", error: null },
   policyMetric: "total_return",
   policyPeriodId: null,
+  policyBenchmark: "SPY",
+  policyHistory: {
+    payload: null,
+    requestId: 0,
+    status: { kind: "idle", error: null },
+  },
   macroHistory: {
     range: "3y",
     benchmark: "SPY",
@@ -28,6 +39,7 @@ const state = {
 };
 
 let macroHistoryCharts = null;
+let policyPeriodChart = null;
 
 function text(node, value) {
   node.textContent = value == null ? "—" : String(value);
@@ -568,6 +580,12 @@ function render(payload) {
   renderMacroRisk(payload.macro_risk);
   renderPolicyContext(payload.policy_context);
   renderPolicyPeriodMatrix(payload.policy_period_matrix);
+  if (state.policyHistory.payload) {
+    policyPeriodChart?.update(
+      state.policyHistory.payload,
+      state.payload?.policy_period_matrix?.periods || [],
+    );
+  }
   renderSectorHeatmap(
     payload.sectors || [],
     payload.theme_groups || [],
@@ -630,6 +648,64 @@ function renderMacroHistoryStatus() {
       : "",
   );
   delete target.dataset.tone;
+}
+
+function renderPolicyHistoryStatus() {
+  const target = document.querySelector("#policy-period-chart-status");
+  const status = state.policyHistory.status;
+  if (status.kind === "loading") {
+    text(target, t("market.policyChart.loading", {
+      benchmark: state.policyBenchmark,
+    }));
+    delete target.dataset.tone;
+    return;
+  }
+  if (status.kind === "error") {
+    text(target, translateError(status.error));
+    target.dataset.tone = "error";
+    return;
+  }
+  const payload = state.policyHistory.payload;
+  if (payload?.unavailable_reason) {
+    text(target, unavailableText(payload.unavailable_reason));
+    target.dataset.tone = "error";
+    return;
+  }
+  text(
+    target,
+    payload
+      ? t("market.policyChart.loaded", {
+        benchmark: payload.benchmark || state.policyBenchmark,
+        count: payload.rows?.length || 0,
+        asof: payload.last_date || payload.asof || "—",
+      })
+      : "",
+  );
+  delete target.dataset.tone;
+}
+
+async function loadPolicyBenchmarkHistory() {
+  const requestId = ++state.policyHistory.requestId;
+  state.policyHistory.status = { kind: "loading", error: null };
+  renderPolicyHistoryStatus();
+  try {
+    const payload = await getPolicyBenchmarkHistory({
+      benchmark: state.policyBenchmark,
+      asof: state.payload?.asof || "",
+    });
+    if (requestId !== state.policyHistory.requestId) return;
+    state.policyHistory.payload = payload;
+    policyPeriodChart?.update(
+      payload,
+      state.payload?.policy_period_matrix?.periods || [],
+    );
+    state.policyHistory.status = { kind: "idle", error: null };
+    renderPolicyHistoryStatus();
+  } catch (error) {
+    if (requestId !== state.policyHistory.requestId) return;
+    state.policyHistory.status = { kind: "error", error };
+    renderPolicyHistoryStatus();
+  }
 }
 
 async function loadMacroHistory() {
@@ -710,6 +786,23 @@ for (const control of document.querySelectorAll("[data-policy-metric]")) {
   });
 }
 
+for (const control of document.querySelectorAll("[data-policy-benchmark]")) {
+  control.addEventListener("click", () => {
+    const benchmark = control.dataset.policyBenchmark;
+    if (benchmark === state.policyBenchmark) return;
+    state.policyBenchmark = benchmark;
+    for (
+      const button of document.querySelectorAll("[data-policy-benchmark]")
+    ) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.policyBenchmark === benchmark),
+      );
+    }
+    loadPolicyBenchmarkHistory();
+  });
+}
+
 for (const control of document.querySelectorAll("[data-macro-range]")) {
   control.addEventListener("click", () => {
     const range = control.dataset.macroRange;
@@ -752,11 +845,28 @@ subscribeLocale((locale) => {
     render(state.payload);
   }
   macroHistoryCharts?.setLocale(locale);
+  policyPeriodChart?.setLocale(locale);
   renderStatus();
   renderMacroHistoryStatus();
+  renderPolicyHistoryStatus();
 });
 
 applyDocumentLocale(document, getLocale());
+try {
+  policyPeriodChart = createPolicyPeriodChart({
+    chartElement: document.querySelector("#policy-period-chart"),
+    overlayElement: document.querySelector(".policy-period-band-overlay"),
+    translate: t,
+    locale: getLocale(),
+    onPeriodSelect: (periodId) => {
+      state.policyPeriodId = periodId;
+      renderPolicyPeriodMatrix(state.payload?.policy_period_matrix);
+    },
+  });
+} catch (error) {
+  state.policyHistory.status = { kind: "error", error };
+  renderPolicyHistoryStatus();
+}
 try {
   macroHistoryCharts = createMacroHistoryCharts({
     scoreElement: document.querySelector("#macro-history-score-chart"),
@@ -772,4 +882,5 @@ try {
   renderMacroHistoryStatus();
 }
 load();
+loadPolicyBenchmarkHistory();
 loadMacroHistory();
