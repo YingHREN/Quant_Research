@@ -31,11 +31,11 @@
 - Produces: `training_only_design(train, test, columns) -> tuple[numpy.ndarray, numpy.ndarray]`.
 - Existing private callers and prediction output remain byte-for-byte equivalent.
 
-- [ ] **Step 1: Write failing helper-contract tests**
+- [x] **Step 1: Write failing helper-contract tests**
 
 Add tests that call the two public helpers, compare them with the existing walk-forward output, verify unsupported horizons fail closed, and prove changing test-only values cannot alter the fitted training transformation.
 
-- [ ] **Step 2: Run the focused tests and verify RED**
+- [x] **Step 2: Run the focused tests and verify RED**
 
 Run:
 
@@ -45,15 +45,15 @@ PYTHONPYCACHEPREFIX=/private/tmp/stock-screener-pycache ./venv/bin/python -m uni
 
 Expected: import failure because the public helpers do not exist.
 
-- [ ] **Step 3: Add minimal public wrappers and migrate internal calls**
+- [x] **Step 3: Add minimal public wrappers and migrate internal calls**
 
 Expose validated public wrappers around the existing `_directions` and `_training_only_design` implementations. Replace internal calls with the public names, retain private aliases only if another existing module imports them, and do not change any estimator settings.
 
-- [ ] **Step 4: Run the focused tests and verify GREEN**
+- [x] **Step 4: Run the focused tests and verify GREEN**
 
 Run the command from Step 2. Expected: PASS with existing prediction fixtures unchanged.
 
-- [ ] **Step 5: Commit Task 1**
+- [x] **Step 5: Commit Task 1**
 
 ```bash
 git add research/market_direction_model.py tests/test_market_direction_model.py

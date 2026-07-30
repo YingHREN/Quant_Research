@@ -404,7 +404,7 @@ def evaluate_direction_ablation(predictions: pd.DataFrame) -> pd.DataFrame:
 
 
 def training_only_design(train, test, columns):
-    """Fit robust feature preprocessing on training rows only."""
+    """Build train-fitted numeric designs without learning from test rows."""
     train_raw = train.loc[:, columns].apply(pd.to_numeric, errors="coerce")
     test_raw = test.loc[:, columns].apply(pd.to_numeric, errors="coerce")
     train_raw = train_raw.replace((np.inf, -np.inf), np.nan)
@@ -449,6 +449,9 @@ def training_only_design(train, test, columns):
     )
 
 
+_training_only_design = training_only_design
+
+
 def _logistic_predict(model, design):
     decision = np.sum(
         design[:, None, :] * model.coef_[None, :, :],
@@ -486,7 +489,7 @@ def _prediction_rows(
 
 
 def direction_labels(returns, horizon):
-    """Map executable returns to the versioned horizon direction bands."""
+    """Map executable returns to versioned direction bands."""
     checked_horizon = _validate_horizons((horizon,))[0]
     values = pd.to_numeric(returns, errors="coerce").to_numpy(dtype=float)
     band = NEUTRAL_BANDS[checked_horizon]
@@ -497,14 +500,7 @@ def direction_labels(returns, horizon):
     )
 
 
-def _training_only_design(train, test, columns):
-    """Backward-compatible alias for the public preprocessing helper."""
-    return training_only_design(train, test, columns)
-
-
-def _directions(returns, horizon):
-    """Backward-compatible alias for the public direction helper."""
-    return direction_labels(returns, horizon)
+_directions = direction_labels
 
 
 def _mean_return(group, direction):
