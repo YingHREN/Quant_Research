@@ -78,27 +78,39 @@ class MacroObservationStore:
             cutoff = cutoff.tz_localize("UTC")
         else:
             cutoff = cutoff.tz_convert("UTC")
-        query = """
-            SELECT series_id, observation_date, available_at, value,
-                   realtime_start, realtime_end, source, revision_policy
-            FROM macro_observations
-            WHERE available_at <= ?
-        """
         params = [cutoff.isoformat()]
         normalized_ids = tuple(dict.fromkeys(str(value) for value in series_ids))
-        if normalized_ids:
-            placeholders = ",".join("?" for _ in normalized_ids)
-            query += f" AND series_id IN ({placeholders})"
-            params.extend(normalized_ids)
-        query += (
-            " ORDER BY series_id, observation_date, "
-            "available_at, realtime_start"
-        )
         try:
             with sqlite3.connect(
                 f"{self.path.resolve().as_uri()}?mode=ro",
                 uri=True,
             ) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(macro_observations)"
+                    )
+                }
+                revision_policy = (
+                    "revision_policy"
+                    if "revision_policy" in columns
+                    else "'legacy_unspecified' AS revision_policy"
+                )
+                query = f"""
+                    SELECT series_id, observation_date, available_at, value,
+                           realtime_start, realtime_end, source,
+                           {revision_policy}
+                    FROM macro_observations
+                    WHERE available_at <= ?
+                """
+                if normalized_ids:
+                    placeholders = ",".join("?" for _ in normalized_ids)
+                    query += f" AND series_id IN ({placeholders})"
+                    params.extend(normalized_ids)
+                query += (
+                    " ORDER BY series_id, observation_date, "
+                    "available_at, realtime_start"
+                )
                 return pd.read_sql_query(query, connection, params=params)
         except sqlite3.Error as error:
             raise MacroDataUnavailable(

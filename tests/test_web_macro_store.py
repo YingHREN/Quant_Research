@@ -22,6 +22,60 @@ def observation(**overrides):
 
 
 class MacroObservationRevisionPolicyTest(unittest.TestCase):
+    def test_load_available_projects_legacy_policy_without_mutating_schema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "macro.db"
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    """
+                    CREATE TABLE macro_observations (
+                        series_id TEXT NOT NULL,
+                        observation_date TEXT NOT NULL,
+                        available_at TEXT NOT NULL,
+                        value REAL NOT NULL,
+                        realtime_start TEXT NOT NULL,
+                        realtime_end TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        PRIMARY KEY (
+                            series_id,
+                            observation_date,
+                            realtime_start
+                        )
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO macro_observations VALUES (
+                        'CPIAUCSL',
+                        '2026-06-01',
+                        '2026-07-14T12:30:00+00:00',
+                        321.5,
+                        '2026-07-14',
+                        '9999-12-31',
+                        'legacy_import'
+                    )
+                    """
+                )
+
+            rows = MacroObservationStore(path).load_available(
+                "2026-07-15T00:00:00+00:00"
+            )
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                rows.iloc[0]["revision_policy"],
+                "legacy_unspecified",
+            )
+            with sqlite3.connect(path) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(macro_observations)"
+                    )
+                }
+            self.assertNotIn("revision_policy", columns)
+
     def test_initialize_migrates_legacy_table_without_losing_rows(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "macro.db"
