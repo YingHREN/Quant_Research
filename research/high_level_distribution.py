@@ -394,17 +394,23 @@ def _numeric_rule(values, weight, threshold, direction):
 
 
 def _condition_tuples(values, index):
-    rows = []
-    for observation_date in index:
-        rows.append(
+    aligned = {
+        key: series.reindex(index)
+        for key, series in values.items()
+    }
+    return pd.Series(
+        [
             tuple(
                 key
-                for key, series in values.items()
-                if bool(series.reindex(index).loc[observation_date])
-                if pd.notna(series.reindex(index).loc[observation_date])
+                for key, series in aligned.items()
+                if pd.notna(series.loc[observation_date])
+                and bool(series.loc[observation_date])
             )
-        )
-    return pd.Series(rows, index=index, dtype=object)
+            for observation_date in index
+        ],
+        index=index,
+        dtype=object,
+    )
 
 
 def _true_range(history):
