@@ -8,6 +8,7 @@ from data.market_behavior import classify_market_behavior
 from research.point_in_time_sector_features import (
     PIT_SECTOR_CANDIDATES,
     build_monthly_behavior_assignments,
+    build_point_in_time_sector_features,
 )
 
 
@@ -190,6 +191,201 @@ class MonthlyAssignmentTest(unittest.TestCase):
                 minimum_observations=4,
                 maximum_observations=20,
             )
+
+
+def _known_feature_histories():
+    dates = pd.date_range("2026-01-02", periods=32, freq="B")
+    position = np.arange(len(dates), dtype=float)
+    return {
+        "AAA": pd.DataFrame(
+            {"Close": 100.0 * np.power(1.01, position)},
+            index=dates,
+        ),
+        "XLK": pd.DataFrame(
+            {"Close": 100.0 * np.power(1.005, position)},
+            index=dates,
+        ),
+        "QQQ": pd.DataFrame(
+            {"Close": 100.0 * np.power(1.002, position)},
+            index=dates,
+        ),
+    }
+
+
+def _assignment(
+    *,
+    classification_date="2026-01-09",
+    effective_from="2026-01-12",
+    expires_after="2026-02-23",
+    benchmark="XLK",
+):
+    return pd.DataFrame(
+        [
+            {
+                "ticker": "AAA",
+                "classification_date": pd.Timestamp(classification_date),
+                "effective_from": pd.Timestamp(effective_from),
+                "expires_after": pd.Timestamp(expires_after),
+                "sector_key": "technology",
+                "benchmark_ticker": benchmark,
+                "residual_correlation": 0.73,
+                "residual_beta": 1.2,
+                "common_days": 126,
+                "rule_version": "test",
+            }
+        ]
+    )
+
+
+def _observation_index(*dates):
+    return pd.MultiIndex.from_tuples(
+        [("AAA", pd.Timestamp(value)) for value in dates],
+        names=["ticker", "observation_date"],
+    )
+
+
+class PointInTimeSectorFeatureTest(unittest.TestCase):
+    def test_relative_returns_share_exact_stock_endpoints(self):
+        histories = _known_feature_histories()
+        observation = histories["AAA"].index[25]
+
+        result = build_point_in_time_sector_features(
+            histories,
+            _assignment(),
+            _observation_index(observation),
+        )
+        row = result.loc[("AAA", observation)]
+        stock_return = 1.01**20 - 1.0
+        proxy_return = 1.005**20 - 1.0
+        qqq_return = 1.002**20 - 1.0
+
+        self.assertAlmostEqual(
+            row["pit_stock_sector_relative_strength_20"],
+            stock_return - proxy_return,
+        )
+        self.assertAlmostEqual(
+            row["pit_sector_relative_strength_20"],
+            proxy_return - qqq_return,
+        )
+        self.assertEqual(row["pit_sector_key"], "technology")
+        self.assertEqual(row["pit_sector_benchmark"], "XLK")
+        self.assertTrue(row["pit_sector_assignment_available"])
+        self.assertEqual(row["pit_sector_unavailable_reason"], "")
+
+    def test_assignment_is_not_available_until_effective_session(self):
+        histories = _known_feature_histories()
+        assignment = _assignment(
+            classification_date="2026-01-30",
+            effective_from="2026-02-02",
+            expires_after="2026-03-16",
+        )
+        result = build_point_in_time_sector_features(
+            histories,
+            assignment,
+            _observation_index("2026-01-30", "2026-02-02"),
+        )
+
+        same_day = result.loc[("AAA", pd.Timestamp("2026-01-30"))]
+        next_session = result.loc[("AAA", pd.Timestamp("2026-02-02"))]
+        self.assertFalse(same_day["pit_sector_assignment_available"])
+        self.assertEqual(
+            same_day["pit_sector_unavailable_reason"],
+            "no_effective_assignment",
+        )
+        self.assertTrue(next_session["pit_sector_assignment_available"])
+
+    def test_assignment_age_is_valid_through_day_45_only(self):
+        histories = _known_feature_histories()
+        extended_dates = pd.date_range("2026-01-02", periods=70, freq="B")
+        for ticker, daily_return in (("AAA", 1.01), ("XLK", 1.005), ("QQQ", 1.002)):
+            histories[ticker] = pd.DataFrame(
+                {
+                    "Close": 100.0
+                    * np.power(daily_return, np.arange(len(extended_dates)))
+                },
+                index=extended_dates,
+            )
+        assignment = _assignment(
+            classification_date="2026-01-02",
+            effective_from="2026-01-05",
+            expires_after="2026-02-16",
+        )
+
+        result = build_point_in_time_sector_features(
+            histories,
+            assignment,
+            _observation_index("2026-02-16", "2026-02-17"),
+        )
+
+        valid = result.loc[("AAA", pd.Timestamp("2026-02-16"))]
+        stale = result.loc[("AAA", pd.Timestamp("2026-02-17"))]
+        self.assertTrue(valid["pit_sector_assignment_available"])
+        self.assertEqual(valid["pit_sector_assignment_age_days"], 45)
+        self.assertFalse(stale["pit_sector_assignment_available"])
+        self.assertEqual(stale["pit_sector_unavailable_reason"], "stale_assignment")
+
+    def test_missing_exact_proxy_endpoint_is_not_filled(self):
+        histories = _known_feature_histories()
+        observation = histories["AAA"].index[25]
+        start = histories["AAA"].index[5]
+        histories["XLK"] = histories["XLK"].drop(index=start)
+
+        result = build_point_in_time_sector_features(
+            histories,
+            _assignment(),
+            _observation_index(observation),
+        )
+
+        row = result.loc[("AAA", observation)]
+        self.assertFalse(row["pit_sector_assignment_available"])
+        self.assertEqual(
+            row["pit_sector_unavailable_reason"],
+            "missing_benchmark_endpoint",
+        )
+
+    def test_unknown_proxy_and_duplicate_assignment_fail_closed(self):
+        histories = _known_feature_histories()
+        observation = histories["AAA"].index[25]
+        unknown = build_point_in_time_sector_features(
+            histories,
+            _assignment(benchmark="MISSING"),
+            _observation_index(observation),
+        )
+        self.assertEqual(
+            unknown.iloc[0]["pit_sector_unavailable_reason"],
+            "unknown_benchmark",
+        )
+
+        duplicate = pd.concat((_assignment(), _assignment()), ignore_index=True)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            build_point_in_time_sector_features(
+                histories,
+                duplicate,
+                _observation_index(observation),
+            )
+
+    def test_future_append_invariance_and_index_preservation(self):
+        full = _known_feature_histories()
+        base = {
+            ticker: frame.iloc[:28].copy()
+            for ticker, frame in full.items()
+        }
+        observation = base["AAA"].index[25]
+        requested = _observation_index(observation)
+
+        before = build_point_in_time_sector_features(
+            base,
+            _assignment(),
+            requested,
+        )
+        after = build_point_in_time_sector_features(
+            full,
+            _assignment(),
+            requested,
+        )
+
+        pd.testing.assert_frame_equal(before, after)
+        self.assertTrue(before.index.equals(requested))
 
 
 if __name__ == "__main__":
