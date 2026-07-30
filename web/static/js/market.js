@@ -1,5 +1,6 @@
 import { getMacroHistory, getMarketOverview } from "./api.js";
 import { createMacroHistoryCharts } from "./macro-history-chart.mjs";
+import { renderPolicyPeriodMatrixView } from "./policy-period-matrix.mjs";
 import {
   applyDocumentLocale,
   getLocale,
@@ -15,6 +16,8 @@ const state = {
   payload: null,
   requestId: 0,
   status: { kind: "idle", error: null },
+  policyMetric: "total_return",
+  policyPeriodId: null,
   macroHistory: {
     range: "3y",
     benchmark: "SPY",
@@ -342,6 +345,26 @@ function renderPolicyContext(policy = {}) {
   );
 }
 
+function renderPolicyPeriodMatrix(matrix = {}) {
+  const root = document.querySelector("#policy-period-matrix");
+  const detail = document.querySelector("#policy-period-detail");
+  if (!root || !detail) return;
+  renderPolicyPeriodMatrixView({
+    document,
+    root,
+    detail,
+    payload: matrix,
+    metric: state.policyMetric,
+    locale: getLocale(),
+    translate: t,
+    selectedPeriodId: state.policyPeriodId,
+    onSelectPeriod: (periodId) => {
+      state.policyPeriodId = periodId;
+      renderPolicyPeriodMatrix(state.payload?.policy_period_matrix);
+    },
+  });
+}
+
 function sectorButton(row) {
   const button = element("button", "sector-tile");
   button.type = "button";
@@ -544,6 +567,7 @@ function render(payload) {
   renderReferenceFactors(payload.market_posture?.evidence || []);
   renderMacroRisk(payload.macro_risk);
   renderPolicyContext(payload.policy_context);
+  renderPolicyPeriodMatrix(payload.policy_period_matrix);
   renderSectorHeatmap(
     payload.sectors || [],
     payload.theme_groups || [],
@@ -668,6 +692,21 @@ for (const control of document.querySelectorAll("[data-horizon]")) {
       );
     }
     load();
+  });
+}
+
+for (const control of document.querySelectorAll("[data-policy-metric]")) {
+  control.addEventListener("click", () => {
+    const metric = control.dataset.policyMetric;
+    if (metric === state.policyMetric) return;
+    state.policyMetric = metric;
+    for (const button of document.querySelectorAll("[data-policy-metric]")) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.policyMetric === metric),
+      );
+    }
+    renderPolicyPeriodMatrix(state.payload?.policy_period_matrix);
   });
 }
 
