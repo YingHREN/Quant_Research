@@ -123,6 +123,51 @@
         </div>
         <div id="policy-context" class="policy-context-grid"></div>
       </div>
+      <div class="policy-period-history">
+        <div class="policy-period-heading">
+          <div>
+            <h3 data-i18n="market.policyMatrix.title">
+              政策时期与板块历史表现
+            </h3>
+            <p data-i18n="market.policyMatrix.disclaimer">
+              只描述完整历史时期，不是预测、推荐或交易信号。
+            </p>
+          </div>
+          <div class="policy-period-controls" role="group"
+               aria-label="政策时期矩阵指标"
+               data-i18n-aria-label="market.policyMatrix.metricAria">
+            <button type="button" data-policy-metric="total_return"
+                    aria-pressed="true"
+                    data-i18n="market.policyMatrix.metric.total_return">
+              总收益
+            </button>
+            <button type="button" data-policy-metric="annualized_return"
+                    aria-pressed="false"
+                    data-i18n="market.policyMatrix.metric.annualized_return">
+              年化收益
+            </button>
+            <button type="button" data-policy-metric="relative_spy_return"
+                    aria-pressed="false"
+                    data-i18n="market.policyMatrix.metric.relative_spy_return">
+              相对 SPY
+            </button>
+            <button type="button" data-policy-metric="max_drawdown"
+                    aria-pressed="false"
+                    data-i18n="market.policyMatrix.metric.max_drawdown">
+              最大回撤
+            </button>
+            <button type="button" data-policy-metric="positive_month_ratio"
+                    aria-pressed="false"
+                    data-i18n="market.policyMatrix.metric.positive_month_ratio">
+              上涨月比例
+            </button>
+          </div>
+        </div>
+        <div id="policy-period-matrix"
+             class="policy-period-matrix"></div>
+        <div id="policy-period-detail"
+             class="policy-period-detail"></div>
+      </div>
       <div class="macro-history">
         <div class="macro-history-heading">
           <div>

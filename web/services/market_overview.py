@@ -29,6 +29,7 @@ class MarketOverviewService:
         max_cache_size=16,
         macro_risk_service=None,
         policy_context_service=None,
+        policy_period_matrix_service=None,
     ):
         if not callable(revision_getter):
             raise TypeError("revision_getter must be callable")
@@ -44,6 +45,7 @@ class MarketOverviewService:
         self._max_cache_size = max_cache_size
         self._macro_risk_service = macro_risk_service
         self._policy_context_service = policy_context_service
+        self._policy_period_matrix_service = policy_period_matrix_service
         self._cache = {}
         self._lock = RLock()
 
@@ -73,6 +75,7 @@ class MarketOverviewService:
             "market_regime_gate_v1",
             _macro_cache_token(self._macro_risk_service),
             _macro_cache_token(self._policy_context_service),
+            _macro_cache_token(self._policy_period_matrix_service),
         )
         with self._lock:
             cached = self._cache.get(key)
@@ -111,6 +114,11 @@ class MarketOverviewService:
                 self._policy_context_service,
                 normalized_asof,
             )
+            payload["policy_period_matrix"] = _policy_period_matrix_payload(
+                self._policy_period_matrix_service,
+                normalized_asof,
+                snapshot.histories,
+            )
 
         with self._lock:
             self._cache[key] = deepcopy(payload)
@@ -148,6 +156,11 @@ def _empty_payload(horizon, sector):
         "calibration": {},
         "macro_risk": _macro_payload(None, None),
         "policy_context": _policy_context_payload(None, None),
+        "policy_period_matrix": _policy_period_matrix_payload(
+            None,
+            None,
+            {},
+        ),
         "market_gate": latest_market_gate({}),
     }
 
@@ -198,6 +211,39 @@ def _policy_context_payload(service, asof):
         "online_authority": "none",
         "point_in_time": True,
         "unavailable_reason": "policy_data_unavailable",
+    }
+
+
+def _policy_period_matrix_payload(service, asof, histories):
+    builder = getattr(service, "build", None)
+    if callable(builder):
+        return builder(asof, histories)
+    return {
+        "artifact_key": "policy_period_matrix_v1",
+        "asof": asof,
+        "periods": [],
+        "rows": [],
+        "metrics": [
+            "total_return",
+            "annualized_return",
+            "relative_spy_return",
+            "max_drawdown",
+            "positive_month_ratio",
+        ],
+        "coverage": {
+            "period_count": 0,
+            "ticker_period_rows": 0,
+            "status_counts": {},
+            "complete_rows": 0,
+            "eligible_rows": 0,
+            "ratio": None,
+        },
+        "lifecycle": "research",
+        "decision_permission": "advisory",
+        "online_authority": "none",
+        "point_in_time": True,
+        "historical_description_only": True,
+        "unavailable_reason": "policy_catalog_unavailable",
     }
 
 

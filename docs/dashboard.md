@@ -223,6 +223,35 @@ Opening `/market` or calling `/api/market-overview` never starts this fetch.
 If required observations or history are missing, the policy state is shown as
 unavailable rather than neutral.
 
+### Policy-period sector matrix
+
+The market page also exposes a separate, descriptive
+`policy_period_matrix_v1` artifact. Import the reviewed policy catalog
+explicitly before starting the service:
+
+```bash
+source env.sh
+./venv/bin/python import_policy_catalog.py
+```
+
+The matrix compares SPY, QQQ, and the 11 Select Sector SPDR ETFs across the
+catalog's policy periods. Its five switchable metrics are total return,
+annualized return, return relative to SPY, maximum drawdown, and the ratio of
+positive months. Values come from the backend's adjusted-price calculations;
+the browser only formats the returned values.
+
+Only completed periods contain comparable metrics. Ongoing periods, ETFs that
+were not yet listed, missing histories, insufficient histories, and periods
+that were not yet visible at the requested point in time remain explicit
+non-numeric states. They are never filled with zero or a proxy. Selecting a
+period shows its dates, interpretation, and linked Federal Reserve sources.
+
+This artifact is fixed at `lifecycle=research`,
+`decision_permission=advisory`, and `online_authority=none`. It is a historical
+description, not a policy forecast, sector recommendation, Ridge adjustment,
+or downside veto. Opening the page never imports the catalog, downloads ETF
+history, or creates a missing macro database.
+
 The fixed reference pool is:
 
 ```text

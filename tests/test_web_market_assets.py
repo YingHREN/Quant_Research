@@ -15,6 +15,8 @@ class MarketAssetTest(unittest.TestCase):
             "market-evidence",
             "macro-risk",
             "policy-context",
+            "policy-period-matrix",
+            "policy-period-detail",
             "sector-drilldown",
             "market-events",
             "market-data-tier",
@@ -31,6 +33,14 @@ class MarketAssetTest(unittest.TestCase):
         self.assertIn('data-horizon="5"', source)
         self.assertIn('data-horizon="20"', source)
         self.assertIn('data-horizon="60"', source)
+        for metric in (
+            "total_return",
+            "annualized_return",
+            "relative_spy_return",
+            "max_drawdown",
+            "positive_month_ratio",
+        ):
+            self.assertIn(f'data-policy-metric="{metric}"', source)
         self.assertLess(
             source.index("lightweight-charts.standalone.production.js"),
             source.index('src="/static/js/market.js"'),
@@ -255,6 +265,41 @@ class MarketAssetTest(unittest.TestCase):
         self.assertNotIn("derivePolicyState(", source)
         self.assertIn(".policy-context-grid", styles)
         self.assertIn(".policy-context-heading", styles)
+
+    def test_policy_period_matrix_is_backend_driven_and_bilingual(self):
+        template = (ROOT / "web/templates/market.html").read_text()
+        source = (ROOT / "web/static/js/market.js").read_text()
+        messages = (ROOT / "web/static/js/i18n.js").read_text()
+        styles = (ROOT / "web/static/css/market.css").read_text()
+
+        self.assertIn('id="policy-period-matrix"', template)
+        self.assertIn('id="policy-period-detail"', template)
+        self.assertIn("function renderPolicyPeriodMatrix(", source)
+        self.assertIn(
+            "renderPolicyPeriodMatrix(payload.policy_period_matrix)",
+            source,
+        )
+        self.assertNotIn("rankPolicySectors(", source)
+        self.assertNotIn("calculatePolicyReturn(", source)
+        for key in (
+            "market.policyMatrix.title",
+            "market.policyMatrix.disclaimer",
+            "market.policyMatrix.metric.total_return",
+            "market.policyMatrix.metric.annualized_return",
+            "market.policyMatrix.metric.relative_spy_return",
+            "market.policyMatrix.metric.max_drawdown",
+            "market.policyMatrix.metric.positive_month_ratio",
+            "market.policyMatrix.status.incomplete",
+            "market.policyMatrix.status.not_listed",
+            "market.policyMatrix.status.missing_history",
+            "market.policyMatrix.status.insufficient_history",
+            "market.policyMatrix.status.unavailable_at_asof",
+            "market.unavailable.policy_catalog_unavailable",
+        ):
+            with self.subTest(key=key):
+                self.assertGreaterEqual(messages.count(f'"{key}"'), 2)
+        self.assertIn(".policy-period-matrix", styles)
+        self.assertIn(".policy-period-detail", styles)
 
     def test_directional_signal_names_and_model_sources_are_bilingual(self):
         source = (ROOT / "web/static/js/i18n.js").read_text()
