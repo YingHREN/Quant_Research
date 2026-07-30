@@ -32,10 +32,7 @@ def attach_bottom_state_rows(chart, history):
     ):
         return
 
-    evidence = pd.DataFrame(
-        [_evidence_row(row) for row in chart],
-        index=pd.to_datetime([row.get("time") for row in chart]),
-    )
+    evidence = bottom_evidence_frame(chart)
     try:
         model = build_bottom_state_rows(history, evidence)
     except (TypeError, ValueError, KeyError):
@@ -50,6 +47,23 @@ def attach_bottom_state_rows(chart, history):
         selected = by_date.get(chart_row.get("time"))
         if selected is not None:
             chart_row.update(selected)
+
+
+def bottom_evidence_frame(chart):
+    """Return the typed evidence frame consumed by the bottom-state model."""
+    if not isinstance(chart, list):
+        raise TypeError("chart must be a list")
+    for row in chart:
+        if not isinstance(row, dict):
+            raise TypeError("chart rows must be dictionaries")
+    dates = pd.to_datetime(
+        [row.get("time") for row in chart],
+        errors="raise",
+    )
+    return pd.DataFrame(
+        [_evidence_row(row) for row in chart],
+        index=dates,
+    )
 
 
 def _evidence_row(row):
