@@ -365,7 +365,7 @@ Run: `rg -n '(/Users/|api[_-]?key|secret|token)' reports/policy-catalog-audit.*`
 
 Expected: 第一个命令无输出；第二个命令无匹配。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 git add research/run_policy_catalog_audit.py \
@@ -384,19 +384,19 @@ git commit -m "research: audit policy catalog coverage"
 - Consumes: Tasks 1–5 的全部提交
 - Produces: 可复核的最终测试证据
 
-- [ ] **Step 1: 运行完整测试**
+- [x] **Step 1: 运行完整测试**
 
 Run: `./venv/bin/python -m unittest discover -s tests`
 
 Expected: PASS，0 failures，0 errors。
 
-- [ ] **Step 2: 核对权限与主分支差异**
+- [x] **Step 2: 核对权限与主分支差异**
 
 Run: `rg -n 'MACRO-ROTATION-001|online_authority|decision_permission' research web reports docs/modeling-todo.md`
 
 Expected: 新输出保持 `research/advisory/none`，未修改 Ridge 与最终决策策略。
 
-- [ ] **Step 3: 核对运行时文件未入库**
+- [x] **Step 3: 核对运行时文件未入库**
 
 Run: `git status --short`
 
