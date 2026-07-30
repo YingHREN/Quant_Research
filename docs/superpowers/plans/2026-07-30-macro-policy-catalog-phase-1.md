@@ -402,7 +402,7 @@ Run: `git status --short`
 
 Expected: 不包含 `*.db-wal`、`*.db-shm` 或 `research/high_level_reversal_study.py`。
 
-- [ ] **Step 4: 按分支完成流程集成**
+- [x] **Step 4: 按分支完成流程集成**
 
 使用 `superpowers:finishing-a-development-branch`；仅在 fresh 验证通过后合入
 `main`。
