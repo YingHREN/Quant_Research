@@ -172,6 +172,7 @@ class MacroDataFetchTest(unittest.TestCase):
             "2026-07-01T23:59:59+00:00",
         )
         self.assertEqual(rows[0]["source"], "ALFRED_initial_release")
+        self.assertEqual(rows[0]["revision_policy"], "initial_release_only")
         self.assertIn("output_type=4", requests[0][0])
         self.assertIn("series_id=DGS2", requests[0][0])
         self.assertNotIn("secret", str(rows))
@@ -190,6 +191,7 @@ class MacroDataFetchTest(unittest.TestCase):
                         "realtime_start": "2026-07-01",
                         "realtime_end": "9999-12-31",
                         "source": "ALFRED_initial_release",
+                        "revision_policy": "initial_release_only",
                     }
                 ]
 

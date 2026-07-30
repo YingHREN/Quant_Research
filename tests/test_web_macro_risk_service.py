@@ -25,6 +25,7 @@ class MacroRiskServiceTest(unittest.TestCase):
                         "realtime_start": "2026-07-01",
                         "realtime_end": "9999-12-31",
                         "source": "FRED",
+                        "revision_policy": "test_fixture",
                     }
                 ]
             )
@@ -53,6 +54,7 @@ class MacroRiskServiceTest(unittest.TestCase):
                         "realtime_start": "2026-07-01",
                         "realtime_end": "9999-12-31",
                         "source": "FRED",
+                        "revision_policy": "test_fixture",
                     }
                 ]
             )
@@ -82,6 +84,7 @@ class MacroRiskServiceTest(unittest.TestCase):
                         "realtime_start": "2026-07-01",
                         "realtime_end": "2026-07-24",
                         "source": "FRED",
+                        "revision_policy": "test_fixture",
                     },
                     {
                         "series_id": "DGS2",
@@ -91,6 +94,7 @@ class MacroRiskServiceTest(unittest.TestCase):
                         "realtime_start": "2026-07-25",
                         "realtime_end": "9999-12-31",
                         "source": "ALFRED",
+                        "revision_policy": "test_fixture",
                     },
                 ]
             )
@@ -131,6 +135,7 @@ class MacroRiskServiceTest(unittest.TestCase):
                         "realtime_start": "2026-07-01",
                         "realtime_end": "9999-12-31",
                         "source": "FRED",
+                        "revision_policy": "test_fixture",
                     }
                 ]
             )
