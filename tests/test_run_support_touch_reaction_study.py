@@ -320,6 +320,7 @@ class TouchReactionDecisionTest(unittest.TestCase):
         self.assertAlmostEqual(evidence["maximum_penetration_atr_delta"], -0.05)
         self.assertEqual(evidence["stable_fold_wins"], 5)
         self.assertEqual(evidence["improved_group_count"], 2)
+        self.assertEqual(evidence["group_count"], 3)
         self.assertEqual(evidence["consistent_distance_bins"], 4)
         self.assertEqual(evidence["distance_bin_count"], 4)
         self.assertTrue(all(evidence["conditions"].values()))

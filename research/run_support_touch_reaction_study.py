@@ -213,6 +213,7 @@ def _preregistered_performance_conditions(
         "maximum_penetration_atr_delta": None,
         "stable_fold_wins": 0,
         "improved_group_count": 0,
+        "group_count": 0,
         "consistent_distance_bins": 0,
         "distance_bin_count": 0,
         "conditions": {name: False for name in condition_names},
@@ -284,6 +285,7 @@ def _preregistered_performance_conditions(
     improved_group_count = int(
         (groups["accepted_rate_delta"] > 0.0).sum()
     )
+    group_count = int(len(groups))
     distance_bin_count = int(len(distances))
     consistent_distance_bins = int(
         (distances["accepted_rate_delta"] > 0.0).sum()
@@ -295,7 +297,9 @@ def _preregistered_performance_conditions(
         ),
         "failure_rate_not_worse": failure_delta <= tolerance,
         "at_least_3_fold_wins": stable_fold_wins >= 3,
-        "at_least_2_group_wins": improved_group_count >= 2,
+        "at_least_2_group_wins": (
+            group_count == 3 and improved_group_count >= 2
+        ),
         "distance_direction_consistent": (
             distance_bin_count == 4
             and consistent_distance_bins == distance_bin_count
@@ -309,6 +313,7 @@ def _preregistered_performance_conditions(
         "maximum_penetration_atr_delta": penetration_delta,
         "stable_fold_wins": stable_fold_wins,
         "improved_group_count": improved_group_count,
+        "group_count": group_count,
         "consistent_distance_bins": consistent_distance_bins,
         "distance_bin_count": distance_bin_count,
         "conditions": conditions,
@@ -662,7 +667,10 @@ def render_support_touch_reaction_report(
                 evidence.get("maximum_penetration_atr_delta")
             ),
             f"- 改善时间折：{evidence.get('stable_fold_wins', 0)}/5",
-            f"- 改善板块组：{evidence.get('improved_group_count', 0)}/3",
+            "- 改善板块组："
+            f"{evidence.get('improved_group_count', 0)}/"
+            f"{evidence.get('group_count', 0)}"
+            "（要求覆盖 3 组且至少 2 组改善）",
             "- 同向距离分箱："
             f"{evidence.get('consistent_distance_bins', 0)}/"
             f"{evidence.get('distance_bin_count', 0)}",

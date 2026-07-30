@@ -569,10 +569,11 @@
     "performance_conditions": {
       "available": true,
       "acceptance_rate_delta": 0.005003832813378684,
-      "failure_rate_delta": -0.012864655316347617,
+      "failure_rate_delta": -0.012864655316347728,
       "maximum_penetration_atr_delta": -0.023247870972679885,
       "stable_fold_wins": 5,
       "improved_group_count": 1,
+      "group_count": 1,
       "consistent_distance_bins": 4,
       "distance_bin_count": 4,
       "conditions": {
