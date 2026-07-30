@@ -172,7 +172,7 @@ Run: `./venv/bin/python -m unittest tests.test_policy_event_store`
 
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add web/services/policy_event_store.py tests/test_policy_event_store.py
@@ -190,7 +190,7 @@ git commit -m "feat: add point-in-time policy event store"
 - Consumes: `PolicyEventStore.upsert_events`, `PolicyEventStore.upsert_periods`
 - Produces: `import_catalog(path, database) -> {"events": int, "periods": int, "catalog_version": str}`
 
-- [ ] **Step 1: 写失败测试，确保导入原子性和秘密安全**
+- [x] **Step 1: 写失败测试，确保导入原子性和秘密安全**
 
 ```python
 def test_import_rejects_period_with_unknown_source_event(self):
@@ -200,13 +200,13 @@ def test_import_is_idempotent_and_summary_has_no_database_path(self):
     # 连续导入两次，断言行数不重复，返回值不含绝对路径或凭据形状。
 ```
 
-- [ ] **Step 2: 运行测试并确认导入器不存在**
+- [x] **Step 2: 运行测试并确认导入器不存在**
 
 Run: `./venv/bin/python -m unittest tests.test_import_policy_catalog`
 
 Expected: FAIL with `ModuleNotFoundError`。
 
-- [ ] **Step 3: 实现预检后事务导入**
+- [x] **Step 3: 实现预检后事务导入**
 
 导入前完成以下全量校验，再开启单一事务：
 
@@ -223,12 +223,12 @@ allowed_event_types = {
 验证事件 ID 唯一、时期 ID 唯一、`start_date <= end_date`、所有
 `source_event_ids` 存在、标签中英文非空、来源为 Federal Reserve 官方域名。
 
-- [ ] **Step 4: 提供最小受审计目录**
+- [x] **Step 4: 提供最小受审计目录**
 
 JSON 仅纳入已有官方链接和已人工复核的事件；每一条包含来源发布时间。
 无法确认发布时间的条目不进入目录，也不使用估算日期。
 
-- [ ] **Step 5: 运行测试**
+- [x] **Step 5: 运行测试**
 
 Run: `./venv/bin/python -m unittest tests.test_import_policy_catalog tests.test_policy_event_store`
 

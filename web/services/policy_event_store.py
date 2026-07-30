@@ -83,24 +83,7 @@ class PolicyEventStore:
         if not normalized:
             return 0
         with sqlite3.connect(self.path) as connection:
-            connection.executemany(
-                """
-                INSERT INTO policy_events (
-                    event_id, catalog_version, event_type, effective_date,
-                    available_at, source_url, source_title,
-                    source_published_at, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (event_id, catalog_version) DO UPDATE SET
-                    event_type=excluded.event_type,
-                    effective_date=excluded.effective_date,
-                    available_at=excluded.available_at,
-                    source_url=excluded.source_url,
-                    source_title=excluded.source_title,
-                    source_published_at=excluded.source_published_at,
-                    payload_json=excluded.payload_json
-                """,
-                normalized,
-            )
+            _upsert_events(connection, normalized)
         return len(normalized)
 
     def upsert_periods(self, rows):
@@ -108,27 +91,19 @@ class PolicyEventStore:
         if not normalized:
             return 0
         with sqlite3.connect(self.path) as connection:
-            connection.executemany(
-                """
-                INSERT INTO policy_periods (
-                    period_id, catalog_version, label_zh, label_en,
-                    start_date, end_date, available_at,
-                    interpretation_zh, interpretation_en,
-                    source_event_ids_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (period_id, catalog_version) DO UPDATE SET
-                    label_zh=excluded.label_zh,
-                    label_en=excluded.label_en,
-                    start_date=excluded.start_date,
-                    end_date=excluded.end_date,
-                    available_at=excluded.available_at,
-                    interpretation_zh=excluded.interpretation_zh,
-                    interpretation_en=excluded.interpretation_en,
-                    source_event_ids_json=excluded.source_event_ids_json
-                """,
-                normalized,
-            )
+            _upsert_periods(connection, normalized)
         return len(normalized)
+
+    def upsert_catalog(self, events, periods):
+        normalized_events = [_normalize_event(row) for row in events]
+        normalized_periods = [_normalize_period(row) for row in periods]
+        with sqlite3.connect(self.path) as connection:
+            _upsert_events(connection, normalized_events)
+            _upsert_periods(connection, normalized_periods)
+        return {
+            "events": len(normalized_events),
+            "periods": len(normalized_periods),
+        }
 
     def load_events(self, asof, *, event_types=()):
         cutoff = _utc_iso(asof, field="asof")
@@ -321,4 +296,52 @@ def _canonical_json(value, *, expected_type, item_type=None):
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+    )
+
+
+def _upsert_events(connection, rows):
+    if not rows:
+        return
+    connection.executemany(
+        """
+        INSERT INTO policy_events (
+            event_id, catalog_version, event_type, effective_date,
+            available_at, source_url, source_title,
+            source_published_at, payload_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (event_id, catalog_version) DO UPDATE SET
+            event_type=excluded.event_type,
+            effective_date=excluded.effective_date,
+            available_at=excluded.available_at,
+            source_url=excluded.source_url,
+            source_title=excluded.source_title,
+            source_published_at=excluded.source_published_at,
+            payload_json=excluded.payload_json
+        """,
+        rows,
+    )
+
+
+def _upsert_periods(connection, rows):
+    if not rows:
+        return
+    connection.executemany(
+        """
+        INSERT INTO policy_periods (
+            period_id, catalog_version, label_zh, label_en,
+            start_date, end_date, available_at,
+            interpretation_zh, interpretation_en,
+            source_event_ids_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (period_id, catalog_version) DO UPDATE SET
+            label_zh=excluded.label_zh,
+            label_en=excluded.label_en,
+            start_date=excluded.start_date,
+            end_date=excluded.end_date,
+            available_at=excluded.available_at,
+            interpretation_zh=excluded.interpretation_zh,
+            interpretation_en=excluded.interpretation_en,
+            source_event_ids_json=excluded.source_event_ids_json
+        """,
+        rows,
     )

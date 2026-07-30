@@ -1,0 +1,145 @@
+{
+  "catalog_version": "fed-policy-v1",
+  "events": [
+    {
+      "event_id": "fomc-2020-03-15-rate",
+      "event_type": "policy_rate",
+      "effective_date": "2020-03-16",
+      "available_at": "2020-03-15T21:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20200315a.htm",
+      "source_title": "Federal Reserve issues FOMC statement",
+      "source_published_at": "2020-03-15T21:00:00+00:00",
+      "payload_json": {
+        "decision": "lower",
+        "release_time_source": "For release at 5:00 p.m. EDT",
+        "target_lower": 0.0,
+        "target_upper": 0.25
+      }
+    },
+    {
+      "event_id": "fomc-2020-03-15-qe",
+      "event_type": "qe",
+      "effective_date": "2020-03-16",
+      "available_at": "2020-03-15T21:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20200315a.htm",
+      "source_title": "Federal Reserve issues FOMC statement",
+      "source_published_at": "2020-03-15T21:00:00+00:00",
+      "payload_json": {
+        "agency_mbs_minimum_usd": 200000000000,
+        "release_time_source": "For release at 5:00 p.m. EDT",
+        "treasury_minimum_usd": 500000000000
+      }
+    },
+    {
+      "event_id": "fomc-2020-03-23-qe-open-ended",
+      "event_type": "qe",
+      "effective_date": "2020-03-23",
+      "available_at": "2020-03-23T12:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20200323a.htm",
+      "source_title": "Federal Reserve issues FOMC statement",
+      "source_published_at": "2020-03-23T12:00:00+00:00",
+      "payload_json": {
+        "purchase_pace": "amounts_needed",
+        "release_time_source": "For release at 8:00 a.m. EDT",
+        "securities": [
+          "Treasury",
+          "agency MBS",
+          "agency commercial MBS"
+        ]
+      }
+    },
+    {
+      "event_id": "fomc-2022-03-16-rate",
+      "event_type": "policy_rate",
+      "effective_date": "2022-03-17",
+      "available_at": "2022-03-16T18:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20220316a.htm",
+      "source_title": "Federal Reserve issues FOMC statement",
+      "source_published_at": "2022-03-16T18:00:00+00:00",
+      "payload_json": {
+        "decision": "raise",
+        "release_time_source": "For release at 2:00 p.m. EDT",
+        "target_lower": 0.25,
+        "target_upper": 0.5
+      }
+    },
+    {
+      "event_id": "fomc-2022-05-04-qt",
+      "event_type": "qt",
+      "effective_date": "2022-06-01",
+      "available_at": "2022-05-04T18:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20220504b.htm",
+      "source_title": "Plans for Reducing the Size of the Federal Reserve's Balance Sheet",
+      "source_published_at": "2022-05-04T18:00:00+00:00",
+      "payload_json": {
+        "agency_initial_monthly_cap_usd": 17500000000,
+        "agency_later_monthly_cap_usd": 35000000000,
+        "release_time_source": "For release at 2:00 p.m. EDT",
+        "treasury_initial_monthly_cap_usd": 30000000000,
+        "treasury_later_monthly_cap_usd": 60000000000
+      }
+    },
+    {
+      "event_id": "fomc-2024-09-18-rate",
+      "event_type": "policy_rate",
+      "effective_date": "2024-09-19",
+      "available_at": "2024-09-18T18:00:00+00:00",
+      "source_url": "https://www.federalreserve.gov/newsevents/pressreleases/monetary20240918a.htm",
+      "source_title": "Federal Reserve issues FOMC statement",
+      "source_published_at": "2024-09-18T18:00:00+00:00",
+      "payload_json": {
+        "balance_sheet_runoff_continues": true,
+        "decision": "lower",
+        "release_time_source": "For release at 2:00 p.m. EDT",
+        "target_lower": 4.75,
+        "target_upper": 5.0
+      }
+    }
+  ],
+  "periods": [
+    {
+      "period_id": "emergency-easing-2020-2022",
+      "label_zh": "紧急降息与资产购买",
+      "label_en": "Emergency easing and asset purchases",
+      "start_date": "2020-03-16",
+      "end_date": "2022-03-16",
+      "available_at": "2022-03-16T18:00:00+00:00",
+      "interpretation_zh": "人工历史分段：零利率下限与大规模资产购买并存；仅用于描述，不是预测。",
+      "interpretation_en": "Human historical segment: the effective lower bound coexisted with large-scale asset purchases; descriptive only, not a forecast.",
+      "source_event_ids_json": [
+        "fomc-2020-03-15-rate",
+        "fomc-2020-03-15-qe",
+        "fomc-2020-03-23-qe-open-ended",
+        "fomc-2022-03-16-rate"
+      ]
+    },
+    {
+      "period_id": "tightening-and-runoff-2022-2024",
+      "label_zh": "加息与资产负债表收缩",
+      "label_en": "Rate tightening and balance-sheet runoff",
+      "start_date": "2022-03-17",
+      "end_date": "2024-09-18",
+      "available_at": "2024-09-18T18:00:00+00:00",
+      "interpretation_zh": "人工历史分段：政策利率上调并启动资产负债表收缩；仅用于描述，不是预测。",
+      "interpretation_en": "Human historical segment: policy-rate tightening accompanied the start of balance-sheet runoff; descriptive only, not a forecast.",
+      "source_event_ids_json": [
+        "fomc-2022-03-16-rate",
+        "fomc-2022-05-04-qt",
+        "fomc-2024-09-18-rate"
+      ]
+    },
+    {
+      "period_id": "rate-easing-with-runoff-2024-open",
+      "label_zh": "降息、资产负债表继续收缩",
+      "label_en": "Rate easing with continuing runoff",
+      "start_date": "2024-09-19",
+      "end_date": null,
+      "available_at": "2024-09-18T18:00:00+00:00",
+      "interpretation_zh": "进行中的人工描述：政策利率开始下降，公告同时确认资产负债表继续收缩；不进入完整时期排名，也不是预测。",
+      "interpretation_en": "Ongoing human description: policy-rate easing began while the release confirmed continuing balance-sheet runoff; excluded from complete-period rankings and not a forecast.",
+      "source_event_ids_json": [
+        "fomc-2024-09-18-rate"
+      ]
+    }
+  ]
+}
