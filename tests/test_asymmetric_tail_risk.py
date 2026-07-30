@@ -6,6 +6,7 @@ import pandas as pd
 from research.asymmetric_tail_risk import (
     attach_asymmetric_tail_targets,
     fit_oof_isotonic,
+    select_tail_boundary,
 )
 
 
@@ -199,6 +200,63 @@ class OofCalibrationTest(unittest.TestCase):
                 minimum_rows=True,
                 minimum_class_rows=1,
             )
+
+
+class TailBoundaryTest(unittest.TestCase):
+    @staticmethod
+    def _rows():
+        return pd.DataFrame(
+            {
+                "calibrated_down_probability": [
+                    0.80, 0.70, 0.65, 0.55, 0.45, 0.20
+                ],
+                "predicted_median_return": [
+                    -0.02, -0.01, -0.01, -0.01, -0.01, 0.01
+                ],
+                "predicted_lower_quantile_return": [
+                    -0.09, -0.08, -0.07, -0.06, -0.06, -0.01
+                ],
+                "calibrated_rebound_probability": [
+                    0.10, 0.15, 0.25, 0.10, 0.10, 0.05
+                ],
+                "actual_down_event": [1, 1, 0, 0, 1, 0],
+                "actual_terminal_return": [
+                    -0.08, -0.06, 0.03, 0.01, -0.05, 0.02
+                ],
+            }
+        )
+
+    def test_selects_highest_precision_then_stricter_boundary(self):
+        selected = select_tail_boundary(
+            self._rows(),
+            down_thresholds=(0.4, 0.6),
+            rebound_caps=(0.2, 0.3),
+            minimum_rows=2,
+            minimum_coverage=0.2,
+            maximum_coverage=0.8,
+        )
+
+        self.assertEqual(selected.status, "available")
+        self.assertEqual(selected.down_threshold, 0.6)
+        self.assertEqual(selected.rebound_cap, 0.2)
+        self.assertAlmostEqual(selected.down_precision, 1.0)
+
+    def test_nonnegative_raw_return_or_low_coverage_fails_closed(self):
+        rows = self._rows()
+        rows.loc[:, "actual_terminal_return"] = 0.01
+
+        selected = select_tail_boundary(
+            rows,
+            down_thresholds=(0.6,),
+            rebound_caps=(0.2,),
+            minimum_rows=2,
+            minimum_coverage=0.2,
+            maximum_coverage=0.8,
+        )
+
+        self.assertEqual(selected.status, "unavailable")
+        self.assertEqual(selected.reason, "tail_boundary_unavailable")
+        self.assertIsNone(selected.down_threshold)
 
 
 if __name__ == "__main__":

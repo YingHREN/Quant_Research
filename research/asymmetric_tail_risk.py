@@ -42,6 +42,136 @@ class CalibrationResult:
         return np.clip(calibrated, 0.0, 1.0)
 
 
+@dataclass(frozen=True)
+class TailBoundaryResult:
+    """Training-only decision boundary and its raw economic evidence."""
+
+    status: str
+    reason: object
+    down_threshold: object = None
+    rebound_cap: object = None
+    down_precision: object = None
+    coverage: object = None
+    mean_terminal_return: object = None
+    diagnostics: tuple = ()
+
+
+def select_tail_boundary(
+    inner_oof: pd.DataFrame,
+    *,
+    down_thresholds=(0.40, 0.50, 0.60),
+    rebound_caps=(0.20, 0.30),
+    minimum_rows: int = 500,
+    minimum_coverage: float = 0.05,
+    maximum_coverage: float = 0.30,
+) -> TailBoundaryResult:
+    """Choose a risk boundary using inner OOF economic evidence only."""
+    required = (
+        "calibrated_down_probability",
+        "predicted_median_return",
+        "predicted_lower_quantile_return",
+        "calibrated_rebound_probability",
+        "actual_down_event",
+        "actual_terminal_return",
+    )
+    if not isinstance(inner_oof, pd.DataFrame):
+        raise TypeError("inner_oof must be a DataFrame")
+    missing = [column for column in required if column not in inner_oof]
+    if missing:
+        raise ValueError(f"inner_oof is missing columns: {missing}")
+    checked_minimum = _positive_integer(minimum_rows, "minimum_rows")
+    checked_minimum_coverage = float(minimum_coverage)
+    checked_maximum_coverage = float(maximum_coverage)
+    if not (
+        np.isfinite(checked_minimum_coverage)
+        and np.isfinite(checked_maximum_coverage)
+        and 0.0 < checked_minimum_coverage <= checked_maximum_coverage <= 1.0
+    ):
+        raise ValueError("coverage boundaries must satisfy 0 < min <= max <= 1")
+    checked_down = _probability_grid(down_thresholds, "down_thresholds")
+    checked_rebound = _probability_grid(rebound_caps, "rebound_caps")
+    rows = inner_oof.loc[:, required].apply(pd.to_numeric, errors="coerce")
+    values = rows.to_numpy(dtype=float)
+    valid = np.isfinite(values).all(axis=1)
+    valid &= rows["actual_down_event"].isin((0.0, 1.0)).to_numpy()
+    rows = rows.loc[valid].reset_index(drop=True)
+    if rows.empty:
+        return TailBoundaryResult(
+            status="unavailable",
+            reason="tail_boundary_unavailable",
+        )
+
+    diagnostics = []
+    eligible = []
+    for down_threshold in checked_down:
+        for rebound_cap in checked_rebound:
+            selected = (
+                (rows["calibrated_down_probability"] >= down_threshold)
+                & (rows["predicted_median_return"] < 0.0)
+                & (rows["predicted_lower_quantile_return"] <= -0.05)
+                & (rows["calibrated_rebound_probability"] <= rebound_cap)
+            )
+            count = int(selected.sum())
+            coverage = count / len(rows)
+            selected_rows = rows.loc[selected]
+            precision = (
+                float(selected_rows["actual_down_event"].mean())
+                if count
+                else np.nan
+            )
+            mean_return = (
+                float(selected_rows["actual_terminal_return"].mean())
+                if count
+                else np.nan
+            )
+            reasons = []
+            if count < checked_minimum:
+                reasons.append("insufficient_risk_rows")
+            if coverage < checked_minimum_coverage:
+                reasons.append("insufficient_risk_coverage")
+            if coverage > checked_maximum_coverage:
+                reasons.append("excessive_risk_coverage")
+            if not np.isfinite(mean_return) or mean_return >= 0.0:
+                reasons.append("non_negative_risk_return")
+            diagnostic = {
+                "down_threshold": down_threshold,
+                "rebound_cap": rebound_cap,
+                "risk_count": count,
+                "coverage": coverage,
+                "down_precision": precision,
+                "mean_terminal_return": mean_return,
+                "status": "eligible" if not reasons else "rejected",
+                "reasons": tuple(reasons),
+            }
+            diagnostics.append(diagnostic)
+            if not reasons:
+                eligible.append(diagnostic)
+    if not eligible:
+        return TailBoundaryResult(
+            status="unavailable",
+            reason="tail_boundary_unavailable",
+            diagnostics=tuple(diagnostics),
+        )
+    best = max(
+        eligible,
+        key=lambda row: (
+            row["down_precision"],
+            row["down_threshold"],
+            -row["rebound_cap"],
+        ),
+    )
+    return TailBoundaryResult(
+        status="available",
+        reason=None,
+        down_threshold=best["down_threshold"],
+        rebound_cap=best["rebound_cap"],
+        down_precision=best["down_precision"],
+        coverage=best["coverage"],
+        mean_terminal_return=best["mean_terminal_return"],
+        diagnostics=tuple(diagnostics),
+    )
+
+
 def fit_oof_isotonic(
     scores,
     outcomes,
@@ -240,3 +370,16 @@ def _positive_integer(value, name: str) -> int:
     ):
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
+
+
+def _probability_grid(values, name: str) -> tuple:
+    try:
+        checked = tuple(float(value) for value in values)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must contain probabilities") from None
+    if (
+        not checked
+        or not all(np.isfinite(value) and 0.0 < value < 1.0 for value in checked)
+    ):
+        raise ValueError(f"{name} must contain probabilities")
+    return checked
