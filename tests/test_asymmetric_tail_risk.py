@@ -3,7 +3,10 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from research.asymmetric_tail_risk import attach_asymmetric_tail_targets
+from research.asymmetric_tail_risk import (
+    attach_asymmetric_tail_targets,
+    fit_oof_isotonic,
+)
 
 
 def _feature_frame(dates):
@@ -138,6 +141,63 @@ class AsymmetricTailTargetTest(unittest.TestCase):
                 _feature_frame(dates),
                 {"AAA": _history(dates)},
                 horizon=True,
+            )
+
+
+class OofCalibrationTest(unittest.TestCase):
+    def test_calibrated_probabilities_are_monotonic_bounded_and_immutable(self):
+        scores = np.array([0.1, 0.2, 0.4, 0.6, 0.8, 0.9])
+        outcomes = np.array([0, 0, 1, 0, 1, 1])
+
+        fitted = fit_oof_isotonic(
+            scores,
+            outcomes,
+            minimum_rows=6,
+            minimum_class_rows=2,
+        )
+        calibrated = fitted.transform(np.array([0.0, 0.3, 0.7, 1.0]))
+
+        self.assertEqual(fitted.status, "available")
+        self.assertIsNone(fitted.reason)
+        self.assertTrue(np.all(np.diff(calibrated) >= 0.0))
+        self.assertTrue(np.all((calibrated >= 0.0) & (calibrated <= 1.0)))
+        calibrated[0] = 99.0
+        self.assertLessEqual(fitted.transform(np.array([0.0]))[0], 1.0)
+
+    def test_one_class_or_constant_scores_fail_closed(self):
+        one_class = fit_oof_isotonic(
+            np.linspace(0.1, 0.9, 6),
+            np.zeros(6),
+            minimum_rows=6,
+            minimum_class_rows=1,
+        )
+        constant = fit_oof_isotonic(
+            np.full(6, 0.5),
+            np.array([0, 0, 0, 1, 1, 1]),
+            minimum_rows=6,
+            minimum_class_rows=2,
+        )
+
+        for fitted in (one_class, constant):
+            self.assertEqual(fitted.status, "unavailable")
+            self.assertEqual(fitted.reason, "calibration_unavailable")
+            with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                fitted.transform(np.array([0.5]))
+
+    def test_nonfinite_scores_and_invalid_minimums_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "finite"):
+            fit_oof_isotonic(
+                np.array([0.1, np.nan, 0.9]),
+                np.array([0, 0, 1]),
+                minimum_rows=3,
+                minimum_class_rows=1,
+            )
+        with self.assertRaisesRegex(ValueError, "minimum_rows"):
+            fit_oof_isotonic(
+                np.array([0.1, 0.9]),
+                np.array([0, 1]),
+                minimum_rows=True,
+                minimum_class_rows=1,
             )
 
 
