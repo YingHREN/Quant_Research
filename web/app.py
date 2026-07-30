@@ -78,6 +78,7 @@ from web.services.macro_history import (
     VALID_RANGES as VALID_MACRO_RANGES,
 )
 from web.services.macro_risk import MacroRiskService
+from web.services.policy_context import PolicyContextService
 from web.services.universe import UniverseSnapshotService
 from web.services.market_cap import market_cap_fields
 from web.services.research_classification import ResearchClassificationService
@@ -231,6 +232,13 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         macro_risk_service = MacroRiskService(
             flask_app.config["MACRO_DATABASE"]
         )
+    policy_context_service = flask_app.config.get(
+        "POLICY_CONTEXT_SERVICE"
+    )
+    if policy_context_service is None:
+        policy_context_service = PolicyContextService(
+            flask_app.config["MACRO_DATABASE"]
+        )
     market_overview_service = flask_app.config.get(
         "MARKET_OVERVIEW_SERVICE"
     )
@@ -243,6 +251,7 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
                 0,
             ),
             macro_risk_service=macro_risk_service,
+            policy_context_service=policy_context_service,
         )
     macro_history_service = flask_app.config.get("MACRO_HISTORY_SERVICE")
     if macro_history_service is None:
@@ -379,6 +388,9 @@ def create_app(config=None, repository=None, update_manager=None) -> Flask:
         "dashboard_market_overview_service"
     ] = market_overview_service
     flask_app.extensions["dashboard_macro_risk_service"] = macro_risk_service
+    flask_app.extensions[
+        "dashboard_policy_context_service"
+    ] = policy_context_service
     flask_app.extensions[
         "dashboard_macro_history_service"
     ] = macro_history_service

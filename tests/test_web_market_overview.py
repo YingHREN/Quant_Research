@@ -61,7 +61,43 @@ class FakeRepository:
         )
 
 
+class PolicyContextServiceStub:
+    def build(self, asof):
+        return {
+            "model_key": "macro_policy_context_v1",
+            "state": "rate_restrictive_liquidity_support",
+            "coverage": 1.0,
+            "decision_permission": "advisory",
+            "online_authority": "none",
+        }
+
+    def cache_token(self):
+        return ("policy", 1)
+
+
 class MarketOverviewServiceTest(unittest.TestCase):
+    def test_includes_policy_context_without_changing_existing_outputs(self):
+        repository = FakeRepository(fixture_histories())
+        baseline = MarketOverviewService(repository).build()
+        payload = MarketOverviewService(
+            repository,
+            policy_context_service=PolicyContextServiceStub(),
+        ).build()
+
+        self.assertEqual(
+            payload["policy_context"]["state"],
+            "rate_restrictive_liquidity_support",
+        )
+        for key in (
+            "market_posture",
+            "sectors",
+            "selected_group",
+            "constituents",
+            "calibration",
+            "macro_risk",
+        ):
+            self.assertEqual(payload[key], baseline[key])
+
     def test_includes_independent_macro_risk_without_changing_market_score(self):
         class MacroService:
             def build(self, asof):
