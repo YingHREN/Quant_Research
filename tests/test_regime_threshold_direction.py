@@ -10,6 +10,8 @@ from research.regime_threshold_direction import (
     adjust_regime_log_probabilities,
     attach_absolute_and_qqq_relative_targets,
     fit_regime_priors,
+    select_economic_down_threshold,
+    threshold_directions,
 )
 
 
@@ -263,6 +265,144 @@ class RegimePriorTest(unittest.TestCase):
                 regimes,
             ).regime_prior("large"),
         )
+
+
+def _threshold_rows(size=1_000):
+    actual = np.asarray(["up"] * size, dtype=object)
+    returns = np.full(size, 0.02)
+    down = np.full(size, 0.10)
+    neutral = np.full(size, 0.35)
+    up = np.full(size, 0.55)
+
+    actual[:150] = "down"
+    returns[:150] = -0.04
+    down[:100] = 0.65
+    neutral[:100] = 0.20
+    up[:100] = 0.15
+    down[100:150] = 0.55
+    neutral[100:150] = 0.25
+    up[100:150] = 0.20
+
+    down[150:170] = 0.65
+    neutral[150:170] = 0.20
+    up[150:170] = 0.15
+    down[170:250] = 0.55
+    neutral[170:250] = 0.25
+    up[170:250] = 0.20
+    return pd.DataFrame(
+        {
+            "actual_direction": actual,
+            "actual_return": returns,
+            "down_probability": down,
+            "neutral_probability": neutral,
+            "up_probability": up,
+        }
+    )
+
+
+class EconomicThresholdTest(unittest.TestCase):
+    def test_threshold_only_changes_down_boundary(self):
+        probabilities = np.asarray(
+            [
+                [0.65, 0.20, 0.15],
+                [0.55, 0.25, 0.20],
+                [0.20, 0.45, 0.35],
+                [0.20, 0.35, 0.45],
+            ]
+        )
+
+        result = threshold_directions(probabilities, 0.60)
+
+        self.assertEqual(
+            result.tolist(),
+            ["down", "neutral", "neutral", "up"],
+        )
+
+    def test_selects_highest_threshold_when_best_accuracy_is_tied(self):
+        result = select_economic_down_threshold(
+            _threshold_rows(),
+            minimum_rows=50,
+        )
+
+        self.assertEqual(result.status, "available")
+        self.assertEqual(result.threshold, 0.60)
+        self.assertIsNone(result.reason)
+        diagnostics = {
+            row["threshold"]: row
+            for row in result.diagnostics
+        }
+        self.assertGreater(
+            diagnostics[0.60]["down_precision"],
+            diagnostics[0.50]["down_precision"] + 0.02,
+        )
+        self.assertLess(
+            diagnostics[0.60]["mean_return_predicted_down"],
+            0.0,
+        )
+
+    def test_exact_minimum_rows_and_coverage_boundaries_are_inclusive(self):
+        rows = _threshold_rows(size=10_000)
+        rows["down_probability"] = 0.10
+        rows["neutral_probability"] = 0.35
+        rows["up_probability"] = 0.55
+        rows.loc[:399, "actual_direction"] = "down"
+        rows.loc[:399, "actual_return"] = -0.04
+        rows.loc[:399, "down_probability"] = 0.65
+        rows.loc[:399, "neutral_probability"] = 0.20
+        rows.loc[:399, "up_probability"] = 0.15
+        rows.loc[400:499, "down_probability"] = 0.65
+        rows.loc[400:499, "neutral_probability"] = 0.20
+        rows.loc[400:499, "up_probability"] = 0.15
+        rows.loc[500:999, "down_probability"] = 0.55
+        rows.loc[500:999, "neutral_probability"] = 0.25
+        rows.loc[500:999, "up_probability"] = 0.20
+
+        result = select_economic_down_threshold(rows)
+
+        self.assertEqual(result.status, "available")
+        self.assertEqual(result.threshold, 0.60)
+        selected = next(
+            item
+            for item in result.diagnostics
+            if item["threshold"] == 0.60
+        )
+        self.assertEqual(selected["down_count"], 500)
+        self.assertAlmostEqual(selected["down_coverage"], 0.05)
+
+    def test_no_eligible_threshold_is_explicitly_unavailable(self):
+        rows = _threshold_rows()
+        rows["actual_return"] = 0.02
+
+        result = select_economic_down_threshold(
+            rows,
+            minimum_rows=50,
+        )
+
+        self.assertEqual(result.status, "unavailable")
+        self.assertIsNone(result.threshold)
+        self.assertEqual(
+            result.reason,
+            "economic_threshold_unavailable",
+        )
+        self.assertEqual(
+            {item["status"] for item in result.diagnostics},
+            {"rejected"},
+        )
+
+    def test_unrelated_outer_outcomes_cannot_change_selection(self):
+        inner = _threshold_rows()
+        outer = pd.Series([-0.50, 0.50, -0.30])
+        first = select_economic_down_threshold(
+            inner,
+            minimum_rows=50,
+        )
+        outer.iloc[:] *= -1.0
+        second = select_economic_down_threshold(
+            inner,
+            minimum_rows=50,
+        )
+
+        self.assertEqual(first, second)
 
 
 if __name__ == "__main__":

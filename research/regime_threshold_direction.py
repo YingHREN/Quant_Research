@@ -18,6 +18,7 @@ from research.market_direction_model import (
 HORIZON = 5
 DIRECTION_CLASSES = ("down", "neutral", "up")
 REGIME_PRIOR_STRENGTH = 1_000.0
+DOWN_THRESHOLDS = (0.40, 0.50, 0.60, 0.70)
 
 
 class RegimeThresholdDataUnavailable(RuntimeError):
@@ -43,6 +44,186 @@ class RegimePriors:
         if values is None:
             return self.global_prior
         return np.asarray(values, dtype=float)
+
+
+@dataclass(frozen=True)
+class EconomicThresholdResult:
+    """Immutable result of training-only economic threshold selection."""
+
+    threshold: object
+    status: str
+    reason: object
+    diagnostics: tuple
+
+
+def threshold_directions(
+    probabilities,
+    threshold,
+    classes=DIRECTION_CLASSES,
+):
+    """Apply an economic down boundary and preserve neutral/up ordering."""
+    checked_classes = tuple(map(str, classes))
+    if checked_classes != DIRECTION_CLASSES:
+        raise ValueError(
+            "classes must be ordered as down, neutral, up"
+        )
+    values = np.asarray(probabilities, dtype=float).copy()
+    checked_threshold = float(threshold)
+    if (
+        values.ndim != 2
+        or values.shape[1] != len(checked_classes)
+        or not np.isfinite(values).all()
+        or np.any(values < 0.0)
+        or np.any(values > 1.0)
+        or not np.allclose(values.sum(axis=1), 1.0, atol=1e-6)
+    ):
+        raise ValueError("probabilities must be finite normalized rows")
+    if not np.isfinite(checked_threshold) or not 0.0 < checked_threshold < 1.0:
+        raise ValueError("threshold must be a probability")
+    return np.where(
+        values[:, 0] >= checked_threshold,
+        checked_classes[0],
+        np.where(
+            values[:, 2] > values[:, 1],
+            checked_classes[2],
+            checked_classes[1],
+        ),
+    )
+
+
+def select_economic_down_threshold(
+    oof_predictions,
+    thresholds=DOWN_THRESHOLDS,
+    minimum_rows=500,
+    minimum_coverage=0.05,
+    precision_gain=0.02,
+):
+    """Select a down threshold from inner OOF predictions only.
+
+    A candidate must have enough predicted-down rows and coverage, improve
+    down precision over the frozen 0.50 reference, and produce a negative
+    mean realized return.  No outer-fold outcome is accepted by this API.
+    """
+    required = {
+        "actual_direction",
+        "actual_return",
+        "down_probability",
+        "neutral_probability",
+        "up_probability",
+    }
+    if not isinstance(oof_predictions, pd.DataFrame):
+        raise TypeError("oof_predictions must be a DataFrame")
+    missing = sorted(required.difference(oof_predictions.columns))
+    if missing:
+        raise ValueError(
+            "oof_predictions missing required columns: "
+            + ", ".join(missing)
+        )
+    checked_thresholds = tuple(float(value) for value in thresholds)
+    if (
+        not checked_thresholds
+        or not all(
+            np.isfinite(value) and 0.0 < value < 1.0
+            for value in checked_thresholds
+        )
+    ):
+        raise ValueError("thresholds must be finite probabilities")
+    if 0.50 not in checked_thresholds:
+        raise ValueError("thresholds must include the frozen 0.50 reference")
+    checked_minimum_rows = int(minimum_rows)
+    checked_coverage = float(minimum_coverage)
+    checked_gain = float(precision_gain)
+    if checked_minimum_rows <= 0:
+        raise ValueError("minimum_rows must be positive")
+    if not 0.0 < checked_coverage <= 1.0:
+        raise ValueError("minimum_coverage must be in (0, 1]")
+    if not np.isfinite(checked_gain) or checked_gain < 0.0:
+        raise ValueError("precision_gain must be finite and non-negative")
+
+    rows = oof_predictions.loc[:, sorted(required)].copy(deep=True)
+    rows["actual_return"] = pd.to_numeric(
+        rows["actual_return"],
+        errors="coerce",
+    )
+    probability_columns = [
+        "down_probability",
+        "neutral_probability",
+        "up_probability",
+    ]
+    for column in probability_columns:
+        rows[column] = pd.to_numeric(rows[column], errors="coerce")
+    valid_labels = rows["actual_direction"].isin(DIRECTION_CLASSES)
+    numeric = rows[["actual_return", *probability_columns]].to_numpy(
+        dtype=float
+    )
+    valid_numeric = np.isfinite(numeric).all(axis=1)
+    valid_probability = (
+        (numeric[:, 1:] >= 0.0).all(axis=1)
+        & (numeric[:, 1:] <= 1.0).all(axis=1)
+        & np.isclose(numeric[:, 1:].sum(axis=1), 1.0, atol=1e-6)
+    )
+    rows = rows.loc[
+        valid_labels.to_numpy() & valid_numeric & valid_probability
+    ].reset_index(drop=True)
+    if rows.empty:
+        return EconomicThresholdResult(
+            threshold=None,
+            status="unavailable",
+            reason="economic_threshold_unavailable",
+            diagnostics=(),
+        )
+
+    reference = _threshold_diagnostic(rows, 0.50)
+    reference_precision = float(reference["down_precision"])
+    diagnostics = []
+    eligible = []
+    for threshold in checked_thresholds:
+        diagnostic = _threshold_diagnostic(rows, threshold)
+        reasons = []
+        if diagnostic["down_count"] < checked_minimum_rows:
+            reasons.append("insufficient_down_rows")
+        if diagnostic["down_coverage"] < checked_coverage:
+            reasons.append("insufficient_down_coverage")
+        if not (
+            diagnostic["mean_return_predicted_down"] < 0.0
+        ):
+            reasons.append("non_negative_down_return")
+        if threshold != 0.50 and not (
+            diagnostic["down_precision"]
+            >= reference_precision + checked_gain
+        ):
+            reasons.append("insufficient_precision_gain")
+        if threshold == 0.50:
+            reasons.append("reference_threshold")
+        diagnostic["status"] = (
+            "eligible" if not reasons else "rejected"
+        )
+        diagnostic["reasons"] = tuple(reasons)
+        frozen = MappingProxyType(diagnostic)
+        diagnostics.append(frozen)
+        if not reasons:
+            eligible.append(frozen)
+
+    if not eligible:
+        return EconomicThresholdResult(
+            threshold=None,
+            status="unavailable",
+            reason="economic_threshold_unavailable",
+            diagnostics=tuple(diagnostics),
+        )
+    selected = max(
+        eligible,
+        key=lambda item: (
+            float(item["balanced_accuracy"]),
+            float(item["threshold"]),
+        ),
+    )
+    return EconomicThresholdResult(
+        threshold=float(selected["threshold"]),
+        status="available",
+        reason=None,
+        diagnostics=tuple(diagnostics),
+    )
 
 
 def fit_regime_priors(
@@ -310,3 +491,48 @@ def _weighted_counts(labels, weights, classes):
         ],
         dtype=float,
     )
+
+
+def _threshold_diagnostic(rows, threshold):
+    probabilities = rows[
+        ["down_probability", "neutral_probability", "up_probability"]
+    ].to_numpy(dtype=float)
+    predicted = threshold_directions(probabilities, threshold)
+    actual = rows["actual_direction"].to_numpy(dtype=object)
+    predicted_down = predicted == "down"
+    actual_down = actual == "down"
+    down_count = int(predicted_down.sum())
+    true_down = int((predicted_down & actual_down).sum())
+    actual_down_count = int(actual_down.sum())
+    recalls = []
+    for label in DIRECTION_CLASSES:
+        selected = actual == label
+        if selected.any():
+            recalls.append(float((predicted[selected] == label).mean()))
+    returns = rows.loc[
+        predicted_down,
+        "actual_return",
+    ].to_numpy(dtype=float)
+    return {
+        "threshold": float(threshold),
+        "rows": int(len(rows)),
+        "down_count": down_count,
+        "down_coverage": float(down_count / len(rows)),
+        "down_precision": (
+            float(true_down / down_count) if down_count else 0.0
+        ),
+        "down_recall": (
+            float(true_down / actual_down_count)
+            if actual_down_count
+            else 0.0
+        ),
+        "balanced_accuracy": (
+            float(np.mean(recalls)) if recalls else 0.0
+        ),
+        "mean_return_predicted_down": (
+            float(np.mean(returns)) if len(returns) else np.nan
+        ),
+        "median_return_predicted_down": (
+            float(np.median(returns)) if len(returns) else np.nan
+        ),
+    }
